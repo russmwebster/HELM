@@ -1,0 +1,48 @@
+
+╭───────────────────────────────────────────╮
+│ HELM v0.1.0                               │
+│ High-conviction Entry & Lifecycle Manager │
+╰───────────────────────────────────────────╯
+
+Step 1 of 4: Initializing database...
+  OK Schema v1.4 applied
+  OK Database at /Users/russmacbookpro/Projects/helm/data/helm.db
+
+Step 2 of 4: Create your account
+This is your broker account that HELM will manage.
+
+  Broker name (Fidelity):   Account nickname (Main):   Starting buying power (optional, press Enter to skip) ():   Portfolio value (optional, press Enter to skip) (): 
+  OK Account created: Main (Fidelity)
+
+Step 3 of 4: Seeding strategy defaults...
+  OK 11 strategies configured with practitioner defaults
+  Run helm settings to view or customize any strategy.
+
+Step 4 of 4: Configure your import pathway
+HELM needs to know where your broker saves portfolio exports.
+
+  Set up a Fidelity import pathway now? [y/n] (y):   Where does Fidelity save portfolio exports? (/Users/russmacbookpro/Downloads):  File pattern to match (Portfolio_Positions_*.csv):   OK Pathway saved — latest file found: Portfolio_Positions_May-23-2026.csv
+  Run helm import fidelity to import it now.
+
+╭──────────────────────── Setup Complete ────────────────────────╮
+│ HELM is ready.                                                 │
+│                                                                │
+│   Database:   /Users/russmacbookpro/Projects/helm/data/helm.db │
+│   Account:    Main (Fidelity)                                  │
+│   Strategies: 11 configured                                    │
+│                                                                │
+│ Next steps:                                                    │
+│   helm watchlist add AAPL   Add tickers to your universe       │
+│   helm scan                  Scan for opportunities            │
+│   helm settings              View or adjust strategy rules     │
+╰────────────────────────────────────────────────────────────────╯
+
+
+Account OK
+Strategy settings OK (11 strategies)
+Pathway OK: /Users/russmacbookpro/Downloads/Portfolio_Positions_*.csv
+Pathway auto-find OK: Portfolio_Positions_May-23-2026.csv
+
+DB summary: {'accounts': 1, 'positions': 0, 'legs': 0, 'entry_snapshots': 0, 'checks': 0, 'lifecycle_events': 0, 'strategy_settings': 11, 'watchlist': 0}
+
+ALL TESTS PASSED
