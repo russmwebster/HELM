@@ -277,6 +277,33 @@ def parse_fidelity_csv(filepath: str) -> tuple[list, list]:
             })
 
     accounts = [{'number': k, 'name': v} for k, v in accounts_seen.items()]
+
+    # Calculate net liquidation value per account
+    # Sum all Current Value fields (col_value) for each account
+    net_liq = {}
+    spaxx_bal = {}
+    for _, row in df.iterrows():
+        acct_num = str(row.name).strip()
+        acct_name = str(row.get(col_acct_name, '')).strip()
+        symbol = str(row.get(col_symbol, '')).strip()
+        val_raw = row.get(col_value)
+        if not acct_num or acct_num in ('nan',''):
+            continue
+        try:
+            val = float(str(val_raw).replace('$','').replace(',','').replace('+','').strip())
+            if acct_num not in net_liq:
+                net_liq[acct_num] = 0.0
+            net_liq[acct_num] += val
+            # Track SPAXX separately as available cash
+            if 'SPAXX' in symbol.upper():
+                spaxx_bal[acct_num] = val
+        except (ValueError, TypeError):
+            pass
+
+    for a in accounts:
+        a['net_liquidation'] = net_liq.get(a['number'], 0.0)
+        a['buying_power'] = spaxx_bal.get(a['number'], 0.0)
+
     return accounts, parsed
 
 # ── Main command ──────────────────────────────────────────────────────────────
@@ -544,6 +571,18 @@ def run():
             pass  # non-fatal
 
     console.print()
+
+    # Update account portfolio value and buying power
+    if imported > 0:
+        try:
+            total_net_liq = sum(a.get('net_liquidation', 0) for a in fidelity_accounts)
+            total_buying_power = sum(a.get('buying_power', 0) for a in fidelity_accounts)
+            helm_account.portfolio_value = round(total_net_liq, 2)
+            helm_account.buying_power = round(total_buying_power, 2)
+            helm_account.save()
+            console.print(f'  [dim]Account updated: portfolio value ${total_net_liq:,.0f} | cash ${total_buying_power:,.0f}[/dim]')
+        except Exception as e:
+            console.print(f'  [dim yellow]Could not update account values: {e}[/dim yellow]')
 
     # Summary
     summary_lines = [

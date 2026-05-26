@@ -110,6 +110,73 @@ STRATEGY_CONFIG = {
 
 # ── Contract scoring (adapted from COTS ladder.py) ────────────────────────────
 
+def fetch_ibkr_greeks(contracts: list) -> dict:
+    """
+    Fetch live Greeks from IBKR for a list of contracts.
+    Returns dict keyed by (expiration, strike, opt_type) -> greeks dict.
+    Only called when IBKR is connected and market is open.
+    """
+    results = {}
+    try:
+        from helm.ibkr import check_connection
+        from helm.cli.check_cmd import is_market_open
+        import math
+
+        if not check_connection()["connected"]:
+            return results
+        if not is_market_open():
+            return results
+
+        from ib_insync import IB, Option as IBOption
+        ib = IB()
+        ib.connect("127.0.0.1", 4002, clientId=14, readonly=True)
+
+        try:
+            ib_contracts = []
+            for c in contracts:
+                exp_fmt = c["expiration"].replace("-", "")
+                opt = IBOption(
+                    c["ticker"], exp_fmt, c["strike"],
+                    c["opt_type"][0].upper(), "SMART", multiplier="100"
+                )
+                ib_contracts.append((c, opt))
+
+            valid_opts = [o for _, o in ib_contracts]
+            ib.qualifyContracts(*valid_opts)
+
+            ticker_map = []
+            for (c, opt) in ib_contracts:
+                t = ib.reqMktData(opt, "106", False, False)
+                ticker_map.append((c, opt, t))
+
+            ib.sleep(3)
+
+            def vld(v):
+                return v is not None and not math.isnan(float(v)) and float(v) not in (-1.0, 0.0)
+
+            for (c, opt, t) in ticker_map:
+                key = (c["expiration"], c["strike"], c["opt_type"])
+                greeks = {}
+                if vld(t.bid):  greeks["bid"] = round(float(t.bid), 2)
+                if vld(t.ask):  greeks["ask"] = round(float(t.ask), 2)
+                if greeks.get("bid") and greeks.get("ask"):
+                    greeks["mid"] = round((greeks["bid"] + greeks["ask"]) / 2, 2)
+                if t.modelGreeks:
+                    g = t.modelGreeks
+                    if g.delta is not None:      greeks["delta"] = round(abs(float(g.delta)), 3)
+                    if g.theta is not None:      greeks["theta"] = round(float(g.theta), 4)
+                    if g.gamma is not None:      greeks["gamma"] = round(float(g.gamma), 4)
+                    if g.vega is not None:       greeks["vega"]  = round(float(g.vega), 4)
+                    if g.impliedVol is not None: greeks["iv"]    = round(float(g.impliedVol) * 100, 1)
+                if greeks:
+                    results[key] = greeks
+        finally:
+            ib.disconnect()
+    except Exception:
+        pass
+    return results
+
+
 def score_contract(row: dict, direction: str, delta_sweet: tuple) -> float:
     score = 0.0
     delta   = abs(row.get("delta", 0) or 0)
@@ -198,21 +265,24 @@ def suggest_contracts(strategy: str, strike: float, mid: float,
             return 1
 
         risk_pct = settings["risk_pct_per_trade"] or 0.05
-        buying_power = account["buying_power"] or 0
+        portfolio_value = account["portfolio_value"] or account["buying_power"] or 0
 
-        if buying_power <= 0:
+        if portfolio_value <= 0:
             return 1
 
-        max_risk = buying_power * risk_pct
+        # Long options: fixed dollar target (~$5,000)
+        # This will be user-configurable in setup in a future version
+        LONG_OPTION_TARGET = 5000.0
 
-        # For CSP/naked: max risk = strike * 100 * contracts
-        # For defined risk: max risk = spread_width * 100 * contracts
-        # For long: max risk = premium * 100 * contracts
-        if strategy in ("CSP", "SHORT_STRANGLE"):
+        if strategy in ("LONG_CALL", "LONG_PUT"):
+            max_contracts = int(LONG_OPTION_TARGET / (mid * 100)) if mid > 0 else 1
+        elif strategy in ("CSP", "SHORT_STRANGLE"):
+            # CSP: max collateral = strike * 100 * contracts
+            max_risk = portfolio_value * risk_pct
             max_contracts = int(max_risk / (strike * 100))
-        elif strategy in ("LONG_CALL", "LONG_PUT"):
-            max_contracts = int(max_risk / (mid * 100)) if mid > 0 else 1
-        else:  # spreads
+        else:
+            # Defined risk: use risk_pct of portfolio
+            max_risk = portfolio_value * risk_pct
             max_contracts = int(max_risk / (strike * 100))
 
         return max(1, min(max_contracts, 20))  # cap at 20 for sanity
@@ -338,8 +408,41 @@ def evaluate_contracts(ticker: str, strategy: str, config: dict,
         except Exception:
             continue
 
+    # Enrich top contracts with live IBKR Greeks
     contracts.sort(key=lambda c: -c["score"])
-    return contracts[:top_n]
+    top_contracts = contracts[:top_n]
+    
+    ibkr_data = fetch_ibkr_greeks(top_contracts)
+    for c in top_contracts:
+        key = (c["expiration"], c["strike"], c["opt_type"])
+        if key in ibkr_data:
+            g = ibkr_data[key]
+            # Update with live IBKR data (more accurate than yfinance)
+            if "bid" in g:    c["bid"]   = g["bid"]
+            if "ask" in g:    c["ask"]   = g["ask"]
+            if "mid" in g:    c["mid"]   = g["mid"]
+            if "delta" in g:  c["delta"] = g["delta"]
+            if "theta" in g:  c["theta"] = g["theta"]
+            if "gamma" in g:  c["gamma"] = g["gamma"]
+            if "iv" in g:     c["iv"]    = g["iv"]
+            # Recalculate spread with live bid/ask
+            if "bid" in g and "ask" in g and g["mid"] > 0:
+                c["spread"] = round(g["ask"] - g["bid"], 2)
+                c["spread_pct"] = round((c["spread"] / g["mid"]) * 100, 1)
+            # Recalculate premium total with live mid
+            if "mid" in g:
+                c["premium_total"] = round(g["mid"] * 100, 2)
+            # Rescore with live data
+            c["score"] = score_contract(c, c["direction"], 
+                                         STRATEGY_CONFIG[top_contracts[0].get("strategy", "CSP")]["delta_sweet"]
+                                         if top_contracts else (0.25, 0.35))
+            c["source"] = "ibkr-live"
+        else:
+            c["source"] = "yfinance"
+    
+    # Re-sort after IBKR enrichment
+    top_contracts.sort(key=lambda c: -c["score"])
+    return top_contracts
 
 
 # ── Command ───────────────────────────────────────────────────────────────────
@@ -388,12 +491,27 @@ def run():
     config = STRATEGY_CONFIG[strategy]
     account_id = get_active_account()
 
+    # Check IBKR + market status for data source label
+    try:
+        from helm.ibkr import check_connection as _chk
+        from helm.cli.check_cmd import is_market_open as _mkt
+        _ibkr_ok = _chk()["connected"]
+        _mkt_open = _mkt()
+        if _ibkr_ok and _mkt_open:
+            data_source = "[green]IBKR live[/green]"
+        elif _ibkr_ok:
+            data_source = "[yellow]IBKR + yfinance (market closed)[/yellow]"
+        else:
+            data_source = "[dim]yfinance only[/dim]"
+    except Exception:
+        data_source = "[dim]yfinance[/dim]"
+
     console.print()
     console.print(Panel.fit(
         f"[bold cyan]HELM Open[/bold cyan] — {ticker} {config['label']}\n"
         f"[dim]Delta {config['delta_min']:.2f}-{config['delta_max']:.2f} | "
         f"DTE {dte_target or config['dte_min']}-{dte_target or config['dte_max']} | "
-        f"Spread threshold: 15%[/dim]",
+        f"Spread threshold: 15% | Data: {data_source}[/dim]",
         border_style="cyan"
     ))
     console.print()
@@ -458,6 +576,7 @@ def run():
     t.add_column("Premium",  justify="right", width=9, no_wrap=True)
     t.add_column("Score",    justify="right", width=6, no_wrap=True)
     t.add_column("Contracts",justify="right", width=9, no_wrap=True)
+    t.add_column("Source",   width=10, no_wrap=True)
 
     for rank, c in enumerate(contracts, 1):
         # Suggest contracts
@@ -490,6 +609,7 @@ def run():
             premium_str,
             score_str,
             f"[bold]{suggested}[/bold]",
+            f"[dim]{c.get('source', 'yf')}[/dim]",
         )
 
     console.print(f"[bold]Top {len(contracts)} contracts — {ticker} {strategy}[/bold]")
