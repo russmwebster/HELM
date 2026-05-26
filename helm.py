@@ -26,6 +26,7 @@ COMMANDS = {
     'check':     ('helm.cli.check_cmd',     'run', 'Health check on open positions'),
     'scan':      ('helm.cli.scan_cmd',      'run', 'Scan optionable tickers for opportunities'),
     'open':      ('helm.cli.open_cmd',      'run', 'Evaluate contracts for a new position'),
+    'activity':  ('helm.cli.activity_cmd',  'run', 'Import Fidelity activity to close positions'),
 }
 
 def print_help():
