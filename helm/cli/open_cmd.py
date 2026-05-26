@@ -447,6 +447,138 @@ def evaluate_contracts(ticker: str, strategy: str, config: dict,
 
 # ── Command ───────────────────────────────────────────────────────────────────
 
+
+def confirm_and_log(ticker: str, strategy: str, contracts: list, config: dict,
+                    spot: Optional[float], scan_data: Optional[dict] = None):
+    """
+    Interactive confirm flow — user selects a contract and confirms fill price.
+    Creates position + leg + entry snapshot in the database.
+    """
+    from rich.prompt import Prompt, Confirm
+    from helm.cli.entry_snapshot import open_position_with_snapshot
+
+    console.print()
+    console.print("[bold]Open a position?[/bold]")
+    console.print("[dim]Enter rank number to select a contract, or 'n' to exit.[/dim]")
+    console.print()
+
+    while True:
+        choice = Prompt.ask(
+            f"Select contract",
+            default="1",
+            choices=[str(i+1) for i in range(len(contracts))] + ["n"],
+            show_choices=False,
+        )
+        if choice.lower() == "n":
+            console.print("[dim]No position opened.[/dim]")
+            console.print()
+            return
+
+        try:
+            idx = int(choice) - 1
+            if 0 <= idx < len(contracts):
+                selected = contracts[idx]
+                break
+        except ValueError:
+            pass
+        console.print("[yellow]Invalid choice. Enter a rank number or 'n'.[/yellow]")
+
+    # Show selected contract summary
+    console.print()
+    console.print(Panel.fit(
+        f"[bold]Selected:[/bold] {ticker} {selected['opt_type']} "
+        f"${selected['strike']:.1f} {selected['expiration']} ({selected['dte']}d)\n"
+        f"  Bid: ${selected['bid']:.2f}  Ask: ${selected['ask']:.2f}  "
+        f"Mid: ${selected['mid']:.2f}  Delta: {selected.get('delta', '--')}  "
+        f"Theta: {selected.get('theta', '--')}",
+        border_style="cyan",
+        title="Contract Selected"
+    ))
+    console.print()
+
+    # Get actual fill price
+    default_price = str(selected['mid'])
+    fill_str = Prompt.ask(
+        f"  Actual fill price",
+        default=f"{selected['mid']:.2f}"
+    )
+    try:
+        fill_price = float(fill_str.replace("$", "").strip())
+    except ValueError:
+        console.print("[red]Invalid price. Aborting.[/red]")
+        return
+
+    # Get number of contracts
+    suggested = suggest_contracts(strategy, selected["strike"], fill_price,
+                                  get_active_account())
+    contracts_str = Prompt.ask(
+        f"  Number of contracts",
+        default=str(suggested)
+    )
+    try:
+        num_contracts = int(contracts_str)
+    except ValueError:
+        num_contracts = suggested
+
+    # Final confirmation
+    total_premium = round(fill_price * 100 * num_contracts, 2)
+    direction = config["direction"]
+    premium_label = f"collect ${total_premium:.0f}" if direction == "SHORT" else f"pay ${total_premium:.0f}"
+
+    console.print()
+    if not Confirm.ask(
+        f"  Open [bold]{num_contracts}x {ticker} {selected['opt_type']} "
+        f"${selected['strike']:.1f} {selected['expiration']}[/bold] "
+        f"@ ${fill_price:.2f} ({premium_label})?",
+        default=True
+    ):
+        console.print("[dim]Cancelled.[/dim]")
+        console.print()
+        return
+
+    # Add spot to contract for snapshot
+    selected["spot"] = spot
+
+    # Open position with full entry snapshot
+    console.print()
+    console.print("[dim]Recording position...[/dim]")
+    try:
+        pos_id, leg_id, snap_id = open_position_with_snapshot(
+            ticker=ticker,
+            strategy=strategy,
+            contract=selected,
+            fill_price=fill_price,
+            contracts=num_contracts,
+            scan_data=scan_data,
+        )
+
+        net_premium = fill_price * 100 * num_contracts
+        if direction == "LONG":
+            net_premium = -net_premium
+
+        console.print()
+        console.print(Panel(
+            f"[bold green]Position Opened[/bold green]\n\n"
+            f"  Ticker:     [bold cyan]{ticker}[/bold cyan]  {strategy}\n"
+            f"  Contract:   {selected['opt_type']} ${selected['strike']:.1f} "
+            f"{selected['expiration']} ({selected['dte']}d)\n"
+            f"  Contracts:  {num_contracts}\n"
+            f"  Fill price: ${fill_price:.2f}\n"
+            f"  Premium:    [green]${abs(net_premium):.0f} {'collected' if direction == 'SHORT' else 'paid'}[/green]\n\n"
+            f"  Position ID: [dim]{pos_id}[/dim]\n"
+            f"  Snapshot:    [dim]{snap_id}[/dim]\n\n"
+            f"[dim]Entry context captured. Run [bold]helm check {ticker}[/bold] to monitor.[/dim]",
+            title="✓ Trade Logged",
+            border_style="green"
+        ))
+        console.print()
+
+    except Exception as e:
+        import traceback
+        console.print(f"[red]Error opening position:[/red] {e}")
+        traceback.print_exc()
+
+
 def run():
     args = sys.argv[1:]
 
@@ -629,11 +761,23 @@ def run():
         f"Spread: {best.get('spread_pct', '--')}%  |  OI: {best['oi']:,}\n"
         f"  Suggested: [bold]{suggested} contract(s)[/bold] @ ${best['mid']:.2f} = "
         f"[green]${total_premium:.0f} premium[/green]\n\n"
-        f"[dim]To open: helm open {ticker} {strategy} --confirm (not yet implemented)[/dim]",
+        f"[dim]Run with --confirm to open this position[/dim]",
         title="Recommendation",
         border_style="green"
     ))
     console.print()
+
+    # --confirm flow
+    if "--confirm" in args:
+        # Fetch scan data for entry snapshot context
+        scan_data = None
+        try:
+            from helm.cli.scan_cmd import fetch_technicals
+            console.print("[dim]Fetching technical context for entry snapshot...[/dim]")
+            scan_data = fetch_technicals(ticker)
+        except Exception:
+            pass
+        confirm_and_log(ticker, strategy, contracts, config, spot, scan_data)
 
 
 if __name__ == "__main__":
