@@ -379,6 +379,26 @@ def run():
     ))
     console.print()
 
+    # Guard: warn if positions already exist in HELM
+    from helm.db import get_conn as _gc
+    _c = _gc()
+    _existing_count = _c.execute(
+        "SELECT COUNT(*) FROM positions WHERE account_id=? AND status='OPEN'",
+        (active_id,)
+    ).fetchone()[0]
+    _c.close()
+
+    if _existing_count > 0:
+        console.print()
+        console.print(f"[yellow]Warning:[/yellow] HELM already has {_existing_count} open position(s).")
+        console.print("[dim]helm import is intended for initial setup only.[/dim]")
+        console.print("[dim]For ongoing sync use: helm activity (close) | helm reconcile (check alignment)[/dim]")
+        console.print()
+        from rich.prompt import Confirm as _Confirm
+        if not _Confirm.ask("Continue anyway?", default=False):
+            console.print("[dim]Import cancelled.[/dim]")
+            return
+
     # Parse the file
     console.print(f'Reading [bold]{filepath.name}[/bold]...')
     try:
