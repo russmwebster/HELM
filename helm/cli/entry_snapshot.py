@@ -115,15 +115,16 @@ def open_position_with_snapshot(
     if direction == "LONG":
         net_premium = -net_premium
 
-    # Create position
+    # Create position as PENDING -- transitions to OPEN when confirmed via helm activity
     pos = Position.create(
         account_id=account_id,
         strategy=strategy,
         ticker=ticker,
+        status='PENDING',
         opened_at=now,
         total_contracts=contracts,
         net_premium=net_premium,
-        notes=f"Opened via HELM on {today}",
+        notes=f"Pending execution — opened via HELM on {today}",
     )
 
     # Create leg
@@ -144,8 +145,8 @@ def open_position_with_snapshot(
     # Log lifecycle event
     LifecycleEvent.record(
         position_id=pos.id,
-        event_type="OPENED",
-        narrative=f"Opened {contracts}x {leg_role} ${contract['strike']} {contract['expiration']} @ ${fill_price:.2f}",
+        event_type="PENDING",
+        narrative=f"Trade decision: {contracts}x {leg_role} ${contract['strike']} {contract['expiration']} @ ${fill_price:.2f} mid — pending execution in Fidelity",
     )
 
     # Capture entry snapshot

@@ -106,15 +106,21 @@ def cmd_list(args):
         else:
             i += 1
 
-    status_filter = "OPEN" if not show_all else None
+    status_filter = None if show_all else "OPEN,PENDING"
 
     conn = get_conn()
     query = "SELECT * FROM positions WHERE account_id = ?"
     params = [get_active_account()]
 
     if status_filter:
-        query += " AND status = ?"
-        params.append(status_filter)
+        if "," in status_filter:
+            statuses = status_filter.split(",")
+            placeholders = ",".join("?" * len(statuses))
+            query += f" AND status IN ({placeholders})"
+            params.extend(statuses)
+        else:
+            query += " AND status = ?"
+            params.append(status_filter)
     if strategy_filter:
         query += " AND strategy = ?"
         params.append(strategy_filter)
@@ -164,7 +170,11 @@ def cmd_list(args):
         dte_str = format_dte(min_dte)
         opened = pos["opened_at"][:10] if pos["opened_at"] else "--"
         status = pos["status"]
-        status_str = f"[green]{status}[/green]" if status == "OPEN" else f"[dim]{status}[/dim]"
+        status_str = (
+            f"[green]{status}[/green]" if status == "OPEN" else
+            f"[yellow]{status}[/yellow]" if status == "PENDING" else
+            f"[dim]{status}[/dim]"
+        )
 
         t.add_row(
             pos["ticker"], strategy_str, legs_str,

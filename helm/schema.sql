@@ -195,7 +195,7 @@ CREATE TABLE IF NOT EXISTS positions (
         'BULL_PUT_SPREAD','BEAR_CALL_SPREAD','IRON_CONDOR',
         'DIAGONAL','PMCC','SHORT_STRANGLE','JADE_LIZARD'
     )),
-    CHECK (status IN ('OPEN','CLOSED','EXPIRED','ASSIGNED','ROLLED_OUT'))
+    CHECK (status IN ('PENDING','OPEN','CLOSED','EXPIRED','ASSIGNED','ROLLED_OUT'))
 );
 
 -- ============================================================

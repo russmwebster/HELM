@@ -159,14 +159,14 @@ def parse_activity_csv(filepath: str) -> list:
 def find_matching_position(account_id: str, ticker: str, expiration: str,
                            strike: float, opt_type: str) -> Optional[dict]:
     """
-    Find an open HELM position matching the given contract details.
+    Find an open or pending HELM position matching the given contract details.
     Matches on ticker + expiration + strike + opt_type.
     """
     conn = get_conn()
     try:
-        # Find open positions for this ticker
+        # Find open or pending positions for this ticker
         positions = conn.execute(
-            "SELECT * FROM positions WHERE account_id=? AND ticker=? AND status='OPEN'",
+            "SELECT * FROM positions WHERE account_id=? AND ticker=? AND status IN ('OPEN','PENDING')",
             (account_id, ticker)
         ).fetchall()
 
@@ -184,6 +184,48 @@ def find_matching_position(account_id: str, ticker: str, expiration: str,
         return None
     finally:
         conn.close()
+
+
+
+def confirm_pending_position(position_id: str, leg_id: str, actual_price: float,
+                              contracts: int, commission: float, fees: float,
+                              trade_date: str, direction: str) -> None:
+    """
+    Transition a PENDING position to OPEN with actual fill price.
+    Updates the leg open_price and position net_premium with actuals.
+    """
+    # Recalculate net premium with actual fill
+    net_premium = actual_price * 100 * contracts
+    if direction == "LONG":
+        net_premium = -net_premium
+
+    now = __import__("datetime").datetime.now().isoformat()
+
+    with transaction() as conn:
+        # Update leg with actual fill price
+        conn.execute(
+            "UPDATE legs SET open_price=?, open_date=? WHERE id=?",
+            (actual_price, trade_date, leg_id)
+        )
+        # Transition position to OPEN with actual premium
+        conn.execute(
+            "UPDATE positions SET status='OPEN', net_premium=?, notes=? WHERE id=?",
+            (round(net_premium, 2),
+             f"Confirmed via activity import @ ${actual_price:.2f} on {trade_date}",
+             position_id)
+        )
+        # Log lifecycle event
+        conn.execute(
+            """INSERT INTO lifecycle_events
+               (id, position_id, event_type, occurred_at, option_price, narrative)
+               VALUES (?,?,?,?,?,?)""",
+            (
+                "EVT-" + __import__("uuid").uuid4().hex[:8].upper(),
+                position_id, "OPENED", now,
+                actual_price,
+                f"Confirmed execution @ ${actual_price:.2f} | commission ${commission:.2f} | fees ${fees:.2f}"
+            )
+        )
 
 
 def close_position(position_id: str, leg_id: str, close_price: float,
@@ -310,13 +352,18 @@ def run():
     already_open = []
     new_opens = []
 
+    pending_confirms = []
     for tx in opens:
         match = find_matching_position(
             account_id, tx["ticker"], tx["expiration"],
             tx["strike"], tx["opt_type"]
         )
         if match:
-            already_open.append(tx)
+            if match["position"]["status"] == "PENDING":
+                tx["_match"] = match
+                pending_confirms.append(tx)
+            else:
+                already_open.append(tx)
         else:
             new_opens.append(tx)
 
@@ -359,6 +406,33 @@ def run():
         console.print(t)
         console.print()
 
+    if pending_confirms:
+        console.print(f"[bold green]Pending positions to confirm ({len(pending_confirms)}):[/bold green]")
+        console.print("[dim]These were logged in HELM and are now confirmed executed in Fidelity.[/dim]")
+        console.print()
+        t2 = Table(box=box.SIMPLE_HEAD, padding=(0,1))
+        t2.add_column("Ticker",   style="bold cyan", width=7)
+        t2.add_column("Strategy", width=14)
+        t2.add_column("Contract", width=20)
+        t2.add_column("HELM @",   justify="right", width=8)
+        t2.add_column("Actual @", justify="right", width=9)
+        t2.add_column("Contracts",justify="right", width=9)
+        for tx in pending_confirms:
+            pos = tx["_match"]["position"]
+            leg = tx["_match"]["leg"]
+            helm_price = leg["open_price"]
+            actual_price = tx["price"]
+            diff = actual_price - helm_price
+            diff_str = f"[green]+${diff:.2f}[/green]" if diff > 0 else f"[red]-${abs(diff):.2f}[/red]" if diff < 0 else "[dim]exact[/dim]"
+            contract_str = f"{tx['opt_type'][0]}{tx['strike']:.0f} {tx['expiration'][5:]}"
+            t2.add_row(
+                tx["ticker"], pos["strategy"], contract_str,
+                f"${helm_price:.2f}", f"${actual_price:.2f} ({diff_str})",
+                str(tx["contracts"])
+            )
+        console.print(t2)
+        console.print()
+
     if new_opens:
         console.print(f"[bold yellow]New positions not in HELM ({len(new_opens)}):[/bold yellow]")
         console.print("[dim]These were opened in Fidelity but not through HELM.[/dim]")
@@ -376,6 +450,34 @@ def run():
     if unmatched_closes:
         console.print(f"[dim]{len(unmatched_closes)} closing transaction(s) had no matching open position in HELM.[/dim]")
         console.print()
+
+    if not matched_closes and not pending_confirms:
+        console.print("[dim]No positions to close or confirm.[/dim]")
+        console.print()
+        return
+
+    # Confirm pending positions
+    if pending_confirms:
+        if Confirm.ask(f"Confirm {len(pending_confirms)} pending position(s) as executed?", default=True):
+            console.print()
+            for tx in pending_confirms:
+                pos = tx["_match"]["position"]
+                leg = tx["_match"]["leg"]
+                try:
+                    confirm_pending_position(
+                        position_id=pos["id"],
+                        leg_id=leg["id"],
+                        actual_price=tx["price"],
+                        contracts=tx["contracts"],
+                        commission=tx["commission"],
+                        fees=tx["fees"],
+                        trade_date=tx["date"],
+                        direction=leg["direction"],
+                    )
+                    console.print(f"  [green]✓[/green] {tx['ticker']} {tx['opt_type'][0]}{tx['strike']:.0f} {tx['expiration'][5:]} confirmed @ ${tx['price']:.2f} → [green]OPEN[/green]")
+                except Exception as e:
+                    console.print(f"  [red]✗[/red] {tx['ticker']}: {e}")
+            console.print()
 
     if not matched_closes:
         console.print("[dim]No positions to close.[/dim]")
