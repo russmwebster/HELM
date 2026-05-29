@@ -7,7 +7,7 @@ import uuid
 
 from helm.db import get_conn, transaction, row_to_dict
 
-EVENT_TYPES = ['OPENED','ROLLED','CLOSED','ASSIGNED','EXPIRED','ADJUSTED','NOTE','CHECK_ALERT']
+EVENT_TYPES = ['PENDING','OPENED','ROLLED','CLOSED','ASSIGNED','EXPIRED','ADJUSTED','NOTE','CHECK_ALERT']
 
 @dataclass
 class LifecycleEvent:

@@ -154,6 +154,64 @@ def parse_activity_csv(filepath: str) -> list:
     return transactions
 
 
+def make_tx_hash(tx: dict) -> str:
+    """Create a unique hash for a transaction to detect duplicates."""
+    import hashlib
+    key = f"{tx['date']}|{tx['symbol']}|{tx['action'][:20]}|{tx['contracts']}|{tx['price']}"
+    return hashlib.md5(key.encode()).hexdigest()
+
+
+def filter_unprocessed(transactions: list) -> tuple[list, list]:
+    """
+    Filter out already-processed transactions.
+    Returns (unprocessed, already_processed).
+    """
+    from helm.db import get_conn
+    conn = get_conn()
+    try:
+        unprocessed = []
+        already_processed = []
+        for tx in transactions:
+            tx_hash = make_tx_hash(tx)
+            tx['_hash'] = tx_hash
+            exists = conn.execute(
+                "SELECT 1 FROM processed_transactions WHERE tx_hash=?",
+                (tx_hash,)
+            ).fetchone()
+            if exists:
+                already_processed.append(tx)
+            else:
+                unprocessed.append(tx)
+        return unprocessed, already_processed
+    finally:
+        conn.close()
+
+
+def mark_processed(transactions: list) -> None:
+    """Mark transactions as processed so they won't be re-processed."""
+    from helm.db import transaction as _tx
+    import uuid
+    from datetime import datetime
+    now = datetime.now().isoformat()
+    with _tx() as conn:
+        for tx in transactions:
+            tx_hash = tx.get('_hash') or make_tx_hash(tx)
+            try:
+                conn.execute("""
+                    INSERT OR IGNORE INTO processed_transactions
+                    (id, run_date, account_num, symbol, action, quantity, price, amount, tx_hash, processed_at)
+                    VALUES (?,?,?,?,?,?,?,?,?,?)
+                """, (
+                    'PTX-' + uuid.uuid4().hex[:8].upper(),
+                    tx['date'], tx.get('account_num', ''),
+                    tx['symbol'], tx['action'][:40],
+                    tx.get('contracts'), tx.get('price'),
+                    tx.get('amount'), tx_hash, now
+                ))
+            except Exception:
+                pass
+
+
 # ── Position matching ─────────────────────────────────────────────────────────
 
 def find_matching_position(account_id: str, ticker: str, expiration: str,
@@ -326,8 +384,25 @@ def run():
         console.print("[yellow]No option transactions found in file.[/yellow]")
         return
 
-    console.print(f"Found [bold]{len(transactions)}[/bold] option transaction(s).")
+    # Filter out already-processed transactions
+    transactions, already_done = filter_unprocessed(transactions)
+    
+    total_found = len(transactions) + len(already_done)
+    console.print(f"Found [bold]{total_found}[/bold] option transaction(s) — [bold]{len(transactions)}[/bold] new, [dim]{len(already_done)} already processed[/dim].")
     console.print()
+    
+    if not transactions:
+        console.print("[dim]All transactions already processed. Nothing to do.[/dim]")
+        console.print()
+        return
+    
+    # Mark all transactions as seen immediately -- prevents re-processing
+    # even if user cancels. We've already evaluated them.
+    mark_processed(transactions)
+    
+    # Mark all transactions as seen immediately -- prevents re-processing
+    # even if user cancels. We've already evaluated them.
+    mark_processed(transactions)
 
     # Separate opens and closes
     closes = [t for t in transactions if t["tx_type"] == "CLOSE"]
@@ -518,6 +593,12 @@ def run():
 
     console.print()
     total_str = f"[green]+${total_pnl:.0f}[/green]" if total_pnl >= 0 else f"[red]-${abs(total_pnl):.0f}[/red]"
+    # Mark ALL processed transactions (closes, confirms, new opens) as done
+    all_processed = matched_closes + pending_confirms
+    mark_processed(all_processed)
+    # Also mark skipped ones so they don't keep showing up
+    mark_processed([t for t in already_open])
+
     console.print(Panel.fit(
         f"[bold green]{closed} position(s) closed[/bold green]\n"
         f"Total realized P&L: {total_str}\n\n"
