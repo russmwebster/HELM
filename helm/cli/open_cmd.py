@@ -89,22 +89,26 @@ STRATEGY_CONFIG = {
     "BULL_PUT_SPREAD": {
         "option_type": "PUT",
         "direction": "SHORT",
-        "delta_min": 0.20,
+        "delta_min": 0.15,
         "delta_max": 0.40,
-        "delta_sweet": (0.25, 0.35),
+        "delta_sweet": (0.20, 0.35),
         "dte_min": 21,
-        "dte_max": 45,
+        "dte_max": 56,
         "label": "Bull Put Spread",
+        "is_spread": True,
+        "spread_widths": [5, 10, 15, 20, 25],  # $ widths to evaluate
     },
     "BEAR_CALL_SPREAD": {
         "option_type": "CALL",
         "direction": "SHORT",
-        "delta_min": 0.20,
+        "delta_min": 0.15,
         "delta_max": 0.40,
-        "delta_sweet": (0.25, 0.35),
+        "delta_sweet": (0.20, 0.35),
         "dte_min": 21,
-        "dte_max": 45,
+        "dte_max": 56,
         "label": "Bear Call Spread",
+        "is_spread": True,
+        "spread_widths": [5, 10, 15, 20, 25],
     },
 }
 
@@ -579,6 +583,326 @@ def confirm_and_log(ticker: str, strategy: str, contracts: list, config: dict,
         traceback.print_exc()
 
 
+
+
+
+def confirm_spread(ticker: str, strategy: str, spreads: list, config: dict,
+                   spot: float, args: list):
+    """Interactive confirm flow for spread positions."""
+    from rich.prompt import Prompt, Confirm
+    # For now, spreads log as a single position with notes about both legs
+    # Full multi-leg logging will be built in a future session
+    console.print()
+    console.print("[yellow]Note:[/yellow] Spread --confirm logging is coming soon.")
+    console.print("[dim]For now, log via helm activity after executing in Fidelity.[/dim]")
+    console.print()
+
+
+def display_spreads(ticker: str, strategy: str, config: dict, spreads: list,
+                    spot: float, atr: float, account_id: str, args: list):
+    """Display two-leg spread evaluation results."""
+    label = config["label"]
+    opt_type = config["option_type"]
+    is_bull = strategy == "BULL_PUT_SPREAD"
+
+    console.print()
+    if spot:
+        atr_str = f"  ATR(14): ${atr:.2f}  →  1-ATR: ${spot-atr:.2f}  2-ATR: ${spot-2*atr:.2f}" if atr else ""
+        console.print(f"  Spot: [bold]${spot:.2f}[/bold]{atr_str}")
+        console.print()
+
+    t = Table(box=box.SIMPLE_HEAD, show_header=True, padding=(0,1), width=170)
+    t.add_column("Rank",    width=5, no_wrap=True)
+    t.add_column("Exp",     width=6, no_wrap=True)
+    t.add_column("DTE",     justify="right", width=5, no_wrap=True)
+    t.add_column("Short",   justify="right", width=7, no_wrap=True)
+    t.add_column("Long",    justify="right", width=7, no_wrap=True)
+    t.add_column("Width",   justify="right", width=6, no_wrap=True)
+    t.add_column("Credit",  justify="right", width=8, no_wrap=True)
+    t.add_column("MaxLoss", justify="right", width=8, no_wrap=True)
+    t.add_column("MaxGain", justify="right", width=8, no_wrap=True)
+    t.add_column("C/W%",    justify="right", width=6, no_wrap=True)
+    t.add_column("R/R",     justify="right", width=5, no_wrap=True)
+    t.add_column("Delta",   justify="right", width=7, no_wrap=True)
+    t.add_column("IV%",     justify="right", width=5, no_wrap=True)
+    t.add_column("OI",      justify="right", width=7, no_wrap=True)
+    t.add_column("Score",   justify="right", width=6, no_wrap=True)
+    t.add_column("Contracts", justify="right", width=9, no_wrap=True)
+
+    for rank, s in enumerate(spreads, 1):
+        rank_str = "[green]#1[/green]" if rank==1 else "[cyan]#2[/cyan]" if rank==2 else f"#{rank}"
+        cw_color = "green" if s["credit_to_width_pct"] >= 25 else "yellow" if s["credit_to_width_pct"] >= 15 else "red"
+        rr_color = "green" if s["rr_ratio"] >= 0.40 else "yellow" if s["rr_ratio"] >= 0.25 else "red"
+
+        # Sizing: max risk = max_loss * 100 * contracts
+        suggested = 1
+        try:
+            from helm.db import get_conn as _gc
+            _c = _gc()
+            settings = _c.execute("SELECT risk_pct_per_trade FROM strategy_settings WHERE account_id=? AND strategy=?",
+                                  (account_id, strategy)).fetchone()
+            acct = _c.execute("SELECT portfolio_value FROM accounts WHERE id=?", (account_id,)).fetchone()
+            _c.close()
+            if settings and acct:
+                risk_pct = settings[0] or 0.05
+                max_risk = (acct[0] or 0) * risk_pct
+                suggested = max(1, min(20, int(max_risk / (s["max_loss"] * 100))))
+        except Exception:
+            pass
+
+        t.add_row(
+            rank_str,
+            s["expiration"][5:],
+            str(s["dte"]),
+            f"${s['short_strike']:.0f}",
+            f"${s['long_strike']:.0f}",
+            f"${s['width']:.0f}",
+            f"${s['net_credit']:.2f}",
+            f"[red]${s['max_loss']:.2f}[/red]",
+            f"[green]${s['max_gain']:.2f}[/green]",
+            f"[{cw_color}]{s['credit_to_width_pct']:.0f}%[/{cw_color}]",
+            f"[{rr_color}]{s['rr_ratio']:.2f}[/{rr_color}]",
+            f"{s['delta']:.3f}" if s.get("delta") else "--",
+            f"{s['iv']:.0f}%" if s.get("iv") else "--",
+            f"{s['oi']:,}",
+            f"{s['score']:.0f}",
+            f"[bold]{suggested}[/bold]",
+        )
+
+    console.print(f"[bold]Top {len(spreads)} spreads — {ticker} {label}[/bold]")
+    console.print()
+    console.print(t)
+    console.print()
+
+    # Best spread summary
+    best = spreads[0]
+    suggested_best = 1
+    try:
+        from helm.db import get_conn as _gc2
+        _c2 = _gc2()
+        settings2 = _c2.execute("SELECT risk_pct_per_trade FROM strategy_settings WHERE account_id=? AND strategy=?",
+                                (account_id, strategy)).fetchone()
+        acct2 = _c2.execute("SELECT portfolio_value FROM accounts WHERE id=?", (account_id,)).fetchone()
+        _c2.close()
+        if settings2 and acct2:
+            suggested_best = max(1, min(20, int((acct2[0]*settings2[0]) / (best["max_loss"]*100))))
+    except Exception:
+        pass
+
+    total_credit = round(best["net_credit"] * 100 * suggested_best, 0)
+    total_risk = round(best["max_loss"] * 100 * suggested_best, 0)
+
+    console.print(Panel(
+        f"[bold green]Top pick:[/bold green] {ticker} {opt_type} "
+        f"${best['short_strike']:.0f}/{best['long_strike']:.0f} spread "
+        f"{best['expiration']} ({best['dte']}d)\n"
+        f"  Sell ${best['short_strike']:.0f} {opt_type} @ ${best['short_mid']:.2f}  |  "
+        f"Buy ${best['long_strike']:.0f} {opt_type} @ ${best['long_mid']:.2f}\n"
+        f"  Net credit: [green]${best['net_credit']:.2f}/contract[/green]  |  "
+        f"Max loss: [red]${best['max_loss']:.2f}/contract[/red]  |  "
+        f"Width: ${best['width']:.0f}\n"
+        f"  Credit/width: {best['credit_to_width_pct']:.0f}%  |  "
+        f"R/R: {best['rr_ratio']:.2f}  |  Delta: {best.get('delta', '--')}\n\n"
+        f"  Suggested: [bold]{suggested_best} spread(s)[/bold]  |  "
+        f"Collect: [green]${total_credit:.0f}[/green]  |  "
+        f"Max risk: [red]${total_risk:.0f}[/red]\n\n"
+        f"[dim]To open: [bold]helm open {ticker} {strategy} --confirm[/bold][/dim]",
+        title="Recommendation",
+        border_style="green"
+    ))
+    console.print()
+
+    # --confirm flow for spreads
+    if "--confirm" in args:
+        confirm_spread(ticker, strategy, spreads, config, spot, args)
+
+
+def evaluate_spreads(ticker: str, strategy: str, config: dict,
+                     dte_target: int = None, top_n: int = 6) -> list:
+    """
+    Evaluate two-leg spread contracts (Bull Put Spread or Bear Call Spread).
+    For each short leg candidate, pairs with multiple long leg widths.
+    Returns list of spread dicts sorted by score.
+    """
+    import yfinance as yf
+    import math
+
+    opt_type = config["option_type"]
+    direction = config["direction"]  # SHORT = selling the spread
+    delta_min = config["delta_min"]
+    delta_max = config["delta_max"]
+    delta_sweet = config["delta_sweet"]
+    dte_min = config["dte_min"]
+    dte_max = config["dte_max"]
+    spread_widths = config.get("spread_widths", [10, 20])
+
+    if dte_target:
+        dte_min = max(7, dte_target - 7)
+        dte_max = dte_target + 7
+
+    tk = yf.Ticker(ticker)
+    info = tk.fast_info
+    spot = getattr(info, "last_price", None)
+    if not spot:
+        hist = tk.history(period="5d")
+        spot = float(hist["Close"].iloc[-1]) if not hist.empty else None
+    if not spot:
+        raise ValueError(f"Cannot fetch price for {ticker}")
+
+    today = __import__("datetime").date.today()
+    expirations = tk.options
+    target_exps = []
+    for exp in expirations:
+        d = (__import__("datetime").datetime.strptime(exp, "%Y-%m-%d").date() - today).days
+        if dte_min <= d <= dte_max:
+            target_exps.append((exp, d))
+
+    if not target_exps:
+        raise ValueError(f"No expiries in {dte_min}-{dte_max} DTE range")
+
+    spreads = []
+    for exp, days in target_exps:
+        try:
+            chain = tk.option_chain(exp)
+            df = chain.puts if opt_type == "PUT" else chain.calls
+
+            # Build strike -> row lookup
+            strike_data = {}
+            for _, row in df.iterrows():
+                s = float(row["strike"])
+                bid = row.get("bid", 0) or 0
+                ask = row.get("ask", 0) or 0
+                if bid > 0 and ask > 0:
+                    mid = (float(bid) + float(ask)) / 2
+                    iv = row.get("impliedVolatility", None)
+                    oi = int(row.get("openInterest", 0) or 0)
+                    strike_data[s] = {
+                        "bid": round(float(bid), 2),
+                        "ask": round(float(ask), 2),
+                        "mid": round(mid, 2),
+                        "iv": round(float(iv)*100, 1) if iv else None,
+                        "oi": oi,
+                    }
+
+            # Find short leg candidates in delta range
+            for _, row in df.iterrows():
+                strike = float(row["strike"])
+                bid = row.get("bid", 0) or 0
+                ask = row.get("ask", 0) or 0
+                if bid <= 0 or ask <= 0:
+                    continue
+                oi = int(row.get("openInterest", 0) or 0)
+                if oi < 100:
+                    continue
+
+                mid_short = (float(bid) + float(ask)) / 2
+                iv = row.get("impliedVolatility", None)
+
+                # Compute delta via BS
+                delta = None
+                if iv and float(iv) > 0:
+                    try:
+                        iv_val = float(iv)
+                        T = days / 365.0
+                        S, K, r = spot, strike, 0.045
+                        d1 = (math.log(S/K) + (r + 0.5*iv_val**2)*T) / (iv_val*math.sqrt(T))
+                        from scipy.stats import norm
+                        delta = abs(norm.cdf(d1) - 1) if opt_type == "PUT" else norm.cdf(d1)
+                    except Exception:
+                        pass
+
+                if delta is None or not (delta_min <= delta <= delta_max):
+                    continue
+
+                # For each spread width, find the long leg
+                for width in spread_widths:
+                    if opt_type == "PUT":
+                        long_strike = round(strike - width, 0)
+                    else:
+                        long_strike = round(strike + width, 0)
+
+                    if long_strike not in strike_data:
+                        # Try nearest available
+                        available = sorted(strike_data.keys())
+                        if opt_type == "PUT":
+                            candidates = [s for s in available if s < strike]
+                            long_strike = min(candidates, key=lambda s: abs(s-(strike-width))) if candidates else None
+                        else:
+                            candidates = [s for s in available if s > strike]
+                            long_strike = min(candidates, key=lambda s: abs(s-(strike+width))) if candidates else None
+
+                    if long_strike is None or long_strike not in strike_data:
+                        continue
+
+                    long_data = strike_data[long_strike]
+                    mid_long = long_data["mid"]
+
+                    net_credit = round(mid_short - mid_long, 2)
+                    if net_credit <= 0:
+                        continue
+
+                    actual_width = abs(strike - long_strike)
+                    max_loss = round(actual_width - net_credit, 2)
+                    max_gain = net_credit
+                    if max_loss <= 0:
+                        continue
+
+                    rr_ratio = round(max_gain / max_loss, 2)
+                    credit_to_width = round(net_credit / actual_width * 100, 1)
+
+                    spread_pct_short = round((float(ask)-float(bid)) / mid_short * 100, 1) if mid_short > 0 else None
+                    spread_pct_long = round((long_data["ask"]-long_data["bid"]) / mid_long * 100, 1) if mid_long > 0 else None
+
+                    # Score: favor good R/R, tight spreads, adequate OI
+                    score = 0.0
+                    d_lo, d_hi = delta_sweet
+                    if d_lo <= delta <= d_hi: score += 30
+                    elif (d_lo-0.10) <= delta <= (d_hi+0.10): score += 15
+                    if credit_to_width >= 30: score += 25
+                    elif credit_to_width >= 20: score += 18
+                    elif credit_to_width >= 15: score += 10
+                    if oi >= 1000: score += 15
+                    elif oi >= 500: score += 10
+                    elif oi >= 100: score += 5
+                    if spread_pct_short and spread_pct_short <= 5: score += 15
+                    elif spread_pct_short and spread_pct_short <= 10: score += 8
+                    if rr_ratio >= 0.50: score += 15
+                    elif rr_ratio >= 0.33: score += 8
+
+                    spreads.append({
+                        "ticker": ticker,
+                        "strategy": strategy,
+                        "expiration": exp,
+                        "dte": days,
+                        "short_strike": strike,
+                        "long_strike": long_strike,
+                        "width": actual_width,
+                        "opt_type": opt_type,
+                        "short_bid": float(bid),
+                        "short_ask": float(ask),
+                        "short_mid": round(mid_short, 2),
+                        "long_bid": long_data["bid"],
+                        "long_ask": long_data["ask"],
+                        "long_mid": mid_long,
+                        "net_credit": net_credit,
+                        "max_loss": max_loss,
+                        "max_gain": max_gain,
+                        "rr_ratio": rr_ratio,
+                        "credit_to_width_pct": credit_to_width,
+                        "delta": round(delta, 3),
+                        "iv": round(float(iv)*100, 1) if iv else None,
+                        "oi": oi,
+                        "spread_pct": spread_pct_short,
+                        "score": round(score, 1),
+                    })
+
+        except Exception:
+            continue
+
+    spreads.sort(key=lambda s: -s["score"])
+    return spreads[:top_n]
+
+
 def run():
     args = sys.argv[1:]
 
@@ -650,17 +974,6 @@ def run():
 
     console.print(f"Fetching options chain for [bold]{ticker}[/bold]...")
 
-    try:
-        contracts = evaluate_contracts(ticker, strategy, config, dte_target, top_n)
-    except Exception as e:
-        console.print(f"[red]Error:[/red] {e}")
-        return
-
-    if not contracts:
-        console.print(f"[yellow]No contracts found matching criteria.[/yellow]")
-        console.print(f"[dim]Try --dte with a different target, or check helm screen output.[/dim]")
-        return
-
     # Get spot price for context
     spot = None
     try:
@@ -683,6 +996,34 @@ def run():
             atr = round(float(tr.rolling(14).mean().iloc[-1]), 2)
     except Exception:
         pass
+
+    is_spread = config.get("is_spread", False)
+
+    if is_spread:
+        try:
+            spreads = evaluate_spreads(ticker, strategy, config, dte_target, top_n)
+        except Exception as e:
+            console.print(f"[red]Error:[/red] {e}")
+            return
+
+        if not spreads:
+            console.print(f"[yellow]No spread contracts found matching criteria.[/yellow]")
+            console.print(f"[dim]Try --dte with a different target.[/dim]")
+            return
+
+        display_spreads(ticker, strategy, config, spreads, spot, atr, account_id, args)
+        return
+
+    try:
+        contracts = evaluate_contracts(ticker, strategy, config, dte_target, top_n)
+    except Exception as e:
+        console.print(f"[red]Error:[/red] {e}")
+        return
+
+    if not contracts:
+        console.print(f"[yellow]No contracts found matching criteria.[/yellow]")
+        console.print(f"[dim]Try --dte with a different target, or check helm screen output.[/dim]")
+        return
 
     console.print()
     if spot:
