@@ -95,6 +95,112 @@ def dte(expiration: str) -> Optional[int]:
         return None
 
 
+def save_check(position_id: str, assessment: dict, pos: dict) -> None:
+    """Save a check run to the checks table silently."""
+    import uuid as _uuid
+    from helm.db import transaction as _tx
+
+    a = assessment
+    primary = a.get("primary_leg") or {}
+    opt = a.get("opt_data") or {}
+    spot = a.get("underlying_price")
+    source = a.get("opt_source", "unknown")
+
+    # Get entry snapshot for comparison
+    try:
+        from helm.db import get_conn as _gc
+        _c = _gc()
+        snap = _c.execute(
+            "SELECT * FROM entry_snapshots WHERE position_id=? ORDER BY created_at DESC LIMIT 1",
+            (position_id,)
+        ).fetchone()
+        entry_delta = snap["delta"] if snap else None
+        entry_iv    = snap["iv_current"] if snap else None
+        entry_spot  = snap["spot_price"] if snap else None
+        _c.close()
+    except Exception:
+        entry_delta = entry_iv = entry_spot = None
+
+    # Compute days_open
+    try:
+        opened = pos.get("opened_at", "")[:10]
+        from datetime import date as _date
+        days_open = (date.today() - _date.fromisoformat(opened)).days
+    except Exception:
+        days_open = None
+
+    # Delta vs entry
+    delta_now = opt.get("delta") or (a.get("primary_leg") or {}).get("delta")
+    delta_vs_entry = None
+    if delta_now is not None and entry_delta is not None:
+        delta_vs_entry = round(float(delta_now) - float(entry_delta), 3)
+
+    # IV vs entry
+    iv_now = opt.get("iv")
+    iv_vs_entry = None
+    if iv_now is not None and entry_iv is not None:
+        iv_vs_entry = round(float(iv_now) - float(entry_iv), 1)
+
+    # Spot % change vs entry
+    spot_pct_change = None
+    if spot and entry_spot:
+        spot_pct_change = round((spot - float(entry_spot)) / float(entry_spot) * 100, 2)
+
+    # Map flag to action signal
+    flag = a.get("flag", "UNKNOWN")
+    pnl_pct = a.get("pnl_pct")
+    buffer_pct = None
+    if a.get("intrinsic_buffer") is not None and spot:
+        buffer_pct = round(a["intrinsic_buffer"] / spot * 100, 2)
+
+    if flag == "GREEN":
+        action_signal = "HOLD"
+    elif flag == "RED":
+        action_signal = "ALERT"
+    else:
+        action_signal = "MONITOR"
+
+    check_id = "CHK-" + _uuid.uuid4().hex[:8].upper()
+    now = datetime.now().isoformat()
+
+    try:
+        from datetime import date as _date2
+        days_left = dte(primary.get("expiration")) if primary.get("expiration") else None
+        with _tx() as conn:
+            conn.execute("""
+                INSERT INTO checks (
+                    id, position_id, checked_at,
+                    spot_price, dte_now, days_open,
+                    current_bid, current_ask, current_price,
+                    delta, gamma, theta, vega, iv_current,
+                    delta_vs_entry, iv_vs_entry, spot_pct_change,
+                    pnl_unrealized, pnl_pct,
+                    health_flag, action_signal,
+                    greeks_source, data_quality,
+                    buffer_dollars, buffer_pct,
+                    created_at
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """, (
+                check_id, position_id, now,
+                spot,
+                days_left,
+                days_open,
+                opt.get("bid"), opt.get("ask"), opt.get("mid"),
+                opt.get("delta"), opt.get("gamma"), opt.get("theta"), opt.get("vega"),
+                opt.get("iv"),
+                delta_vs_entry, iv_vs_entry, spot_pct_change,
+                a.get("pnl_mtm"), pnl_pct,
+                flag, action_signal,
+                source, "GOOD" if "live" in source else "PARTIAL",
+                a.get("intrinsic_buffer"), buffer_pct,
+                now
+            ))
+    except Exception as _e:
+        import traceback as _tb
+        _tb.print_exc()  # Print but don't break display
+
+
+
 # ── IBKR data fetch ───────────────────────────────────────────────────────────
 
 def fetch_ibkr_underlying(ticker: str) -> dict:
@@ -211,10 +317,15 @@ def fetch_yf_data(ticker: str, expiration: str, strike: float,
             r = row.iloc[0]
             bid = r.get("bid")
             ask = r.get("ask")
-            if bid and ask and bid > 0 and ask > 0:
+            if bid and ask and float(bid) > 0 and float(ask) > 0:
                 result["bid"] = round(float(bid), 2)
                 result["ask"] = round(float(ask), 2)
                 result["mid"] = round((float(bid) + float(ask)) / 2, 2)
+            else:
+                # Outside market hours bid/ask may be 0 — use lastPrice as mid
+                last = r.get("lastPrice") or r.get("last")
+                if last and float(last) > 0:
+                    result["mid"] = round(float(last), 2)
             iv = r.get("impliedVolatility")
             if iv and float(iv) > 0:
                 result["iv"] = round(float(iv) * 100, 1)
@@ -442,6 +553,10 @@ def check_one(pos: dict, legs: list, deep: bool = False) -> dict:
         "pos": pos,
         "legs": legs,
     })
+
+    # Save check to DB silently
+    save_check(pos["id"], assessment, pos)
+
     return assessment
 
 
