@@ -761,7 +761,7 @@ def run():
         f"Spread: {best.get('spread_pct', '--')}%  |  OI: {best['oi']:,}\n"
         f"  Suggested: [bold]{suggested} contract(s)[/bold] @ ${best['mid']:.2f} = "
         f"[green]${total_premium:.0f} premium[/green]\n\n"
-        f"[dim]Run with --confirm to open this position[/dim]",
+        f"[dim]To open: [bold]helm open {ticker} {strategy} --confirm[/bold][/dim]",
         title="Recommendation",
         border_style="green"
     ))
