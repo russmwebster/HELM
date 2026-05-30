@@ -495,3 +495,49 @@ CREATE INDEX IF NOT EXISTS idx_signals_ticker_ts ON signals(ticker, generated_at
 -- Watchlist
 CREATE INDEX IF NOT EXISTS idx_wl_optionable  ON watchlist(is_optionable);
 CREATE INDEX IF NOT EXISTS idx_wl_wto         ON watchlist(willing_to_own);
+
+
+-- ── Investment Themes ─────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS themes (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL UNIQUE,
+    description TEXT,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    notes       TEXT
+);
+
+CREATE TABLE IF NOT EXISTS theme_tickers (
+    id           TEXT PRIMARY KEY,
+    theme_id     TEXT NOT NULL REFERENCES themes(id) ON DELETE CASCADE,
+    ticker       TEXT NOT NULL,
+    category     TEXT NOT NULL DEFAULT 'ESTABLISHED',
+    company_name TEXT,
+    notes        TEXT,
+    added_at     TEXT NOT NULL DEFAULT (datetime('now')),
+    CHECK (category IN ('ESTABLISHED','EMERGING','PRE_IPO','WATCH')),
+    UNIQUE(theme_id, ticker)
+);
+
+CREATE INDEX IF NOT EXISTS idx_theme_tickers_theme  ON theme_tickers(theme_id);
+CREATE INDEX IF NOT EXISTS idx_theme_tickers_ticker ON theme_tickers(ticker);
+
+-- ── HELM Events (nudge system) ────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS helm_events (
+    id          TEXT PRIMARY KEY,
+    event_type  TEXT NOT NULL,
+    entity_id   TEXT,
+    entity_name TEXT,
+    occurred_at TEXT NOT NULL DEFAULT (datetime('now')),
+    notes       TEXT,
+    CHECK (event_type IN (
+        'THEME_CREATED','THEME_REFRESHED','THEME_IPO_UPDATED',
+        'SCREEN_RUN','RECONCILE_RUN','FULL_CHECK_RUN',
+        'IMPORT_RUN','WATCHLIST_BUILT'
+    ))
+);
+
+CREATE INDEX IF NOT EXISTS idx_helm_events_type   ON helm_events(event_type);
+CREATE INDEX IF NOT EXISTS idx_helm_events_entity ON helm_events(entity_id);
