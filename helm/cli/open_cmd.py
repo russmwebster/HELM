@@ -111,7 +111,7 @@ STRATEGY_CONFIG = {
         "spread_widths": [5, 10, 15, 20, 25],
     },
     "SHORT_STRANGLE": {
-        "option_type": "BOTH",       # evaluates both puts and calls
+        "option_type": "BOTH",
         "direction": "SHORT",
         "delta_min": 0.15,
         "delta_max": 0.35,
@@ -120,6 +120,18 @@ STRATEGY_CONFIG = {
         "dte_max": 56,
         "label": "Short Strangle",
         "is_strangle": True,
+    },
+    "IRON_CONDOR": {
+        "option_type": "BOTH",
+        "direction": "SHORT",
+        "delta_min": 0.15,
+        "delta_max": 0.35,
+        "delta_sweet": (0.20, 0.30),
+        "dte_min": 21,
+        "dte_max": 56,
+        "label": "Iron Condor",
+        "is_condor": True,
+        "spread_widths": [5, 10, 15, 20],
     },
 }
 
@@ -729,6 +741,318 @@ def display_spreads(ticker: str, strategy: str, config: dict, spreads: list,
 
 
 
+
+def evaluate_condors(ticker: str, strategy: str, config: dict,
+                     dte_target: int = None, top_n: int = 6) -> list:
+    """
+    Evaluate iron condor contracts.
+    Combines a bull put spread (below) + bear call spread (above).
+    Reuses evaluate_spreads logic for each wing.
+    """
+    import yfinance as yf
+    import math
+
+    delta_min   = config["delta_min"]
+    delta_max   = config["delta_max"]
+    delta_sweet = config["delta_sweet"]
+    dte_min     = config["dte_min"]
+    dte_max     = config["dte_max"]
+    widths      = config.get("spread_widths", [5, 10, 15, 20])
+
+    if dte_target:
+        dte_min = max(7, dte_target - 7)
+        dte_max = dte_target + 7
+
+    tk = yf.Ticker(ticker)
+    info = tk.fast_info
+    spot = getattr(info, "last_price", None)
+    if not spot:
+        hist = tk.history(period="5d")
+        spot = float(hist["Close"].iloc[-1]) if not hist.empty else None
+    if not spot:
+        raise ValueError(f"Cannot fetch price for {ticker}")
+
+    today = __import__("datetime").date.today()
+    expirations = tk.options
+    target_exps = []
+    for exp in expirations:
+        d = (__import__("datetime").datetime.strptime(exp, "%Y-%m-%d").date() - today).days
+        if dte_min <= d <= dte_max:
+            target_exps.append((exp, d))
+
+    if not target_exps:
+        raise ValueError(f"No expiries in {dte_min}-{dte_max} DTE range")
+
+    condors = []
+
+    for exp, days in target_exps:
+        try:
+            chain = tk.option_chain(exp)
+            puts  = chain.puts
+            calls = chain.calls
+
+            def build_strike_data(df):
+                data = {}
+                for _, row in df.iterrows():
+                    s = float(row["strike"])
+                    bid = row.get("bid", 0) or 0
+                    ask = row.get("ask", 0) or 0
+                    if float(bid) > 0 and float(ask) > 0:
+                        data[s] = {
+                            "bid": round(float(bid), 2),
+                            "ask": round(float(ask), 2),
+                            "mid": round((float(bid)+float(ask))/2, 2),
+                            "iv":  round(float(row.get("impliedVolatility",0) or 0)*100, 1),
+                            "oi":  int(row.get("openInterest", 0) or 0),
+                        }
+                return data
+
+            put_data  = build_strike_data(puts)
+            call_data = build_strike_data(calls)
+
+            def compute_delta(strike, opt_type, iv_pct):
+                try:
+                    iv = iv_pct / 100
+                    T = days / 365.0
+                    S, K, r = spot, strike, 0.045
+                    d1 = (math.log(S/K) + (r + 0.5*iv**2)*T) / (iv*math.sqrt(T))
+                    from scipy.stats import norm
+                    return abs(norm.cdf(d1) - 1) if opt_type == "PUT" else norm.cdf(d1)
+                except Exception:
+                    return None
+
+            # Find short put candidates (OTM puts below spot)
+            put_shorts = []
+            for strike, data in sorted(put_data.items()):
+                if strike >= spot: continue
+                if data["oi"] < 100: continue
+                delta = compute_delta(strike, "PUT", data["iv"])
+                if delta and delta_min <= delta <= delta_max:
+                    put_shorts.append({"strike": strike, "delta": delta, **data})
+
+            # Find short call candidates (OTM calls above spot)
+            call_shorts = []
+            for strike, data in sorted(call_data.items()):
+                if strike <= spot: continue
+                if data["oi"] < 100: continue
+                delta = compute_delta(strike, "CALL", data["iv"])
+                if delta and delta_min <= delta <= delta_max:
+                    call_shorts.append({"strike": strike, "delta": delta, **data})
+
+            if not put_shorts or not call_shorts:
+                continue
+
+            # Sort by delta proximity to sweet spot
+            d_mid = sum(delta_sweet) / 2
+            put_shorts.sort(key=lambda x: abs(x["delta"] - d_mid))
+            call_shorts.sort(key=lambda x: abs(x["delta"] - d_mid))
+
+            # Pair top 2 puts x top 2 calls x each width
+            for ps in put_shorts[:2]:
+                for cs in call_shorts[:2]:
+                    for width in widths:
+                        # Put spread: short put at ps["strike"], long put at ps["strike"] - width
+                        long_put_strike = round(ps["strike"] - width, 0)
+                        if long_put_strike not in put_data:
+                            available = [s for s in put_data if s < ps["strike"]]
+                            if not available: continue
+                            long_put_strike = min(available, key=lambda s: abs(s-(ps["strike"]-width)))
+
+                        # Call spread: short call at cs["strike"], long call at cs["strike"] + width
+                        long_call_strike = round(cs["strike"] + width, 0)
+                        if long_call_strike not in call_data:
+                            available = [s for s in call_data if s > cs["strike"]]
+                            if not available: continue
+                            long_call_strike = min(available, key=lambda s: abs(s-(cs["strike"]+width)))
+
+                        if long_put_strike not in put_data or long_call_strike not in call_data:
+                            continue
+
+                        lp = put_data[long_put_strike]
+                        lc = call_data[long_call_strike]
+
+                        put_credit  = round(ps["mid"] - lp["mid"], 2)
+                        call_credit = round(cs["mid"] - lc["mid"], 2)
+                        if put_credit <= 0 or call_credit <= 0:
+                            continue
+
+                        total_credit = round(put_credit + call_credit, 2)
+                        put_width    = round(ps["strike"] - long_put_strike, 2)
+                        call_width   = round(long_call_strike - cs["strike"], 2)
+                        max_loss     = round(max(put_width, call_width) - total_credit, 2)
+                        if max_loss <= 0: continue
+
+                        rr_ratio = round(total_credit / max_loss, 2)
+                        cw_pct   = round(total_credit / max(put_width, call_width) * 100, 1)
+
+                        # Score
+                        score = 0.0
+                        for leg_delta in [ps["delta"], cs["delta"]]:
+                            if delta_sweet[0] <= leg_delta <= delta_sweet[1]: score += 20
+                            elif (delta_sweet[0]-0.05) <= leg_delta <= (delta_sweet[1]+0.05): score += 10
+                        if cw_pct >= 25: score += 20
+                        elif cw_pct >= 15: score += 10
+                        if rr_ratio >= 0.40: score += 15
+                        elif rr_ratio >= 0.25: score += 8
+                        for oi in [ps["oi"], cs["oi"]]:
+                            if oi >= 1000: score += 8
+                            elif oi >= 500: score += 4
+
+                        condors.append({
+                            "ticker": ticker,
+                            "strategy": strategy,
+                            "expiration": exp,
+                            "dte": days,
+                            # Put spread
+                            "short_put": ps["strike"],
+                            "long_put": long_put_strike,
+                            "put_width": put_width,
+                            "put_credit": put_credit,
+                            "put_delta": ps["delta"],
+                            "put_iv": ps["iv"],
+                            "put_oi": ps["oi"],
+                            # Call spread
+                            "short_call": cs["strike"],
+                            "long_call": long_call_strike,
+                            "call_width": call_width,
+                            "call_credit": call_credit,
+                            "call_delta": cs["delta"],
+                            "call_iv": cs["iv"],
+                            "call_oi": cs["oi"],
+                            # Combined
+                            "total_credit": total_credit,
+                            "max_loss": max_loss,
+                            "rr_ratio": rr_ratio,
+                            "cw_pct": cw_pct,
+                            "score": round(score, 1),
+                        })
+
+        except Exception:
+            continue
+
+    # Deduplicate and sort
+    seen = set()
+    unique = []
+    for c in sorted(condors, key=lambda x: -x["score"]):
+        key = (c["expiration"], c["short_put"], c["short_call"])
+        if key not in seen:
+            seen.add(key)
+            unique.append(c)
+
+    return unique[:top_n]
+
+
+def display_condors(ticker: str, strategy: str, config: dict, condors: list,
+                    spot: float, atr: float, account_id: str, args: list):
+    """Display iron condor evaluation results."""
+
+    console.print()
+    if spot:
+        atr_str = f"  ATR(14): ${atr:.2f}  →  Put wing: ${spot-atr:.2f}  Call wing: ${spot+atr:.2f}" if atr else ""
+        console.print(f"  Spot: [bold]${spot:.2f}[/bold]{atr_str}")
+        console.print()
+
+    t = Table(box=box.SIMPLE_HEAD, show_header=True, padding=(0,1), width=190)
+    t.add_column("Rank",      width=5,  no_wrap=True)
+    t.add_column("Exp",       width=6,  no_wrap=True)
+    t.add_column("DTE",       justify="right", width=4)
+    t.add_column("Long Put",  justify="right", width=9)
+    t.add_column("Short Put", justify="right", width=10)
+    t.add_column("Short Call",justify="right", width=11)
+    t.add_column("Long Call", justify="right", width=10)
+    t.add_column("Width",     justify="right", width=6)
+    t.add_column("Credit",    justify="right", width=8)
+    t.add_column("MaxLoss",   justify="right", width=8)
+    t.add_column("C/W%",      justify="right", width=6)
+    t.add_column("R/R",       justify="right", width=5)
+    t.add_column("Put Δ",     justify="right", width=7)
+    t.add_column("Call Δ",    justify="right", width=7)
+    t.add_column("Score",     justify="right", width=6)
+    t.add_column("Contracts", justify="right", width=10)
+
+    for rank, c in enumerate(condors, 1):
+        rank_str = "[green]#1[/green]" if rank==1 else "[cyan]#2[/cyan]" if rank==2 else f"#{rank}"
+        cw_color = "green" if c["cw_pct"] >= 25 else "yellow" if c["cw_pct"] >= 15 else "red"
+        rr_color = "green" if c["rr_ratio"] >= 0.40 else "yellow" if c["rr_ratio"] >= 0.25 else "red"
+
+        suggested = 1
+        try:
+            from helm.db import get_conn as _gc
+            _c = _gc()
+            acct = _c.execute("SELECT portfolio_value FROM accounts WHERE id=?",
+                              (account_id,)).fetchone()
+            _c.close()
+            if acct and acct[0]:
+                max_risk = acct[0] * 0.05
+                suggested = max(1, min(20, int(max_risk / (c["max_loss"] * 100))))
+        except Exception:
+            pass
+
+        t.add_row(
+            rank_str,
+            c["expiration"][5:],
+            str(c["dte"]),
+            f"${c['long_put']:.0f}",
+            f"${c['short_put']:.0f}",
+            f"${c['short_call']:.0f}",
+            f"${c['long_call']:.0f}",
+            f"${max(c['put_width'],c['call_width']):.0f}",
+            f"[green]${c['total_credit']:.2f}[/green]",
+            f"[red]${c['max_loss']:.2f}[/red]",
+            f"[{cw_color}]{c['cw_pct']:.0f}%[/{cw_color}]",
+            f"[{rr_color}]{c['rr_ratio']:.2f}[/{rr_color}]",
+            f"{c['put_delta']:.3f}",
+            f"{c['call_delta']:.3f}",
+            f"{c['score']:.0f}",
+            f"[bold]{suggested}[/bold]",
+        )
+
+    console.print(f"[bold]Top {len(condors)} iron condors — {ticker}[/bold]")
+    console.print()
+    console.print(t)
+    console.print()
+
+    best = condors[0]
+    suggested_best = 1
+    try:
+        from helm.db import get_conn as _gc2
+        _c2 = _gc2()
+        acct2 = _c2.execute("SELECT portfolio_value FROM accounts WHERE id=?",
+                            (account_id,)).fetchone()
+        _c2.close()
+        if acct2 and acct2[0]:
+            suggested_best = max(1, min(20, int((acct2[0]*0.05) / (best["max_loss"]*100))))
+    except Exception:
+        pass
+
+    total_credit = round(best["total_credit"] * 100 * suggested_best, 0)
+    total_risk   = round(best["max_loss"] * 100 * suggested_best, 0)
+    put_be = round(best["short_put"] - best["total_credit"], 2)
+    call_be = round(best["short_call"] + best["total_credit"], 2)
+
+    console.print(Panel(
+        f"[bold green]Top pick:[/bold green] {ticker} Iron Condor "
+        f"{best['expiration']} ({best['dte']}d)\n\n"
+        f"  [dim]─── Put Spread ───[/dim]\n"
+        f"  Long  PUT  ${best['long_put']:.0f}  |  "
+        f"Short PUT  ${best['short_put']:.0f}  →  Credit ${best['put_credit']:.2f}  (Δ {best['put_delta']:.3f})\n\n"
+        f"  [dim]─── Call Spread ───[/dim]\n"
+        f"  Short CALL ${best['short_call']:.0f}  |  "
+        f"Long  CALL ${best['long_call']:.0f}  →  Credit ${best['call_credit']:.2f}  (Δ {best['call_delta']:.3f})\n\n"
+        f"  Total credit: [green]${best['total_credit']:.2f}/contract[/green]  |  "
+        f"Max loss: [red]${best['max_loss']:.2f}/contract[/red]\n"
+        f"  Credit/width: {best['cw_pct']:.0f}%  |  R/R: {best['rr_ratio']:.2f}\n"
+        f"  Break-evens: ${put_be:.2f} (put) / ${call_be:.2f} (call)\n\n"
+        f"  Suggested: [bold]{suggested_best} contract(s)[/bold]  |  "
+        f"Collect: [green]${total_credit:.0f}[/green]  |  "
+        f"Max risk: [red]${total_risk:.0f}[/red]\n\n"
+        f"[dim]To open: [bold]helm open {ticker} IRON_CONDOR --confirm[/bold][/dim]",
+        title="Recommendation",
+        border_style="green"
+    ))
+    console.print()
+
+
 def evaluate_strangles(ticker: str, strategy: str, config: dict,
                        dte_target: int = None, top_n: int = 6) -> list:
     """
@@ -1293,6 +1617,22 @@ def run():
 
     is_spread   = config.get("is_spread", False)
     is_strangle = config.get("is_strangle", False)
+    is_condor   = config.get("is_condor", False)
+
+    if is_condor:
+        try:
+            condors = evaluate_condors(ticker, strategy, config, dte_target, top_n)
+        except Exception as e:
+            console.print(f"[red]Error:[/red] {e}")
+            return
+
+        if not condors:
+            console.print(f"[yellow]No iron condor contracts found matching criteria.[/yellow]")
+            console.print(f"[dim]Try --dte with a different target.[/dim]")
+            return
+
+        display_condors(ticker, strategy, config, condors, spot, atr, account_id, args)
+        return
 
     if is_strangle:
         try:
