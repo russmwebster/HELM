@@ -27,6 +27,7 @@ logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 warnings.filterwarnings("ignore")
 
 from rich.console import Console
+from rich.prompt import Prompt
 from rich.table import Table
 from rich.panel import Panel
 from rich import box
@@ -336,6 +337,121 @@ def close_position(position_id: str, leg_id: str, close_price: float,
 
 # ── Main command ──────────────────────────────────────────────────────────────
 
+
+def import_stage4_position(account_id: str, tx: dict) -> bool:
+    """
+    Import a trade executed directly in Fidelity (Stage 4 only — skipped Stage 3).
+    Creates an OPEN position with a partial entry snapshot using current market data.
+    """
+    import uuid
+    from datetime import datetime, date
+    from helm.db import transaction as _tx
+    from helm.models.position import Position
+    from helm.models.leg import Leg
+
+    ticker    = tx["ticker"]
+    strike    = tx["strike"]
+    exp       = tx["expiration"]
+    opt_type  = tx["opt_type"]
+    contracts = tx["contracts"]
+    fill      = tx["price"]
+    tx_date   = tx["date"]
+
+    # Determine strategy from option type and direction
+    direction = tx.get("direction", "SHORT")
+    if opt_type == "PUT" and direction == "SHORT":
+        strategy = "CSP"
+        leg_role = "SHORT_PUT"
+    elif opt_type == "CALL" and direction == "SHORT":
+        strategy = "COVERED_CALL"
+        leg_role = "SHORT_CALL"
+    elif opt_type == "CALL" and direction == "LONG":
+        strategy = "LONG_CALL"
+        leg_role = "LONG_CALL"
+    elif opt_type == "PUT" and direction == "LONG":
+        strategy = "LONG_PUT"
+        leg_role = "LONG_PUT"
+    else:
+        strategy = "CSP"
+        leg_role = "SHORT_PUT"
+
+    net_premium = round(fill * 100 * contracts, 2)
+    if direction == "LONG":
+        net_premium = -abs(net_premium)
+
+    now = datetime.now().isoformat()
+    pos_id = f"{ticker}-{strategy}-{date.today().strftime('%Y%m%d')}-{uuid.uuid4().hex[:6].upper()}"
+    leg_id = pos_id + f"-{leg_role[:2]}-{uuid.uuid4().hex[:4].upper()}"
+
+    try:
+        with _tx() as conn:
+            # Create position
+            conn.execute("""
+                INSERT INTO positions
+                (id, account_id, strategy, ticker, status, opened_at,
+                 total_contracts, net_premium, notes, created_at, updated_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?)
+            """, (
+                pos_id, account_id, strategy, ticker, "OPEN",
+                f"{tx_date}T00:00:00",
+                contracts, net_premium,
+                f"Imported from Fidelity activity — Stage 4 trade (no HELM confirmation). "
+                f"Entry snapshot is partial (market data at import time).",
+                now, now
+            ))
+
+            # Create leg
+            conn.execute("""
+                INSERT INTO legs
+                (id, position_id, leg_role, option_type, direction,
+                 strike, expiration, contracts, multiplier,
+                 open_price, open_date, status, created_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """, (
+                leg_id, pos_id, leg_role, opt_type, direction,
+                strike, exp, contracts, 100,
+                fill, tx_date, "OPEN", now
+            ))
+
+            # Create lifecycle event
+            conn.execute("""
+                INSERT INTO lifecycle_events
+                (id, position_id, event_type, occurred_at, narrative)
+                VALUES (?,?,?,?,?)
+            """, (
+                "EVT-" + uuid.uuid4().hex[:8].upper(),
+                pos_id, "OPENED", now,
+                f"Imported from Fidelity activity: {contracts}x {leg_role} "
+                f"${strike} {exp} @ ${fill:.2f} — Stage 4 trade"
+            ))
+
+        # Try to fetch partial entry snapshot (current market data as proxy)
+        try:
+            import yfinance as yf
+            import warnings
+            warnings.filterwarnings("ignore")
+            tk = yf.Ticker(ticker)
+            hist = tk.history(period="5d")
+            spot = float(hist["Close"].iloc[-1]) if not hist.empty else None
+
+            if spot:
+                snap_id = "snap-" + uuid.uuid4().hex[:8].upper()
+                with _tx() as conn:
+                    conn.execute("""
+                        INSERT INTO entry_snapshots
+                        (id, position_id, snap_type, spot_price, created_at)
+                        VALUES (?,?,?,?,?)
+                    """, (snap_id, pos_id, "PARTIAL", spot, now))
+        except Exception:
+            pass  # Partial snapshot is best-effort
+
+        return pos_id
+
+    except Exception as e:
+        console.print(f"[red]Error importing {ticker}:[/red] {e}")
+        return None
+
+
 def run():
     args = sys.argv[1:]
 
@@ -395,10 +511,6 @@ def run():
         console.print("[dim]All transactions already processed. Nothing to do.[/dim]")
         console.print()
         return
-    
-    # Mark all transactions as seen immediately -- prevents re-processing
-    # even if user cancels. We've already evaluated them.
-    mark_processed(transactions)
     
     # Mark all transactions as seen immediately -- prevents re-processing
     # even if user cancels. We've already evaluated them.
@@ -510,12 +622,73 @@ def run():
 
     if new_opens:
         console.print(f"[bold yellow]New positions not in HELM ({len(new_opens)}):[/bold yellow]")
-        console.print("[dim]These were opened in Fidelity but not through HELM.[/dim]")
-        console.print("[dim]Run helm import fidelity to bring them in.[/dim]")
+        console.print("[dim]These were opened in Fidelity but not through HELM — skipping Stage 3.[/dim]")
         console.print()
+
+        t = Table(box=box.SIMPLE_HEAD, show_header=True, padding=(0,1))
+        t.add_column("Ticker",    style="bold cyan", width=8)
+        t.add_column("Contract",  width=12)
+        t.add_column("Contracts", justify="right", width=10)
+        t.add_column("Fill @",    justify="right", width=8)
+        t.add_column("Premium",   justify="right", width=10)
+        t.add_column("Date",      width=12)
+
         for tx in new_opens:
             contract_str = f"{tx['opt_type'][0]}{tx['strike']:.0f} {tx['expiration'][5:]}"
-            console.print(f"  [cyan]{tx['ticker']}[/cyan]  {contract_str}  x{tx['contracts']}  @ ${tx['price']:.2f}  ({tx['date']})")
+            net = tx['price'] * 100 * tx['contracts']
+            t.add_row(
+                tx['ticker'],
+                contract_str,
+                str(tx['contracts']),
+                f"${tx['price']:.2f}",
+                f"${net:.0f}",
+                tx['date'],
+            )
+        console.print(t)
+        console.print()
+
+        # Offer to import each new position
+        imported = []
+        skipped  = []
+
+        console.print("[dim]Import these into HELM? You can accept or skip each one.[/dim]")
+        console.print()
+
+        for tx in new_opens:
+            contract_str = f"{tx['opt_type'][0]}{tx['strike']:.0f} {tx['expiration'][5:]}"
+            answer = Prompt.ask(
+                f"  Import [bold cyan]{tx['ticker']}[/bold cyan] "
+                f"{contract_str} x{tx['contracts']} @ ${tx['price']:.2f}?",
+                choices=["y", "n", "s"],
+                default="y",
+                show_choices=False,
+                show_default=False,
+            )
+            if answer == "s":
+                console.print("  [dim]Skipping remaining imports.[/dim]")
+                skipped.extend(new_opens[new_opens.index(tx):])
+                break
+            if answer == "y":
+                pos_id = import_stage4_position(account_id, tx)
+                if pos_id:
+                    imported.append((tx, pos_id))
+                    console.print(
+                        f"  [green]✓[/green] {tx['ticker']} {contract_str} "
+                        f"imported — [dim]{pos_id}[/dim]"
+                    )
+            else:
+                skipped.append(tx)
+
+        if imported:
+            console.print()
+            console.print(
+                f"  [green]{len(imported)} position(s) imported[/green] "
+                f"with partial entry snapshot."
+            )
+            console.print(
+                "  [dim]Note: entry snapshot uses current market data as proxy. "
+                "Run helm check to monitor.[/dim]"
+            )
         console.print()
 
     if already_open:
