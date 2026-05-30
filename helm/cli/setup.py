@@ -328,6 +328,28 @@ def run():
     summary = db_summary()
     counts = summary['counts']
 
+    # ── Optional: Investment Themes ─────────────────────────────────────────────
+    console.print()
+    console.print(Panel.fit(
+        "[bold cyan]Optional Component: Investment Themes[/bold cyan]\n\n"
+        "[dim]Organize your watchlist by conviction areas — AI, Robotics, Nuclear, etc.\n"
+        "HELM will track established leaders, emerging players, and pre-IPO companies\n"
+        "in each theme, and nudge you when it's time to refresh.[/dim]",
+        border_style="cyan"
+    ))
+    console.print()
+
+    from rich.prompt import Confirm as _Confirm
+    if _Confirm.ask("  Set up Investment Themes now?", default=False):
+        try:
+            from helm.cli.theme_cmd import cmd_setup
+            cmd_setup([])
+        except Exception as _e:
+            console.print(f"[yellow]Theme setup skipped:[/yellow] {_e}")
+    else:
+        console.print("[dim]  Skipped — run [bold]helm theme setup[/bold] anytime to add themes.[/dim]")
+    console.print()
+
     console.print(Panel.fit(
         f'[bold green]HELM is ready.[/bold green]\n\n'
         f'  Database:   {DB_PATH}\n'

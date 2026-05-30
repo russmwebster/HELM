@@ -267,8 +267,17 @@ Return only the JSON array."""
                     continue
                 # PRE_IPO items may be company names not tickers
                 if category == "PRE_IPO" or " " in item:
+                    # Build a cleaner ticker from company name
+                    words = item.replace(".", "").replace(",", "").split()
+                    if len(words) == 1:
+                        ticker_id = words[0][:10].upper()
+                    elif len(words) == 2:
+                        ticker_id = (words[0][:5] + words[1][:5]).upper()
+                    else:
+                        ticker_id = "".join(w[0] for w in words[:4]).upper() + words[0][1:4].upper()
+                    ticker_id = ticker_id[:10]
                     theme.add_ticker(
-                        ticker=item[:10].upper().replace(" ", "_"),
+                        ticker=ticker_id,
                         category="PRE_IPO",
                         company_name=item,
                         notes="Pre-IPO / private — no options available"
