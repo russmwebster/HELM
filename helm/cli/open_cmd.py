@@ -110,6 +110,17 @@ STRATEGY_CONFIG = {
         "is_spread": True,
         "spread_widths": [5, 10, 15, 20, 25],
     },
+    "SHORT_STRANGLE": {
+        "option_type": "BOTH",       # evaluates both puts and calls
+        "direction": "SHORT",
+        "delta_min": 0.15,
+        "delta_max": 0.35,
+        "delta_sweet": (0.20, 0.30),
+        "dte_min": 21,
+        "dte_max": 56,
+        "label": "Short Strangle",
+        "is_strangle": True,
+    },
 }
 
 # ── Contract scoring (adapted from COTS ladder.py) ────────────────────────────
@@ -717,6 +728,289 @@ def display_spreads(ticker: str, strategy: str, config: dict, spreads: list,
         confirm_spread(ticker, strategy, spreads, config, spot, args)
 
 
+
+def evaluate_strangles(ticker: str, strategy: str, config: dict,
+                       dte_target: int = None, top_n: int = 6) -> list:
+    """
+    Evaluate short strangle contracts.
+    Finds best OTM put + OTM call pair for the same expiration.
+    Returns list of strangle dicts sorted by score.
+    """
+    import yfinance as yf
+    import math
+
+    delta_min   = config["delta_min"]
+    delta_max   = config["delta_max"]
+    delta_sweet = config["delta_sweet"]
+    dte_min     = config["dte_min"]
+    dte_max     = config["dte_max"]
+
+    if dte_target:
+        dte_min = max(7, dte_target - 7)
+        dte_max = dte_target + 7
+
+    tk = yf.Ticker(ticker)
+    info = tk.fast_info
+    spot = getattr(info, "last_price", None)
+    if not spot:
+        hist = tk.history(period="5d")
+        spot = float(hist["Close"].iloc[-1]) if not hist.empty else None
+    if not spot:
+        raise ValueError(f"Cannot fetch price for {ticker}")
+
+    today = __import__("datetime").date.today()
+    expirations = tk.options
+    target_exps = []
+    for exp in expirations:
+        d = (__import__("datetime").datetime.strptime(exp, "%Y-%m-%d").date() - today).days
+        if dte_min <= d <= dte_max:
+            target_exps.append((exp, d))
+
+    if not target_exps:
+        raise ValueError(f"No expiries in {dte_min}-{dte_max} DTE range")
+
+    strangles = []
+
+    for exp, days in target_exps:
+        try:
+            chain = tk.option_chain(exp)
+            puts  = chain.puts
+            calls = chain.calls
+
+            def get_candidates(df, opt_type):
+                candidates = []
+                for _, row in df.iterrows():
+                    strike = float(row["strike"])
+                    bid = row.get("bid", 0) or 0
+                    ask = row.get("ask", 0) or 0
+                    if float(bid) <= 0 or float(ask) <= 0:
+                        continue
+                    oi = int(row.get("openInterest", 0) or 0)
+                    if oi < 100:
+                        continue
+                    mid = (float(bid) + float(ask)) / 2
+                    iv  = row.get("impliedVolatility", None)
+
+                    # Compute delta
+                    delta = None
+                    if iv and float(iv) > 0:
+                        try:
+                            iv_val = float(iv)
+                            T = days / 365.0
+                            S, K, r = spot, strike, 0.045
+                            d1 = (math.log(S/K) + (r + 0.5*iv_val**2)*T) / (iv_val*math.sqrt(T))
+                            from scipy.stats import norm
+                            if opt_type == "PUT":
+                                delta = abs(norm.cdf(d1) - 1)
+                            else:
+                                delta = norm.cdf(d1)
+                        except Exception:
+                            pass
+
+                    if delta is None or not (delta_min <= delta <= delta_max):
+                        continue
+
+                    # For puts: strike must be below spot; for calls: above spot
+                    if opt_type == "PUT" and strike >= spot:
+                        continue
+                    if opt_type == "CALL" and strike <= spot:
+                        continue
+
+                    candidates.append({
+                        "strike": strike,
+                        "bid": round(float(bid), 2),
+                        "ask": round(float(ask), 2),
+                        "mid": round(mid, 2),
+                        "iv": round(float(iv)*100, 1) if iv else None,
+                        "oi": oi,
+                        "delta": round(delta, 3),
+                        "opt_type": opt_type,
+                    })
+                return candidates
+
+            put_candidates  = get_candidates(puts, "PUT")
+            call_candidates = get_candidates(calls, "CALL")
+
+            if not put_candidates or not call_candidates:
+                continue
+
+            # Pair best put with best call (closest to delta sweet spot)
+            d_lo, d_hi = delta_sweet
+            d_mid = (d_lo + d_hi) / 2
+
+            def delta_score(c):
+                return abs(c["delta"] - d_mid)
+
+            put_candidates.sort(key=delta_score)
+            call_candidates.sort(key=delta_score)
+
+            # Evaluate top 3 puts x top 3 calls
+            for put in put_candidates[:3]:
+                for call in call_candidates[:3]:
+                    net_credit = round(put["mid"] + call["mid"], 2)
+                    put_pct    = round((put["ask"]-put["bid"])/put["mid"]*100, 1) if put["mid"] > 0 else None
+                    call_pct   = round((call["ask"]-call["bid"])/call["mid"]*100, 1) if call["mid"] > 0 else None
+
+                    # Width between strikes (max loss zone)
+                    width = round(call["strike"] - put["strike"], 2)
+
+                    # Score
+                    score = 0.0
+                    for leg in [put, call]:
+                        if d_lo <= leg["delta"] <= d_hi: score += 20
+                        elif (d_lo-0.05) <= leg["delta"] <= (d_hi+0.05): score += 10
+                        if leg["oi"] >= 1000: score += 10
+                        elif leg["oi"] >= 500: score += 5
+                    if put_pct and put_pct <= 5: score += 10
+                    if call_pct and call_pct <= 5: score += 10
+                    if net_credit >= 2.0: score += 10
+                    elif net_credit >= 1.0: score += 5
+
+                    strangles.append({
+                        "ticker": ticker,
+                        "strategy": strategy,
+                        "expiration": exp,
+                        "dte": days,
+                        "put_strike": put["strike"],
+                        "call_strike": call["strike"],
+                        "width": width,
+                        "put_bid": put["bid"],
+                        "put_ask": put["ask"],
+                        "put_mid": put["mid"],
+                        "put_delta": put["delta"],
+                        "put_iv": put["iv"],
+                        "put_oi": put["oi"],
+                        "call_bid": call["bid"],
+                        "call_ask": call["ask"],
+                        "call_mid": call["mid"],
+                        "call_delta": call["delta"],
+                        "call_iv": call["iv"],
+                        "call_oi": call["oi"],
+                        "net_credit": net_credit,
+                        "score": round(score, 1),
+                    })
+
+        except Exception:
+            continue
+
+    # Deduplicate and sort
+    seen = set()
+    unique = []
+    for s in sorted(strangles, key=lambda x: -x["score"]):
+        key = (s["expiration"], s["put_strike"], s["call_strike"])
+        if key not in seen:
+            seen.add(key)
+            unique.append(s)
+
+    return unique[:top_n]
+
+
+def display_strangles(ticker: str, strategy: str, config: dict, strangles: list,
+                      spot: float, atr: float, account_id: str, args: list):
+    """Display short strangle evaluation results."""
+
+    console.print()
+    if spot:
+        atr_str = f"  ATR(14): ${atr:.2f}  →  1-ATR put: ${spot-atr:.2f}  1-ATR call: ${spot+atr:.2f}" if atr else ""
+        console.print(f"  Spot: [bold]${spot:.2f}[/bold]{atr_str}")
+        console.print()
+
+    t = Table(box=box.SIMPLE_HEAD, show_header=True, padding=(0,1), width=180)
+    t.add_column("Rank",      width=5,  no_wrap=True)
+    t.add_column("Exp",       width=6,  no_wrap=True)
+    t.add_column("DTE",       justify="right", width=4)
+    t.add_column("Put Strike", justify="right", width=10)
+    t.add_column("Call Strike", justify="right", width=11)
+    t.add_column("Width",     justify="right", width=7)
+    t.add_column("Put Mid",   justify="right", width=8)
+    t.add_column("Call Mid",  justify="right", width=9)
+    t.add_column("Credit",    justify="right", width=8)
+    t.add_column("Put Δ",     justify="right", width=7)
+    t.add_column("Call Δ",    justify="right", width=7)
+    t.add_column("Put IV",    justify="right", width=7)
+    t.add_column("Put OI",    justify="right", width=8)
+    t.add_column("Score",     justify="right", width=6)
+    t.add_column("Contracts", justify="right", width=10)
+
+    for rank, s in enumerate(strangles, 1):
+        rank_str = "[green]#1[/green]" if rank==1 else "[cyan]#2[/cyan]" if rank==2 else f"#{rank}"
+
+        # Sizing: max loss is theoretically unlimited but use width as proxy
+        suggested = 1
+        try:
+            from helm.db import get_conn as _gc
+            _c = _gc()
+            acct = _c.execute("SELECT portfolio_value FROM accounts WHERE id=?",
+                              (account_id,)).fetchone()
+            _c.close()
+            if acct and acct[0]:
+                max_risk = acct[0] * 0.05
+                # Use 2x width as proxy for max loss per contract
+                loss_proxy = s["width"] * 2 * 100
+                suggested = max(1, min(20, int(max_risk / loss_proxy)))
+        except Exception:
+            pass
+
+        t.add_row(
+            rank_str,
+            s["expiration"][5:],
+            str(s["dte"]),
+            f"${s['put_strike']:.0f}",
+            f"${s['call_strike']:.0f}",
+            f"${s['width']:.0f}",
+            f"${s['put_mid']:.2f}",
+            f"${s['call_mid']:.2f}",
+            f"[green]${s['net_credit']:.2f}[/green]",
+            f"{s['put_delta']:.3f}",
+            f"{s['call_delta']:.3f}",
+            f"{s['put_iv']:.0f}%" if s.get("put_iv") else "--",
+            f"{s['put_oi']:,}",
+            f"{s['score']:.0f}",
+            f"[bold]{suggested}[/bold]",
+        )
+
+    console.print(f"[bold]Top {len(strangles)} strangles — {ticker} Short Strangle[/bold]")
+    console.print()
+    console.print(t)
+    console.print()
+
+    # Best strangle summary
+    best = strangles[0]
+    suggested_best = 1
+    try:
+        from helm.db import get_conn as _gc2
+        _c2 = _gc2()
+        acct2 = _c2.execute("SELECT portfolio_value FROM accounts WHERE id=?",
+                            (account_id,)).fetchone()
+        _c2.close()
+        if acct2 and acct2[0]:
+            loss_proxy = best["width"] * 2 * 100
+            suggested_best = max(1, min(20, int((acct2[0] * 0.05) / loss_proxy)))
+    except Exception:
+        pass
+
+    total_credit = round(best["net_credit"] * 100 * suggested_best, 0)
+
+    console.print(Panel(
+        f"[bold green]Top pick:[/bold green] {ticker} Short Strangle "
+        f"{best['expiration']} ({best['dte']}d)\n"
+        f"  Sell PUT  ${best['put_strike']:.0f} @ ${best['put_mid']:.2f}  "
+        f"(Δ {best['put_delta']:.3f})\n"
+        f"  Sell CALL ${best['call_strike']:.0f} @ ${best['call_mid']:.2f}  "
+        f"(Δ {best['call_delta']:.3f})\n"
+        f"  Net credit: [green]${best['net_credit']:.2f}/contract[/green]  |  "
+        f"Width: ${best['width']:.0f}  |  "
+        f"Break-evens: ${best['put_strike']-best['net_credit']:.2f} / "
+        f"${best['call_strike']+best['net_credit']:.2f}\n\n"
+        f"  Suggested: [bold]{suggested_best} contract(s)[/bold]  |  "
+        f"Collect: [green]${total_credit:.0f}[/green]\n\n"
+        f"[dim]To open: [bold]helm open {ticker} SHORT_STRANGLE --confirm[/bold][/dim]",
+        title="Recommendation",
+        border_style="green"
+    ))
+    console.print()
+
+
 def evaluate_spreads(ticker: str, strategy: str, config: dict,
                      dte_target: int = None, top_n: int = 6) -> list:
     """
@@ -997,7 +1291,23 @@ def run():
     except Exception:
         pass
 
-    is_spread = config.get("is_spread", False)
+    is_spread   = config.get("is_spread", False)
+    is_strangle = config.get("is_strangle", False)
+
+    if is_strangle:
+        try:
+            strangles = evaluate_strangles(ticker, strategy, config, dte_target, top_n)
+        except Exception as e:
+            console.print(f"[red]Error:[/red] {e}")
+            return
+
+        if not strangles:
+            console.print(f"[yellow]No strangle contracts found matching criteria.[/yellow]")
+            console.print(f"[dim]Try --dte with a different target.[/dim]")
+            return
+
+        display_strangles(ticker, strategy, config, strangles, spot, atr, account_id, args)
+        return
 
     if is_spread:
         try:
