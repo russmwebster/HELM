@@ -162,9 +162,9 @@ def save_check(position_id: str, assessment: dict, pos: dict) -> None:
     if flag == "GREEN":
         action_signal = "HOLD"
     elif flag == "RED":
-        action_signal = "ALERT"
+        action_signal = "CLOSE"
     else:
-        action_signal = "MONITOR"
+        action_signal = "WATCH"
 
     check_id = "CHK-" + _uuid.uuid4().hex[:8].upper()
     now = datetime.now().isoformat()
@@ -172,6 +172,11 @@ def save_check(position_id: str, assessment: dict, pos: dict) -> None:
     try:
         from datetime import date as _date2
         days_left = dte(primary.get("expiration")) if primary.get("expiration") else None
+        # Always save — data_quality reflects how complete the data is
+        has_option_data = opt.get("bid") is not None or opt.get("mid") is not None
+        dq = "GOOD" if ("live" in source and has_option_data) else "PARTIAL"
+        buf = a.get("intrinsic_buffer")
+        buf_pct_val = round(buf / spot * 100, 2) if (buf is not None and spot) else buffer_pct
         with _tx() as conn:
             conn.execute("""
                 INSERT INTO checks (
@@ -188,22 +193,20 @@ def save_check(position_id: str, assessment: dict, pos: dict) -> None:
                 ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, (
                 check_id, position_id, now,
-                spot,
-                days_left,
-                days_open,
+                spot, days_left, days_open,
                 opt.get("bid"), opt.get("ask"), opt.get("mid"),
                 opt.get("delta"), opt.get("gamma"), opt.get("theta"), opt.get("vega"),
                 opt.get("iv"),
                 delta_vs_entry, iv_vs_entry, spot_pct_change,
                 a.get("pnl_mtm"), pnl_pct,
                 flag, action_signal,
-                source, "GOOD" if "live" in source else "PARTIAL",
-                a.get("intrinsic_buffer"), buffer_pct,
+                source, dq,
+                buf, buf_pct_val,
                 now
             ))
     except Exception as _e:
         import traceback as _tb
-        _tb.print_exc()  # Print but don't break display
+        _tb.print_exc()
 
 
 
