@@ -65,8 +65,9 @@ def call_claude(prompt: str, system: str = None, max_tokens: int = 2000,
         console.print("[dim]Add to your shell: export ANTHROPIC_API_KEY=your_key_here[/dim]")
         return None
 
+    model = "claude-sonnet-4-20250514" if web_search else "claude-haiku-4-5-20251001"
     payload = {
-        "model": "claude-sonnet-4-20250514",
+        "model": model,
         "max_tokens": max_tokens,
         "messages": [{"role": "user", "content": prompt}],
     }
@@ -392,7 +393,7 @@ def cmd_show(args):
         console.print()
 
 
-def cmd_refresh(args):
+def cmd_refresh(args, use_web=False):
     """Ask Claude to suggest new tickers and flag outdated ones."""
     theme_name = " ".join(args) if args else None
 
@@ -424,18 +425,13 @@ def cmd_refresh(args):
             for cat in ["ESTABLISHED", "EMERGING", "PRE_IPO"]
         }
 
-        system = """You are a financial research assistant updating an options trader's 
-investment theme watchlist. Suggest additions and flag potential removals.
-Return ONLY valid JSON with this structure — no markdown, no explanation:
-{
-  "add": {
-    "ESTABLISHED": ["TICK1"],
-    "EMERGING": ["TICK1"],
-    "PRE_IPO": ["Company Name"]
-  },
-  "remove": ["TICK1", "TICK2"],
-  "commentary": "2-3 sentence summary of key changes in this theme"
-}"""
+        system = (
+            "Financial research assistant for an options trader. "
+            "Suggest additions/removals for an investment theme watchlist. "
+            "Return ONLY valid JSON, no markdown, no explanation. "
+            "Schema: {add:{ESTABLISHED:[],EMERGING:[],PRE_IPO:[]},remove:[],commentary:str}. "
+            "Commentary max 2 sentences."
+        )
 
         prompt = f"""Investment theme: {theme.name}
 Description: {theme.description}
@@ -454,7 +450,7 @@ Suggest:
 
 Focus on companies with liquid options for ESTABLISHED and EMERGING categories."""
 
-        response = call_claude(prompt, system=system, max_tokens=1500, web_search=True)
+        response = call_claude(prompt, system=system, max_tokens=1500, web_search=use_web)
         if not response:
             continue
 
@@ -475,62 +471,113 @@ Focus on companies with liquid options for ESTABLISHED and EMERGING categories."
         remove = data.get("remove", [])
         commentary = data.get("commentary", "")
 
-        # Show suggestions
+        # Show suggestions with selective accept/reject
         console.print()
         if commentary:
             console.print(f"  [italic]{commentary}[/italic]")
             console.print()
 
         has_changes = False
+        approved_adds = {}   # cat -> [tickers to add]
+        approved_removes = []
 
+        # Process additions — ask per category
         for cat in ["ESTABLISHED", "EMERGING", "PRE_IPO"]:
             new_tickers = add.get(cat, [])
-            if new_tickers:
-                has_changes = True
-                color = CATEGORY_COLORS[cat]
-                console.print(f"  [bold]Add to {CATEGORY_LABELS[cat]}:[/bold]")
-                for tk in new_tickers:
-                    console.print(f"    [+] [{color}]{tk}[/{color}]")
+            if not new_tickers:
+                continue
+            has_changes = True
+            color = CATEGORY_COLORS[cat]
+            label = CATEGORY_LABELS[cat]
+            approved_adds[cat] = []
 
+            console.print(f"  [bold]Add to {label}:[/bold]")
+            for tk in new_tickers:
+                tk = tk.strip()
+                if not tk:
+                    continue
+                # Check if already in watchlist/theme
+                already = False
+                try:
+                    existing_tickers = [x["ticker"] for x in theme.tickers()]
+                    if tk.upper() in existing_tickers or tk.upper().replace(" ","_")[:10] in existing_tickers:
+                        console.print(f"    [dim]{tk} — already in theme, skipping[/dim]")
+                        already = True
+                except Exception:
+                    pass
+                if already:
+                    continue
+                answer = Prompt.ask(
+                    f"    [{color}]+[/{color}] {tk}  add?",
+                    choices=["y", "n", "s"],
+                    default="y",
+                    show_choices=False,
+                    show_default=False,
+                )
+                if answer == "s":
+                    console.print("    [dim]Skipping remaining additions.[/dim]")
+                    break
+                if answer == "y":
+                    approved_adds[cat].append(tk)
+
+        # Process removals — ask per ticker
         if remove:
             has_changes = True
             console.print(f"  [bold]Consider removing:[/bold]")
             for tk in remove:
-                console.print(f"    [-] [dim]{tk}[/dim]")
+                answer = Prompt.ask(
+                    f"    [dim]-[/dim] {tk}  remove?",
+                    choices=["y", "n"],
+                    default="n",
+                    show_choices=False,
+                    show_default=False,
+                )
+                if answer == "y":
+                    approved_removes.append(tk)
 
         if not has_changes:
             console.print("  [green]Theme looks current — no changes suggested.[/green]")
             log_event("THEME_REFRESHED", entity_id=theme.id, entity_name=theme.name)
             continue
 
-        console.print()
-        if Confirm.ask("  Apply these changes?", default=True):
-            for cat in ["ESTABLISHED", "EMERGING", "PRE_IPO"]:
-                for tk in add.get(cat, []):
-                    tk = tk.strip()
-                    if " " in tk or cat == "PRE_IPO":
-                        theme.add_ticker(
-                            ticker=tk[:10].upper().replace(" ", "_"),
-                            category="PRE_IPO",
-                            company_name=tk
-                        )
-                    else:
-                        theme.add_ticker(ticker=tk.upper(), category=cat)
-                        if cat in ("ESTABLISHED", "EMERGING"):
-                            try:
-                                from helm.models.watchlist import WatchlistItem
-                                if not WatchlistItem.get(tk.upper()):
-                                    WatchlistItem.add(tk.upper(), willing_to_own=1)
-                            except Exception:
-                                pass
+        # Apply approved changes
+        added_count = 0
+        removed_count = 0
 
-            console.print(f"  [green]✓ {theme.name} updated.[/green]")
+        for cat, tickers_to_add in approved_adds.items():
+            for tk in tickers_to_add:
+                if " " in tk or cat == "PRE_IPO":
+                    theme.add_ticker(
+                        ticker=tk[:10].upper().replace(" ", "_"),
+                        category="PRE_IPO",
+                        company_name=tk
+                    )
+                else:
+                    theme.add_ticker(ticker=tk.upper(), category=cat)
+                    if cat in ("ESTABLISHED", "EMERGING"):
+                        try:
+                            from helm.models.watchlist import WatchlistItem
+                            if not WatchlistItem.get(tk.upper()):
+                                WatchlistItem.add(tk.upper(), willing_to_own=1)
+                        except Exception:
+                            pass
+                added_count += 1
+
+        for tk in approved_removes:
+            theme.remove_ticker(tk.upper())
+            removed_count += 1
+
+        total = added_count + removed_count
+        if total > 0:
+            console.print(f"  [green]✓ {theme.name} — {added_count} added, {removed_count} removed.[/green]")
+        else:
+            console.print(f"  [dim]No changes applied to {theme.name}.[/dim]")
 
         log_event("THEME_REFRESHED", entity_id=theme.id, entity_name=theme.name)
     console.print()
 
 
-def cmd_ipo(args):
+def cmd_ipo(args, use_web=False):
     """Ask Claude for pre-IPO and recent IPO updates."""
     theme_name = " ".join(args) if args else None
 
@@ -591,7 +638,7 @@ For this theme, identify:
 Focus on companies relevant to options traders — companies that will likely 
 have liquid options once public."""
 
-        response = call_claude(prompt, system=system, max_tokens=2000, web_search=True)
+        response = call_claude(prompt, system=system, max_tokens=2000, web_search=use_web)
         if not response:
             continue
 
@@ -721,11 +768,14 @@ def run():
     cmd = args[0].lower()
     rest = args[1:]
 
+    use_web = "--web" in rest
+    rest = [a for a in rest if a != "--web"]
+
     if   cmd == "setup":   cmd_setup(rest)
     elif cmd == "list":    cmd_list(rest)
     elif cmd == "show":    cmd_show(rest)
-    elif cmd == "refresh": cmd_refresh(rest)
-    elif cmd == "ipo":     cmd_ipo(rest)
+    elif cmd == "refresh": cmd_refresh(rest, use_web=use_web)
+    elif cmd == "ipo":     cmd_ipo(rest, use_web=use_web)
     elif cmd == "add":     cmd_add(rest)
     else:
         console.print(f"[red]Unknown theme command:[/red] {cmd}")
