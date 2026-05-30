@@ -652,8 +652,620 @@ def cmd_check_all(args):
     console.print()
 
 
+
+def cmd_check_deep(pos: dict, legs: list, assessment: dict, snap: dict):
+    """
+    Deep narrative check for a single position.
+    Shows full context: entry vs now, Greeks comparison, guidance.
+    """
+    ticker   = pos["ticker"]
+    strategy = pos["strategy"]
+    a        = assessment
+    primary  = a.get("primary_leg") or {}
+    opt      = a.get("opt_data") or {}
+    spot     = a.get("underlying_price")
+    flag     = a.get("flag", "UNKNOWN")
+    pnl_mtm  = a.get("pnl_mtm")
+    pnl_pct  = a.get("pnl_pct")
+
+    flag_colors = {"GREEN": "green", "YELLOW": "yellow", "RED": "red", "UNKNOWN": "dim"}
+    flag_color  = flag_colors.get(flag, "dim")
+
+    # Position basics
+    strike     = primary.get("strike") or 0
+    expiration = primary.get("expiration") or ""
+    direction  = primary.get("direction") or ""
+    opt_type   = primary.get("option_type") or ""
+    contracts  = primary.get("contracts") or 0
+    open_price = primary.get("open_price") or 0
+    net_premium = pos.get("net_premium") or 0
+
+    days_left  = dte(expiration) if expiration else None
+    opened_at  = pos.get("opened_at", "")[:10]
+    try:
+        days_held = (date.today() - date.fromisoformat(opened_at)).days
+    except Exception:
+        days_held = None
+
+    # Entry snapshot comparisons
+    entry_spot  = snap.get("spot_price")
+    entry_iv    = snap.get("iv_current")
+    entry_delta = snap.get("delta")
+    entry_rsi   = snap.get("rsi")
+    entry_bias  = snap.get("bias_score")
+
+    # Current Greeks
+    iv_now    = opt.get("iv")
+    delta_now = opt.get("delta")
+    theta_now = opt.get("theta")
+
+    # ATR for context
+    atr = None
+    try:
+        import yfinance as yf, warnings
+        warnings.filterwarnings("ignore")
+        import pandas as pd
+        hist = yf.Ticker(ticker).history(period="30d")
+        if not hist.empty:
+            high_low = hist["High"] - hist["Low"]
+            atr = round(float(high_low.rolling(14).mean().iloc[-1]), 2)
+    except Exception:
+        pass
+
+    # ── Header ────────────────────────────────────────────────────────────────
+    leg_str = f"{opt_type[0] if opt_type else '?'}{strike:.0f} {expiration[5:] if expiration else ''}"
+    held_str = f"{days_held}d held" if days_held is not None else ""
+    dte_str  = f"{days_left}d remaining" if days_left is not None else ""
+
+    console.print()
+    console.print(Panel.fit(
+        f"[bold cyan]{ticker}[/bold cyan]  "
+        f"[dim]{strategy}  {direction} {leg_str}  x{contracts}[/dim]\n"
+        f"[dim]Opened {opened_at}  |  {held_str}  |  {dte_str}[/dim]",
+        title=f"{ticker} Deep Check",
+        border_style=flag_color
+    ))
+
+    # ── Market Data ───────────────────────────────────────────────────────────
+    console.print()
+    console.print(f"  [bold]Market Data[/bold]")
+
+    spot_str = f"${spot:.2f}  ({a.get('underlying_source', '')})" if spot else "--"
+    console.print(f"  Underlying:  {spot_str}")
+
+    if opt.get("mid"):
+        bid = opt.get("bid") or 0
+        ask = opt.get("ask") or 0
+        console.print(f"  Option mid:  ${opt['mid']:.2f}   bid ${bid:.2f}  ask ${ask:.2f}  ({a.get('opt_source', '')})")
+    else:
+        console.print(f"  Option:      [dim]no data[/dim]")
+
+    # IV comparison
+    if iv_now is not None:
+        if entry_iv:
+            iv_chg = round(iv_now - entry_iv, 1)
+            iv_dir = "[green]↓[/green]" if iv_chg < 0 else "[red]↑[/red]" if iv_chg > 0 else "→"
+            iv_str = f"{iv_now:.1f}%   (was {entry_iv:.1f}% at entry  {iv_dir}  {iv_chg:+.1f}%)"
+        else:
+            iv_str = f"{iv_now:.1f}%"
+        console.print(f"  IV:          {iv_str}")
+
+    # Delta comparison
+    if delta_now is not None:
+        if entry_delta:
+            delta_chg = round(abs(delta_now) - abs(entry_delta), 3)
+            if direction == "SHORT":
+                delta_dir = "[green]↓[/green]" if delta_chg < 0 else "[red]↑[/red]" if delta_chg > 0 else "→"
+                delta_note = "improved" if delta_chg < 0 else "deteriorated"
+            else:
+                delta_dir = "[green]↑[/green]" if delta_chg > 0 else "[red]↓[/red]" if delta_chg < 0 else "→"
+                delta_note = "improved" if delta_chg > 0 else "deteriorated"
+            delta_str = f"{delta_now:.3f}   (was {entry_delta:.3f} at entry  {delta_dir}  {delta_note})"
+        else:
+            delta_str = f"{delta_now:.3f}"
+        console.print(f"  Delta:       {delta_str}")
+
+    if theta_now is not None:
+        theta_daily = abs(theta_now) * contracts * 100
+        theta_color = "green" if direction == "SHORT" else "red"
+        console.print(f"  Theta/day:   [{theta_color}]+${theta_daily:.0f}[/{theta_color}] decaying {'in your favor' if direction == 'SHORT' else 'against you'}")
+
+    # ── P&L ──────────────────────────────────────────────────────────────────
+    console.print()
+    console.print(f"  [bold]P&L[/bold]")
+
+    prem_str = f"${abs(net_premium):.0f}  ({contracts} x ${open_price:.2f})"
+    prem_label = "Paid:" if direction == "LONG" else "Collected:"
+    console.print(f"  {prem_label:<12} {prem_str}")
+
+    if pnl_mtm is not None:
+        pnl_color = "green" if pnl_mtm > 0 else "red"
+        pct_str = f"  ({pnl_pct:+.1f}% of premium)" if pnl_pct else ""
+        sign = "+" if pnl_mtm >= 0 else "-"
+        console.print(f"  Current P&L: [{pnl_color}]{sign}${abs(pnl_mtm):.0f}{pct_str}[/{pnl_color}]")
+
+        # Profit target progress
+        target_pct = 50.0
+        if pnl_pct is not None and direction == "SHORT":
+            target_dollar = abs(net_premium) * (target_pct / 100)
+            console.print(f"  Target:      ${target_dollar:.0f} ({target_pct:.0f}% of premium)  —  {'[green]REACHED[/green]' if pnl_pct >= target_pct else f'[dim]{target_pct - pnl_pct:.0f}% remaining[/dim]'}")
+    else:
+        console.print(f"  Current P&L: [dim]-- (no option price data)[/dim]")
+
+    # ── Buffer ────────────────────────────────────────────────────────────────
+    if spot and strike:
+        console.print()
+        console.print(f"  [bold]Buffer to Strike[/bold]")
+
+        buf = a.get("intrinsic_buffer", 0) or 0
+        buf_pct = round(buf / spot * 100, 1) if spot else 0
+        otm_itm = "OTM" if buf > 0 else "ITM"
+        buf_color = "green" if buf_pct > 10 else "yellow" if buf_pct > 5 else "red"
+
+        console.print(f"  Strike:      ${strike:.0f}  |  Spot: ${spot:.2f}")
+        console.print(f"  Buffer:      [{buf_color}]${abs(buf):.2f}  ({abs(buf_pct):.1f}% {otm_itm})[/{buf_color}]")
+
+        if atr:
+            atr1 = round(spot - atr, 2) if opt_type == "PUT" else round(spot + atr, 2)
+            atr2 = round(spot - 2*atr, 2) if opt_type == "PUT" else round(spot + 2*atr, 2)
+            console.print(f"  1-ATR:       ${atr1:.2f}  |  2-ATR: ${atr2:.2f}")
+            if opt_type == "PUT":
+                if spot > atr1:
+                    console.print(f"  [dim]Spot is above 1-ATR — well positioned[/dim]")
+                elif spot > atr2:
+                    console.print(f"  [yellow]Spot between 1-ATR and 2-ATR — monitor[/yellow]")
+                else:
+                    console.print(f"  [red]Spot below 2-ATR — elevated risk[/red]")
+            else:  # CALL
+                gap_to_strike = abs(buf)
+                gap_pct = round(gap_to_strike / spot * 100, 1) if spot else 0
+                if gap_pct > 20:
+                    console.print(f"  [red]Stock needs to rally {gap_pct:.1f}% to reach strike[/red]")
+                elif gap_pct > 10:
+                    console.print(f"  [yellow]Stock needs to rally {gap_pct:.1f}% to reach strike[/yellow]")
+                else:
+                    console.print(f"  [dim]Stock needs to rally {gap_pct:.1f}% to reach strike[/dim]")
+
+    # ── Entry Context ─────────────────────────────────────────────────────────
+    if entry_spot or entry_rsi or entry_bias is not None:
+        console.print()
+        console.print(f"  [bold]At Entry[/bold]")
+        if entry_spot:
+            spot_chg = round((spot - entry_spot) / entry_spot * 100, 1) if spot else None
+            chg_str = f"  ({spot_chg:+.1f}% since entry)" if spot_chg is not None else ""
+            console.print(f"  Spot:        ${entry_spot:.2f}{chg_str}")
+        if entry_rsi:
+            console.print(f"  RSI:         {entry_rsi:.0f}")
+        if entry_bias is not None:
+            bias_label = "Bullish" if entry_bias > 0 else "Bearish" if entry_bias < 0 else "Neutral"
+            console.print(f"  Bias:        {bias_label} ({entry_bias:+d})")
+
+    # ── Guidance ──────────────────────────────────────────────────────────────
+    console.print()
+    console.print(f"  [bold]Guidance[/bold]")
+    console.print(f"  [{flag_color}]● {flag}[/{flag_color}]")
+    console.print()
+
+    guidance = generate_guidance(pos, primary, a, snap, days_left, pnl_pct, buf if spot and strike else None, buf_pct if spot and strike else None)
+    for line in guidance:
+        console.print(f"  {line}")
+
+    console.print()
+
+
+def generate_guidance(pos: dict, primary: dict, assessment: dict, snap: dict,
+                      days_left, pnl_pct, buffer_dollars, buffer_pct) -> list[str]:
+    """Generate actionable guidance text for a position."""
+    lines = []
+    flag     = assessment.get("flag", "UNKNOWN")
+    strategy = pos.get("strategy", "")
+    direction = primary.get("direction", "")
+    opt_type  = primary.get("option_type", "")
+    strike    = primary.get("strike", 0)
+    contracts = primary.get("contracts", 0)
+    open_price = primary.get("open_price", 0)
+    net_premium = pos.get("net_premium", 0)
+    expiration = primary.get("expiration", "")
+    ticker = pos.get("ticker", "")
+
+    dte_exit = 21
+
+    # ── GREEN guidance ────────────────────────────────────────────────────────
+    if flag == "GREEN":
+        if direction == "SHORT":
+            if pnl_pct is not None and pnl_pct >= 50:
+                lines.append("[green]Profit target reached.[/green] Consider closing now to lock in gains")
+                lines.append("and free up capital for the next trade.")
+                target_dollar = round(abs(net_premium) * 0.50, 0)
+                lines.append(f"Close at market for ~${target_dollar:.0f} total profit.")
+            elif pnl_pct is not None and pnl_pct >= 25:
+                lines.append("Position is tracking well. Let theta continue to work.")
+                if days_left is not None and days_left <= dte_exit + 7:
+                    if days_left <= dte_exit:
+                        lines.append(f"[yellow]AT {dte_exit} DTE threshold — consider closing now.[/yellow]")
+                    else:
+                        lines.append(f"[yellow]Approaching {dte_exit} DTE in ~{days_left - dte_exit} days.[/yellow]")
+                    lines.append("Plan your exit — don't let it slide into the final week.")
+                else:
+                    lines.append(f"No action needed. Re-evaluate at 50% profit or {dte_exit} DTE.")
+            else:
+                lines.append("Early in the trade — position is healthy. Hold.")
+        else:  # LONG
+            if pnl_pct is not None and pnl_pct > 0:
+                lines.append("Long position is profitable. Let it run.")
+                if days_left is not None and days_left <= 30:
+                    lines.append(f"[yellow]{days_left} DTE remaining — time decay accelerating.[/yellow]")
+                    lines.append("Consider taking profits or rolling to a later expiration.")
+            else:
+                lines.append("Position is healthy. Hold and monitor.")
+
+    # ── YELLOW guidance ───────────────────────────────────────────────────────
+    elif flag == "YELLOW":
+        if direction == "SHORT":
+            if days_left is not None and days_left <= dte_exit:
+                lines.append(f"[yellow]{days_left} DTE — at or near your {dte_exit}-day exit threshold.[/yellow]")
+                if pnl_pct is not None and pnl_pct > 0:
+                    lines.append(f"Position is profitable (+{pnl_pct:.0f}%). Close to lock in gains.")
+                elif pnl_pct is not None and pnl_pct < -30:
+                    lines.append("Position is a loss. Evaluate: close and move on, or roll out for credit.")
+                else:
+                    lines.append("Close or roll before the final week to avoid gamma risk.")
+            elif buffer_pct is not None and buffer_pct < 5:
+                lines.append(f"[yellow]Buffer is thin ({buffer_pct:.1f}% to strike).[/yellow]")
+                lines.append("Monitor closely. If underlying continues lower, consider closing")
+                lines.append("or rolling the strike down and out for additional credit.")
+            elif pnl_pct is not None and pnl_pct < -20:
+                lines.append(f"Position down {abs(pnl_pct):.0f}% — monitor closely.")
+                lines.append("If underlying breaks below 1-ATR, consider closing to limit losses.")
+            else:
+                lines.append("Monitor closely. No immediate action required.")
+        else:  # LONG
+            if days_left is not None and days_left <= 21:
+                lines.append(f"[yellow]{days_left} DTE — time decay is accelerating.[/yellow]")
+                if pnl_pct is not None and pnl_pct > 0:
+                    lines.append("Consider taking profits. Don't let a winner decay away.")
+                else:
+                    lines.append("Consider closing to limit further losses from time decay.")
+            elif pnl_pct is not None and pnl_pct < -30:
+                lines.append(f"Long position down {abs(pnl_pct):.0f}%. ")
+                lines.append("Evaluate whether your thesis is still intact.")
+                lines.append("If the underlying isn't moving in your direction, consider closing.")
+
+    # ── RED guidance ──────────────────────────────────────────────────────────
+    elif flag == "RED":
+        if direction == "SHORT":
+            if days_left is not None and days_left <= 7:
+                lines.append(f"[red]{days_left} DTE — expiration risk is high.[/red]")
+                lines.append("Close this position TODAY to avoid assignment risk.")
+                if pnl_pct is not None:
+                    lines.append(f"Current P&L: {pnl_pct:+.0f}%.")
+            elif buffer_pct is not None and buffer_pct < 0:
+                lines.append(f"[red]Position is ITM — underlying has breached your strike.[/red]")
+                lines.append("Immediate action required: close or roll.")
+                lines.append(f"Option: roll to ${strike - 5:.0f} or lower at a later expiration for credit.")
+            else:
+                lines.append("[red]Position requires attention.[/red]")
+                lines.append("Review buffer and DTE. Consider closing or rolling.")
+        else:  # LONG
+            if days_left is not None and days_left <= 7:
+                lines.append(f"[red]{days_left} DTE — close or exercise decision needed.[/red]")
+            else:
+                lines.append("[red]Long position in RED.[/red] Review thesis and consider closing.")
+
+    if not lines:
+        lines.append("Monitor position. No specific action needed at this time.")
+
+    return lines
+
+
+
+def cmd_check_deep(pos: dict, legs: list, assessment: dict, snap: dict):
+    """
+    Deep narrative check for a single position.
+    Shows full context: entry vs now, Greeks comparison, guidance.
+    """
+    ticker   = pos["ticker"]
+    strategy = pos["strategy"]
+    a        = assessment
+    primary  = a.get("primary_leg") or {}
+    opt      = a.get("opt_data") or {}
+    spot     = a.get("underlying_price")
+    flag     = a.get("flag", "UNKNOWN")
+    pnl_mtm  = a.get("pnl_mtm")
+    pnl_pct  = a.get("pnl_pct")
+
+    flag_colors = {"GREEN": "green", "YELLOW": "yellow", "RED": "red", "UNKNOWN": "dim"}
+    flag_color  = flag_colors.get(flag, "dim")
+
+    # Position basics
+    strike     = primary.get("strike") or 0
+    expiration = primary.get("expiration") or ""
+    direction  = primary.get("direction") or ""
+    opt_type   = primary.get("option_type") or ""
+    contracts  = primary.get("contracts") or 0
+    open_price = primary.get("open_price") or 0
+    net_premium = pos.get("net_premium") or 0
+
+    days_left  = dte(expiration) if expiration else None
+    opened_at  = pos.get("opened_at", "")[:10]
+    try:
+        days_held = (date.today() - date.fromisoformat(opened_at)).days
+    except Exception:
+        days_held = None
+
+    # Entry snapshot comparisons
+    entry_spot  = snap.get("spot_price")
+    entry_iv    = snap.get("iv_current")
+    entry_delta = snap.get("delta")
+    entry_rsi   = snap.get("rsi")
+    entry_bias  = snap.get("bias_score")
+
+    # Current Greeks
+    iv_now    = opt.get("iv")
+    delta_now = opt.get("delta")
+    theta_now = opt.get("theta")
+
+    # ATR for context
+    atr = None
+    try:
+        import yfinance as yf, warnings
+        warnings.filterwarnings("ignore")
+        import pandas as pd
+        hist = yf.Ticker(ticker).history(period="30d")
+        if not hist.empty:
+            high_low = hist["High"] - hist["Low"]
+            atr = round(float(high_low.rolling(14).mean().iloc[-1]), 2)
+    except Exception:
+        pass
+
+    # ── Header ────────────────────────────────────────────────────────────────
+    leg_str = f"{opt_type[0] if opt_type else '?'}{strike:.0f} {expiration[5:] if expiration else ''}"
+    held_str = f"{days_held}d held" if days_held is not None else ""
+    dte_str  = f"{days_left}d remaining" if days_left is not None else ""
+
+    console.print()
+    console.print(Panel.fit(
+        f"[bold cyan]{ticker}[/bold cyan]  "
+        f"[dim]{strategy}  {direction} {leg_str}  x{contracts}[/dim]\n"
+        f"[dim]Opened {opened_at}  |  {held_str}  |  {dte_str}[/dim]",
+        title=f"{ticker} Deep Check",
+        border_style=flag_color
+    ))
+
+    # ── Market Data ───────────────────────────────────────────────────────────
+    console.print()
+    console.print(f"  [bold]Market Data[/bold]")
+
+    spot_str = f"${spot:.2f}  ({a.get('underlying_source', '')})" if spot else "--"
+    console.print(f"  Underlying:  {spot_str}")
+
+    if opt.get("mid"):
+        bid = opt.get("bid") or 0
+        ask = opt.get("ask") or 0
+        console.print(f"  Option mid:  ${opt['mid']:.2f}   bid ${bid:.2f}  ask ${ask:.2f}  ({a.get('opt_source', '')})")
+    else:
+        console.print(f"  Option:      [dim]no data[/dim]")
+
+    # IV comparison
+    if iv_now is not None:
+        if entry_iv:
+            iv_chg = round(iv_now - entry_iv, 1)
+            iv_dir = "[green]↓[/green]" if iv_chg < 0 else "[red]↑[/red]" if iv_chg > 0 else "→"
+            iv_str = f"{iv_now:.1f}%   (was {entry_iv:.1f}% at entry  {iv_dir}  {iv_chg:+.1f}%)"
+        else:
+            iv_str = f"{iv_now:.1f}%"
+        console.print(f"  IV:          {iv_str}")
+
+    # Delta comparison
+    if delta_now is not None:
+        if entry_delta:
+            delta_chg = round(abs(delta_now) - abs(entry_delta), 3)
+            if direction == "SHORT":
+                delta_dir = "[green]↓[/green]" if delta_chg < 0 else "[red]↑[/red]" if delta_chg > 0 else "→"
+                delta_note = "improved" if delta_chg < 0 else "deteriorated"
+            else:
+                delta_dir = "[green]↑[/green]" if delta_chg > 0 else "[red]↓[/red]" if delta_chg < 0 else "→"
+                delta_note = "improved" if delta_chg > 0 else "deteriorated"
+            delta_str = f"{delta_now:.3f}   (was {entry_delta:.3f} at entry  {delta_dir}  {delta_note})"
+        else:
+            delta_str = f"{delta_now:.3f}"
+        console.print(f"  Delta:       {delta_str}")
+
+    if theta_now is not None:
+        theta_daily = abs(theta_now) * contracts * 100
+        theta_color = "green" if direction == "SHORT" else "red"
+        console.print(f"  Theta/day:   [{theta_color}]+${theta_daily:.0f}[/{theta_color}] decaying {'in your favor' if direction == 'SHORT' else 'against you'}")
+
+    # ── P&L ──────────────────────────────────────────────────────────────────
+    console.print()
+    console.print(f"  [bold]P&L[/bold]")
+
+    prem_str = f"${abs(net_premium):.0f}  ({contracts} x ${open_price:.2f})"
+    prem_label = "Paid:" if direction == "LONG" else "Collected:"
+    console.print(f"  {prem_label:<12} {prem_str}")
+
+    if pnl_mtm is not None:
+        pnl_color = "green" if pnl_mtm > 0 else "red"
+        pct_str = f"  ({pnl_pct:+.1f}% of premium)" if pnl_pct else ""
+        sign = "+" if pnl_mtm >= 0 else "-"
+        console.print(f"  Current P&L: [{pnl_color}]{sign}${abs(pnl_mtm):.0f}{pct_str}[/{pnl_color}]")
+
+        # Profit target progress
+        target_pct = 50.0
+        if pnl_pct is not None and direction == "SHORT":
+            target_dollar = abs(net_premium) * (target_pct / 100)
+            console.print(f"  Target:      ${target_dollar:.0f} ({target_pct:.0f}% of premium)  —  {'[green]REACHED[/green]' if pnl_pct >= target_pct else f'[dim]{target_pct - pnl_pct:.0f}% remaining[/dim]'}")
+    else:
+        console.print(f"  Current P&L: [dim]-- (no option price data)[/dim]")
+
+    # ── Buffer ────────────────────────────────────────────────────────────────
+    if spot and strike:
+        console.print()
+        console.print(f"  [bold]Buffer to Strike[/bold]")
+
+        buf = a.get("intrinsic_buffer", 0) or 0
+        buf_pct = round(buf / spot * 100, 1) if spot else 0
+        otm_itm = "OTM" if buf > 0 else "ITM"
+        buf_color = "green" if buf_pct > 10 else "yellow" if buf_pct > 5 else "red"
+
+        console.print(f"  Strike:      ${strike:.0f}  |  Spot: ${spot:.2f}")
+        console.print(f"  Buffer:      [{buf_color}]${abs(buf):.2f}  ({abs(buf_pct):.1f}% {otm_itm})[/{buf_color}]")
+
+        if atr:
+            atr1 = round(spot - atr, 2) if opt_type == "PUT" else round(spot + atr, 2)
+            atr2 = round(spot - 2*atr, 2) if opt_type == "PUT" else round(spot + 2*atr, 2)
+            console.print(f"  1-ATR:       ${atr1:.2f}  |  2-ATR: ${atr2:.2f}")
+            if opt_type == "PUT":
+                if spot > atr1:
+                    console.print(f"  [dim]Spot is above 1-ATR — well positioned[/dim]")
+                elif spot > atr2:
+                    console.print(f"  [yellow]Spot between 1-ATR and 2-ATR — monitor[/yellow]")
+                else:
+                    console.print(f"  [red]Spot below 2-ATR — elevated risk[/red]")
+            else:  # CALL
+                gap_to_strike = abs(buf)
+                gap_pct = round(gap_to_strike / spot * 100, 1) if spot else 0
+                if gap_pct > 20:
+                    console.print(f"  [red]Stock needs to rally {gap_pct:.1f}% to reach strike[/red]")
+                elif gap_pct > 10:
+                    console.print(f"  [yellow]Stock needs to rally {gap_pct:.1f}% to reach strike[/yellow]")
+                else:
+                    console.print(f"  [dim]Stock needs to rally {gap_pct:.1f}% to reach strike[/dim]")
+
+    # ── Entry Context ─────────────────────────────────────────────────────────
+    if entry_spot or entry_rsi or entry_bias is not None:
+        console.print()
+        console.print(f"  [bold]At Entry[/bold]")
+        if entry_spot:
+            spot_chg = round((spot - entry_spot) / entry_spot * 100, 1) if spot else None
+            chg_str = f"  ({spot_chg:+.1f}% since entry)" if spot_chg is not None else ""
+            console.print(f"  Spot:        ${entry_spot:.2f}{chg_str}")
+        if entry_rsi:
+            console.print(f"  RSI:         {entry_rsi:.0f}")
+        if entry_bias is not None:
+            bias_label = "Bullish" if entry_bias > 0 else "Bearish" if entry_bias < 0 else "Neutral"
+            console.print(f"  Bias:        {bias_label} ({entry_bias:+d})")
+
+    # ── Guidance ──────────────────────────────────────────────────────────────
+    console.print()
+    console.print(f"  [bold]Guidance[/bold]")
+    console.print(f"  [{flag_color}]● {flag}[/{flag_color}]")
+    console.print()
+
+    guidance = generate_guidance(pos, primary, a, snap, days_left, pnl_pct, buf if spot and strike else None, buf_pct if spot and strike else None)
+    for line in guidance:
+        console.print(f"  {line}")
+
+    console.print()
+
+
+def generate_guidance(pos: dict, primary: dict, assessment: dict, snap: dict,
+                      days_left, pnl_pct, buffer_dollars, buffer_pct) -> list[str]:
+    """Generate actionable guidance text for a position."""
+    lines = []
+    flag     = assessment.get("flag", "UNKNOWN")
+    strategy = pos.get("strategy", "")
+    direction = primary.get("direction", "")
+    opt_type  = primary.get("option_type", "")
+    strike    = primary.get("strike", 0)
+    contracts = primary.get("contracts", 0)
+    open_price = primary.get("open_price", 0)
+    net_premium = pos.get("net_premium", 0)
+    expiration = primary.get("expiration", "")
+    ticker = pos.get("ticker", "")
+
+    dte_exit = 21
+
+    # ── GREEN guidance ────────────────────────────────────────────────────────
+    if flag == "GREEN":
+        if direction == "SHORT":
+            if pnl_pct is not None and pnl_pct >= 50:
+                lines.append("[green]Profit target reached.[/green] Consider closing now to lock in gains")
+                lines.append("and free up capital for the next trade.")
+                target_dollar = round(abs(net_premium) * 0.50, 0)
+                lines.append(f"Close at market for ~${target_dollar:.0f} total profit.")
+            elif pnl_pct is not None and pnl_pct >= 25:
+                lines.append("Position is tracking well. Let theta continue to work.")
+                if days_left is not None and days_left <= dte_exit + 7:
+                    if days_left <= dte_exit:
+                        lines.append(f"[yellow]AT {dte_exit} DTE threshold — consider closing now.[/yellow]")
+                    else:
+                        lines.append(f"[yellow]Approaching {dte_exit} DTE in ~{days_left - dte_exit} days.[/yellow]")
+                    lines.append("Plan your exit — don't let it slide into the final week.")
+                else:
+                    lines.append(f"No action needed. Re-evaluate at 50% profit or {dte_exit} DTE.")
+            else:
+                lines.append("Early in the trade — position is healthy. Hold.")
+        else:  # LONG
+            if pnl_pct is not None and pnl_pct > 0:
+                lines.append("Long position is profitable. Let it run.")
+                if days_left is not None and days_left <= 30:
+                    lines.append(f"[yellow]{days_left} DTE remaining — time decay accelerating.[/yellow]")
+                    lines.append("Consider taking profits or rolling to a later expiration.")
+            else:
+                lines.append("Position is healthy. Hold and monitor.")
+
+    # ── YELLOW guidance ───────────────────────────────────────────────────────
+    elif flag == "YELLOW":
+        if direction == "SHORT":
+            if days_left is not None and days_left <= dte_exit:
+                lines.append(f"[yellow]{days_left} DTE — at or near your {dte_exit}-day exit threshold.[/yellow]")
+                if pnl_pct is not None and pnl_pct > 0:
+                    lines.append(f"Position is profitable (+{pnl_pct:.0f}%). Close to lock in gains.")
+                elif pnl_pct is not None and pnl_pct < -30:
+                    lines.append("Position is a loss. Evaluate: close and move on, or roll out for credit.")
+                else:
+                    lines.append("Close or roll before the final week to avoid gamma risk.")
+            elif buffer_pct is not None and buffer_pct < 5:
+                lines.append(f"[yellow]Buffer is thin ({buffer_pct:.1f}% to strike).[/yellow]")
+                lines.append("Monitor closely. If underlying continues lower, consider closing")
+                lines.append("or rolling the strike down and out for additional credit.")
+            elif pnl_pct is not None and pnl_pct < -20:
+                lines.append(f"Position down {abs(pnl_pct):.0f}% — monitor closely.")
+                lines.append("If underlying breaks below 1-ATR, consider closing to limit losses.")
+            else:
+                lines.append("Monitor closely. No immediate action required.")
+        else:  # LONG
+            if days_left is not None and days_left <= 21:
+                lines.append(f"[yellow]{days_left} DTE — time decay is accelerating.[/yellow]")
+                if pnl_pct is not None and pnl_pct > 0:
+                    lines.append("Consider taking profits. Don't let a winner decay away.")
+                else:
+                    lines.append("Consider closing to limit further losses from time decay.")
+            elif pnl_pct is not None and pnl_pct < -30:
+                lines.append(f"Long position down {abs(pnl_pct):.0f}%. ")
+                lines.append("Evaluate whether your thesis is still intact.")
+                lines.append("If the underlying isn't moving in your direction, consider closing.")
+
+    # ── RED guidance ──────────────────────────────────────────────────────────
+    elif flag == "RED":
+        if direction == "SHORT":
+            if days_left is not None and days_left <= 7:
+                lines.append(f"[red]{days_left} DTE — expiration risk is high.[/red]")
+                lines.append("Close this position TODAY to avoid assignment risk.")
+                if pnl_pct is not None:
+                    lines.append(f"Current P&L: {pnl_pct:+.0f}%.")
+            elif buffer_pct is not None and buffer_pct < 0:
+                lines.append(f"[red]Position is ITM — underlying has breached your strike.[/red]")
+                lines.append("Immediate action required: close or roll.")
+                lines.append(f"Option: roll to ${strike - 5:.0f} or lower at a later expiration for credit.")
+            else:
+                lines.append("[red]Position requires attention.[/red]")
+                lines.append("Review buffer and DTE. Consider closing or rolling.")
+        else:  # LONG
+            if days_left is not None and days_left <= 7:
+                lines.append(f"[red]{days_left} DTE — close or exercise decision needed.[/red]")
+            else:
+                lines.append("[red]Long position in RED.[/red] Review thesis and consider closing.")
+
+    if not lines:
+        lines.append("Monitor position. No specific action needed at this time.")
+
+    return lines
+
+
 def cmd_check_one(ticker: str, deep: bool = False):
-    """Deep check on a single position."""
+    """Check a single position, with optional deep narrative."""
     conn = get_conn()
     account_id = get_active_account()
     pos = conn.execute(
@@ -668,12 +1280,22 @@ def cmd_check_one(ticker: str, deep: bool = False):
     legs = [dict(r) for r in conn.execute(
         "SELECT * FROM legs WHERE position_id = ?", (pos["id"],)
     ).fetchall()]
+    # Get entry snapshot
+    snap = conn.execute(
+        "SELECT * FROM entry_snapshots WHERE position_id=? ORDER BY created_at DESC LIMIT 1",
+        (pos["id"],)
+    ).fetchone()
+    snap = dict(snap) if snap else {}
     conn.close()
 
     console.print()
     console.print(f"[dim]Checking {ticker}...[/dim]")
     a = check_one(pos, legs, deep=deep)
     primary = a["primary_leg"]
+
+    if deep:
+        cmd_check_deep(pos, legs, a, snap)
+        return
 
     flag_colors = {"GREEN": "green", "YELLOW": "yellow", "RED": "red", "UNKNOWN": "dim"}
     flag_color = flag_colors.get(a["flag"], "dim")
