@@ -372,6 +372,11 @@ def run():
     ))
     console.print()
 
+    try:
+        _log_event("WATCHLIST_BUILT")
+    except Exception:
+        pass
+
 
 if __name__ == "__main__":
     run()

@@ -17,6 +17,12 @@
 #   helm scan --top 10           Show top N candidates
 
 import sys
+try:
+    from helm.models.theme import log_event, check_nudges as _check_nudges
+except Exception:
+    log_event = lambda *a, **k: None
+    _check_nudges = lambda: []
+
 import time
 import logging
 import warnings
@@ -409,6 +415,18 @@ def run():
         border_style="dim"
     ))
     console.print()
+
+    # Log scan event and show nudges
+    try:
+        log_event("SCREEN_RUN")
+        nudges = _check_nudges()
+        if nudges:
+            console.print()
+            for n in nudges:
+                console.print(n)
+            console.print()
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":

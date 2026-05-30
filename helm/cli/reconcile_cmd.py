@@ -11,6 +11,11 @@
 #   helm reconcile ~/path/to/file.csv Explicit file
 
 import sys
+try:
+    from helm.models.theme import log_event as _log_event
+except Exception:
+    _log_event = lambda *a, **k: None
+
 import re
 import glob
 from pathlib import Path
@@ -302,6 +307,11 @@ def run():
             title="Reconcile Summary"
         ))
     console.print()
+
+    try:
+        _log_event("RECONCILE_RUN")
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":

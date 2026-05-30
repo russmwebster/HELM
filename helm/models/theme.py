@@ -153,3 +153,34 @@ def days_since_event(event_type: str, entity_id: str = None) -> Optional[int]:
         return (date.today() - last).days
     except Exception:
         return None
+
+def check_nudges():
+    """
+    Check if any theme-related nudges are due.
+    Called silently from other commands.
+    Returns list of nudge strings to display.
+    """
+    nudges = []
+    themes = Theme.all()
+    if not themes:
+        return nudges
+
+    for theme in themes:
+        tname = theme.name
+        days = days_since_event("THEME_REFRESHED", entity_id=theme.id)
+        if days is None or days >= 30:
+            age_str = "never" if days is None else (str(days) + " days ago")
+            nudges.append(
+                "[dim]  [bold]" + tname + "[/bold] theme last refreshed " + age_str + ". "
+                "Run [bold]helm theme refresh[/bold] for new suggestions.[/dim]"
+            )
+
+        ipo_days = days_since_event("THEME_IPO_UPDATED", entity_id=theme.id)
+        if ipo_days is None or ipo_days >= 60:
+            ipo_age = "never" if ipo_days is None else (str(ipo_days) + " days ago")
+            nudges.append(
+                "[dim]  [bold]" + tname + "[/bold] IPO watchlist last updated " + ipo_age + ". "
+                "Run [bold]helm theme ipo[/bold].[/dim]"
+            )
+
+    return nudges[:2]  # Max 2 nudges at a time

@@ -18,6 +18,12 @@
 #   RED    -- action likely required
 
 import sys
+try:
+    from helm.models.theme import log_event as _log_event, check_nudges as _check_nudges
+except Exception:
+    _log_event = lambda *a, **k: None
+    _check_nudges = lambda: []
+
 import logging
 from pathlib import Path
 from datetime import date, datetime, time
@@ -752,6 +758,18 @@ def run():
             cmd_check_one(ticker, deep=deep)
     else:
         cmd_check_all(args)
+
+    # Log event and show nudges
+    try:
+        _log_event("FULL_CHECK_RUN")
+        nudges = _check_nudges()
+        if nudges:
+            console.print()
+            for n in nudges:
+                console.print(n)
+            console.print()
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":
