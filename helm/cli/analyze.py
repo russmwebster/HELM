@@ -61,12 +61,14 @@ def cmd_overview(args):
 
     closed = conn.execute("""
         SELECT p.id, p.ticker, p.strategy, p.realized_pnl,
-               p.opened_at, p.closed_at, p.total_contracts, p.net_premium,
+               MIN(p.opened_at) as opened_at, p.closed_at,
+               p.total_contracts, p.net_premium,
                e.iv_rank as entry_ivr, e.delta as entry_delta,
                e.dte as entry_dte, e.spot_price as entry_spot
         FROM positions p
         LEFT JOIN entry_snapshots e ON p.id = e.position_id
         WHERE p.status IN ('CLOSED', 'EXPIRED', 'ASSIGNED', 'ROLLED_OUT')
+        GROUP BY p.ticker, p.strategy, p.closed_at
         ORDER BY p.closed_at DESC
     """).fetchall()
 
@@ -132,7 +134,7 @@ def cmd_overview(args):
             f"[{win_color}]{win_pct:.0f}%[/{win_color}]",
             _fmt_pnl(total_pnl),
             _fmt_pnl(avg_pnl),
-            f"{avg_days:.0f}d" if avg_days else "--",
+            f"{avg_days:.0f}d" if avg_days is not None else "--",
             _fmt_ivr(avg_ivr),
             f"{avg_delta:.2f}" if avg_delta else "[dim]--[/dim]",
         )
@@ -165,7 +167,7 @@ def cmd_overview(args):
             row['ticker'],
             row['strategy'] or '--',
             _fmt_pnl(row['realized_pnl']),
-            f"{d}d" if d else "--",
+            f"{d}d" if d is not None else "--",
             _fmt_ivr(row['entry_ivr']),
             f"{row['entry_delta']:.2f}" if row['entry_delta'] else "[dim]--[/dim]",
             f"{row['entry_dte']}d" if row['entry_dte'] else "[dim]--[/dim]",
