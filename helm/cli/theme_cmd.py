@@ -439,7 +439,9 @@ def cmd_refresh(args, use_web=False):
             "Financial research assistant for an options trader. "
             "Suggest additions/removals for an investment theme watchlist. "
             "Return ONLY valid JSON, no markdown, no explanation. "
-            "Schema: {add:{ESTABLISHED:[],EMERGING:[],PRE_IPO:[]},remove:[{ticker:str,reason:str}],commentary:str}. "
+            "Schema: {add:{ESTABLISHED:[str],EMERGING:[str],PRE_IPO:[str]},remove:[{ticker:str,reason:str}],commentary:str}. "
+            "CRITICAL: ESTABLISHED and EMERGING values must be stock ticker symbols only (e.g. NVDA, MSFT) — never company names. "
+            "PRE_IPO may use company names for private companies. "
             "Commentary max 2 sentences."
         )
 
