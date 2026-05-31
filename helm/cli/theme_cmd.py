@@ -7,7 +7,7 @@ import re
 #   helm theme setup              Interactive theme creation via Claude
 #   helm theme list               Show all themes + ticker counts
 #   helm theme show <name>        Full ticker list for a theme
-#   helm theme refresh [name]     Claude suggests new additions/removals
+#   helm theme ipo [name]         IPO & pre-IPO update (adds to watchlist)
 #   helm theme ipo [name]         Claude surfaces pre-IPO companies
 #   helm theme add <name> <tickers>  Manually add tickers to a theme
 #   helm theme remove <name> <ticker> Remove a ticker from a theme
@@ -328,7 +328,7 @@ def cmd_list(args):
     t.add_column("Pre-IPO",      justify="center", width=9)
     t.add_column("Total",        justify="center", width=7)
     t.add_column("Description",  width=45)
-    t.add_column("Last Refresh", width=12)
+    t.add_column("Last IPO Update", width=14)
 
     for theme in themes:
         tickers = theme.tickers()
@@ -337,7 +337,7 @@ def cmd_list(args):
         pre = len([x for x in tickers if x["category"] == "PRE_IPO"])
         total = len(tickers)
 
-        days = days_since_event("THEME_REFRESHED", entity_id=theme.id)
+        days = days_since_event("THEME_IPO_UPDATED", entity_id=theme.id)
         if days is None:
             refresh_str = "[dim]never[/dim]"
         elif days == 0:
@@ -817,14 +817,6 @@ def check_nudges():
 
     for theme in themes:
         tname = theme.name
-        days = days_since_event("THEME_REFRESHED", entity_id=theme.id)
-        if days is None or days >= 30:
-            age_str = "never" if days is None else (str(days) + " days ago")
-            nudges.append(
-                "[dim]  [bold]" + tname + "[/bold] theme last refreshed " + age_str + ". "
-                "Run [bold]helm theme refresh[/bold] for new suggestions.[/dim]"
-            )
-
         ipo_days = days_since_event("THEME_IPO_UPDATED", entity_id=theme.id)
         if ipo_days is None or ipo_days >= 60:
             ipo_age = "never" if ipo_days is None else (str(ipo_days) + " days ago")
@@ -863,7 +855,6 @@ def run():
     if   cmd == "setup":   cmd_setup(rest)
     elif cmd == "list":    cmd_list(rest)
     elif cmd == "show":    cmd_show(rest)
-    elif cmd == "refresh": cmd_refresh(rest, use_web=use_web)
     elif cmd == "ipo":     cmd_ipo(rest, use_web=use_web)
     elif cmd == "add":     cmd_add(rest)
     else:
