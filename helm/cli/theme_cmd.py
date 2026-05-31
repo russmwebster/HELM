@@ -537,6 +537,9 @@ Focus on companies with liquid options for ESTABLISHED and EMERGING categories."
                     approved_adds[cat].append(tk)
 
         # Process removals — ask per ticker
+        # Filter out any ticker just added in this session
+        just_added = {tk.upper() for cat_list in approved_adds.values() for tk in cat_list}
+        remove = [item for item in remove if (item["ticker"] if isinstance(item, dict) else item).upper() not in just_added]
         if remove:
             has_changes = True
             console.print(f"  [bold]Consider removing:[/bold]")
