@@ -840,7 +840,6 @@ def run():
         console.print("  [cyan]setup[/cyan]                    Create themes via Claude AI")
         console.print("  [cyan]list[/cyan]                     Show all themes")
         console.print("  [cyan]show <name>[/cyan]              Full ticker list for a theme")
-        console.print("  [cyan]refresh [name][/cyan]           Claude suggests updates")
         console.print("  [cyan]ipo [name][/cyan]               Pre-IPO and recent IPO update")
         console.print("  [cyan]add <name> <tickers>[/cyan]     Manually add tickers")
         console.print()
