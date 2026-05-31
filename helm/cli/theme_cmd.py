@@ -532,7 +532,7 @@ Focus on companies with liquid options for ESTABLISHED and EMERGING categories."
                     choices=["y", "n", "s"],
                     default="y",
                     show_choices=False,
-                    show_default=False,
+                    show_default=True,
                 )
                 if answer == "s":
                     console.print("    [dim]Skipping remaining additions.[/dim]")
