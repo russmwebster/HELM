@@ -127,6 +127,20 @@ def close_position(pos, legs, reason="manual"):
     for leg in legs:
         leg.close(close_prices[leg.id], close_date=now)
     pos.close(total_pnl, closed_at=now)
+
+    # Save close snapshot for trade-life analysis
+    try:
+        from helm.models.close_snapshot import save_close_snapshot
+        save_close_snapshot(
+            position_id=pos.id,
+            ticker=pos.ticker,
+            realized_pnl=total_pnl,
+            close_prices=close_prices,
+            legs=legs,
+            reason=reason,
+        )
+    except Exception:
+        pass  # never block a close
     console.print()
     console.print(f"  [green]OK[/green]  {pos.ticker} [bold]CLOSED[/bold]  Realized P&L: {_fmt_pnl(total_pnl)}")
     console.print()

@@ -102,9 +102,10 @@ def dte(expiration: str) -> Optional[int]:
 
 
 def save_check(position_id: str, assessment: dict, pos: dict) -> None:
-    """Save a check run to the checks table silently."""
+    """Save a check run to the checks table with full IVR, RTH flag, and narrative."""
     import uuid as _uuid
     from helm.db import transaction as _tx
+    from datetime import time as _time
 
     a = assessment
     primary = a.get("primary_leg") or {}
@@ -112,7 +113,12 @@ def save_check(position_id: str, assessment: dict, pos: dict) -> None:
     spot = a.get("underlying_price")
     source = a.get("opt_source", "unknown")
 
-    # Get entry snapshot for comparison
+    # RTH detection
+    _now_time = datetime.now().time()
+    rth_flag = "RTH" if _time(9, 30) <= _now_time <= _time(16, 0) else "OUTSIDE_RTH"
+
+    # Entry snapshot for comparison
+    entry_delta = entry_iv = entry_spot = None
     try:
         from helm.db import get_conn as _gc
         _c = _gc()
@@ -120,97 +126,116 @@ def save_check(position_id: str, assessment: dict, pos: dict) -> None:
             "SELECT * FROM entry_snapshots WHERE position_id=? ORDER BY created_at DESC LIMIT 1",
             (position_id,)
         ).fetchone()
-        entry_delta = snap["delta"] if snap else None
-        entry_iv    = snap["iv_current"] if snap else None
-        entry_spot  = snap["spot_price"] if snap else None
+        if snap:
+            entry_delta = snap["delta"]
+            entry_iv    = snap["iv_current"]
+            entry_spot  = snap["spot_price"]
         _c.close()
     except Exception:
-        entry_delta = entry_iv = entry_spot = None
+        pass
 
-    # Compute days_open
+    # IVR from iv_history
+    iv_rank = iv_percentile = None
+    try:
+        from helm.models.iv_history import IVHistory as _IVH
+        _ivr = _IVH.latest(pos.get("ticker", ""))
+        if _ivr:
+            iv_rank      = _ivr.iv_rank
+            iv_percentile = _ivr.iv_percentile
+    except Exception:
+        pass
+
+    # Deltas
+    delta_vs_entry = iv_vs_entry = spot_pct_change = None
+    try:
+        d_now = opt.get("delta")
+        if d_now is not None and entry_delta is not None:
+            delta_vs_entry = round(float(d_now) - float(entry_delta), 4)
+        iv_now = opt.get("iv")
+        if iv_now is not None and entry_iv is not None:
+            iv_vs_entry = round(float(iv_now) - float(entry_iv), 2)
+        if spot is not None and entry_spot is not None:
+            spot_pct_change = round((float(spot) - float(entry_spot)) / float(entry_spot) * 100, 2)
+    except Exception:
+        pass
+
+    # Days open
+    days_open = None
     try:
         opened = pos.get("opened_at", "")[:10]
-        from datetime import date as _date
-        days_open = (date.today() - _date.fromisoformat(opened)).days
+        if opened:
+            days_open = (date.today() - date.fromisoformat(opened)).days
     except Exception:
-        days_open = None
+        pass
 
-    # Delta vs entry
-    delta_now = opt.get("delta") or (a.get("primary_leg") or {}).get("delta")
-    delta_vs_entry = None
-    if delta_now is not None and entry_delta is not None:
-        delta_vs_entry = round(float(delta_now) - float(entry_delta), 3)
+    # P&L pct
+    pnl_pct = buffer_pct = None
+    try:
+        pnl = a.get("pnl_mtm")
+        premium = pos.get("premium_collected") or (primary.get("open_price", 0) * 100)
+        if pnl is not None and premium:
+            pnl_pct = round(float(pnl) / abs(float(premium)) * 100, 1)
+    except Exception:
+        pass
 
-    # IV vs entry
-    iv_now = opt.get("iv")
-    iv_vs_entry = None
-    if iv_now is not None and entry_iv is not None:
-        iv_vs_entry = round(float(iv_now) - float(entry_iv), 1)
+    # Buffer
+    buf = a.get("intrinsic_buffer")
+    try:
+        buf_pct_val = round(buf / spot * 100, 2) if (buf is not None and spot) else buffer_pct
+    except Exception:
+        buf_pct_val = a.get("buffer_pct")
 
-    # Spot % change vs entry
-    spot_pct_change = None
-    if spot and entry_spot:
-        spot_pct_change = round((spot - float(entry_spot)) / float(entry_spot) * 100, 2)
+    # Health flag
+    score = a.get("health_score", 0)
+    flag = "GREEN" if score >= 70 else ("RED" if score < 40 else "YELLOW")
+    action_signal = "HOLD" if flag == "GREEN" else ("CLOSE" if flag == "RED" else "WATCH")
 
-    # Map flag to action signal
-    flag = a.get("flag", "UNKNOWN")
-    pnl_pct = a.get("pnl_pct")
-    buffer_pct = None
-    if a.get("intrinsic_buffer") is not None and spot:
-        buffer_pct = round(a["intrinsic_buffer"] / spot * 100, 2)
-
-    if flag == "GREEN":
-        action_signal = "HOLD"
-    elif flag == "RED":
-        action_signal = "CLOSE"
-    else:
-        action_signal = "WATCH"
+    # DTE and narrative
+    days_left = dte(primary.get("expiration")) if primary.get("expiration") else None
+    days_to_earnings = a.get("days_to_earnings") or primary.get("days_to_earnings")
+    narrative = a.get("narrative") or a.get("claude_narrative")
 
     check_id = "CHK-" + _uuid.uuid4().hex[:8].upper()
     now = datetime.now().isoformat()
+    has_option_data = opt.get("bid") is not None or opt.get("mid") is not None
+    dq = "GOOD" if ("live" in source and has_option_data) else "PARTIAL"
 
     try:
-        from datetime import date as _date2
-        days_left = dte(primary.get("expiration")) if primary.get("expiration") else None
-        # Always save — data_quality reflects how complete the data is
-        has_option_data = opt.get("bid") is not None or opt.get("mid") is not None
-        dq = "GOOD" if ("live" in source and has_option_data) else "PARTIAL"
-        buf = a.get("intrinsic_buffer")
-        buf_pct_val = round(buf / spot * 100, 2) if (buf is not None and spot) else buffer_pct
         with _tx() as conn:
             conn.execute("""
                 INSERT INTO checks (
                     id, position_id, checked_at,
-                    spot_price, dte_now, days_open,
+                    spot_price, dte_now, days_open, days_to_earnings,
                     current_bid, current_ask, current_price,
                     delta, gamma, theta, vega, iv_current,
+                    iv_rank, iv_percentile,
                     delta_vs_entry, iv_vs_entry, spot_pct_change,
                     pnl_unrealized, pnl_pct,
                     health_flag, action_signal,
-                    greeks_source, data_quality,
+                    greeks_source, data_quality, rth_flag,
                     buffer_dollars, buffer_pct,
+                    narrative,
                     created_at
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, (
                 check_id, position_id, now,
-                spot, days_left, days_open,
+                spot, days_left, days_open, days_to_earnings,
                 opt.get("bid"), opt.get("ask"), opt.get("mid"),
                 opt.get("delta"), opt.get("gamma"), opt.get("theta"), opt.get("vega"),
                 opt.get("iv"),
+                iv_rank, iv_percentile,
                 delta_vs_entry, iv_vs_entry, spot_pct_change,
                 a.get("pnl_mtm"), pnl_pct,
                 flag, action_signal,
-                source, dq,
+                source, dq, rth_flag,
                 buf, buf_pct_val,
-                now
+                narrative,
+                now,
             ))
-    except Exception as _e:
-        import traceback as _tb
-        _tb.print_exc()
+    except Exception:
+        import traceback; traceback.print_exc()
 
 
-
-# ── IBKR data fetch ───────────────────────────────────────────────────────────
 
 def fetch_ibkr_underlying(ticker: str) -> dict:
     """Fetch underlying price from IBKR. Returns close price outside hours."""
