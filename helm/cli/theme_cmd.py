@@ -482,12 +482,21 @@ Focus on companies with liquid options for ESTABLISHED and EMERGING categories."
         add = data.get("add", {})
         # remove can be [{ticker, reason}] or [str] for backwards compat
         _remove_raw = data.get("remove", [])
+        # Normalise to {ticker, reason} and dedup immediately
+        _seen = set()
         remove = []
         for item in _remove_raw:
             if isinstance(item, dict):
-                remove.append({"ticker": item.get("ticker",""), "reason": item.get("reason","")})
+                raw_tk = item.get("ticker", "")
+                reason = item.get("reason", "")
             else:
-                remove.append({"ticker": str(item), "reason": ""})
+                raw_tk = str(item)
+                reason = ""
+            # Clean ticker: strip spaces/parens, uppercase, alphanumeric only
+            clean = re.sub(r'[^A-Z0-9]', '', re.split(r'[\s\(]', raw_tk.strip().upper())[0])
+            if clean and clean not in _seen:
+                _seen.add(clean)
+                remove.append({"ticker": clean, "reason": reason})
         commentary = data.get("commentary", "")
 
         # Show suggestions with selective accept/reject
