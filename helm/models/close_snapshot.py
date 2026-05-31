@@ -1,11 +1,11 @@
 """
 helm/models/close_snapshot.py
 Captures a final snapshot when a position is closed.
-Stored in lifecycle_events with event_type=CLOSE_SNAPSHOT.
+Stored in lifecycle_events with event_type=CLOSE_SNAPSHOT... but CLOSE_SNAPSHOT not in CHECK constraint.
+We use narrative field for JSON payload and event_type=CLOSED.
 """
 from __future__ import annotations
 from datetime import datetime, date
-from typing import Optional
 from helm.db import get_conn
 
 
@@ -19,8 +19,7 @@ def save_close_snapshot(
 ) -> None:
     """
     Save a close snapshot to lifecycle_events.
-    Captures: realized P&L, close prices per leg, spot at close,
-    IVR/IVP at close, DTE remaining, days held.
+    Captures: realized P&L, close prices, spot, IVR/IVP, DTE remaining, days held.
     """
     import json
     import yfinance as yf
@@ -78,31 +77,43 @@ def save_close_snapshot(
         pass
 
     payload = {
-        "realized_pnl":       realized_pnl,
-        "close_prices":       close_prices,
-        "spot_at_close":      spot_at_close,
-        "iv_rank_at_close":   iv_rank_at_close,
-        "iv_pct_at_close":    iv_pct_at_close,
+        "realized_pnl":        realized_pnl,
+        "close_prices":        {str(k): v for k, v in close_prices.items()},
+        "spot_at_close":       spot_at_close,
+        "iv_rank_at_close":    iv_rank_at_close,
+        "iv_pct_at_close":     iv_pct_at_close,
         "iv_current_at_close": iv_current_at_close,
-        "days_held":          days_held,
-        "strategy":           strategy,
-        "reason":             reason,
-        "dte_remaining":      dte_remaining,
-        "entry_iv_rank":      dict(entry_snap)["iv_rank"] if entry_snap else None,
-        "entry_iv_current":   dict(entry_snap)["iv_current"] if entry_snap else None,
-        "entry_delta":        dict(entry_snap)["delta"] if entry_snap else None,
-        "entry_spot":         dict(entry_snap)["spot_price"] if entry_snap else None,
-        "closed_at":          datetime.now().isoformat(),
+        "days_held":           days_held,
+        "strategy":            strategy,
+        "reason":              reason,
+        "dte_remaining":       dte_remaining,
+        "entry_iv_rank":       dict(entry_snap)["iv_rank"] if entry_snap else None,
+        "entry_iv_current":    dict(entry_snap)["iv_current"] if entry_snap else None,
+        "entry_delta":         dict(entry_snap)["delta"] if entry_snap else None,
+        "entry_spot":          dict(entry_snap)["spot_price"] if entry_snap else None,
+        "closed_at":           datetime.now().isoformat(),
     }
 
-    conn.execute("""
-        INSERT INTO lifecycle_events
-            (id, position_id, event_type, event_at, notes, metadata)
-        VALUES (?, ?, 'CLOSE_SNAPSHOT', datetime('now'), ?, ?)
-    """, (
-        "LCE-SNAP-" + position_id[-8:],
-        position_id,
-        f"Closed via {reason}. P&L: ${realized_pnl:,.0f}. Days held: {days_held}.",
-        json.dumps(payload),
-    ))
-    conn.commit()
+    narrative = (
+        f"CLOSE_SNAPSHOT | reason={reason} | pnl=${realized_pnl:,.0f} "
+        f"| days_held={days_held} | ivr_at_close={iv_rank_at_close} "
+        f"| spot_at_close={spot_at_close} | payload={json.dumps(payload)}"
+    )
+
+    try:
+        import uuid
+        conn.execute("""
+            INSERT OR IGNORE INTO lifecycle_events
+                (id, position_id, event_type, occurred_at,
+                 spot_price, pnl_at_event, narrative)
+            VALUES (?, ?, 'NOTE', datetime('now'), ?, ?, ?)
+        """, (
+            "LCE-CLOSE-" + uuid.uuid4().hex[:8].upper(),
+            position_id,
+            spot_at_close,
+            realized_pnl,
+            narrative,
+        ))
+        conn.commit()
+    except Exception:
+        import traceback; traceback.print_exc()
