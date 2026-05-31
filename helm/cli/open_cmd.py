@@ -133,6 +133,16 @@ STRATEGY_CONFIG = {
         "is_condor": True,
         "spread_widths": [5, 10, 15, 20],
     },
+    "DIAGONAL": {
+        "option_type": "CALL",
+        "label": "Diagonal Spread",
+        "is_diagonal": True,
+        "short_dte_min": 21,  "short_dte_max": 45,  "short_dte_sweet": 30,
+        "short_delta_min": 0.30, "short_delta_max": 0.55, "short_delta_sweet": (0.38, 0.45),
+        "long_dte_min": 60,   "long_dte_max": 120, "long_dte_sweet": 75,
+        "long_delta_min": 0.55, "long_delta_max": 0.85, "long_delta_sweet": (0.65, 0.75),
+        "max_debit_pct": 0.75,
+    },
 }
 
 # ── Contract scoring (adapted from COTS ladder.py) ────────────────────────────
@@ -1583,8 +1593,8 @@ def run():
     console.print()
     console.print(Panel.fit(
         f"[bold cyan]HELM Open[/bold cyan] — {ticker} {config['label']}\n"
-        f"[dim]Delta {config['delta_min']:.2f}-{config['delta_max']:.2f} | "
-        f"DTE {dte_target or config['dte_min']}-{dte_target or config['dte_max']} | "
+        f"[dim]Delta {config.get("delta_min", config.get("short_delta_min",0)):.2f}-{config.get("delta_max", config.get("short_delta_max",1)):.2f} | "
+        f"DTE {dte_target or config.get("dte_min", config.get("short_dte_min",0))}-{dte_target or config.get("dte_max", config.get("short_dte_max",90))} | "
         f"Spread threshold: 15% | Data: {data_source}[/dim]",
         border_style="cyan"
     ))
@@ -1618,6 +1628,17 @@ def run():
     is_spread   = config.get("is_spread", False)
     is_strangle = config.get("is_strangle", False)
     is_condor   = config.get("is_condor", False)
+    is_diagonal = config.get("is_diagonal", False)
+
+    if is_diagonal:
+        try:
+            from helm.cli.diagonal import evaluate_diagonal, display_diagonal
+            spot_d, diagonals = evaluate_diagonal(ticker)
+        except Exception as e:
+            console.print(f"[red]Error:[/red] {e}")
+            return
+        display_diagonal(ticker, spot_d, diagonals, args)
+        return
 
     if is_condor:
         try:
