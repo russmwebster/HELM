@@ -500,6 +500,12 @@ Focus on companies with liquid options for ESTABLISHED and EMERGING categories."
         approved_adds = {}   # cat -> [tickers to add]
         approved_removes = []
 
+        # Pre-fetch existing tickers once for fast lookup
+        try:
+            existing_set = {x["ticker"].upper() for x in theme.tickers()}
+        except Exception:
+            existing_set = set()
+
         # Process additions — ask per category
         for cat in ["ESTABLISHED", "EMERGING", "PRE_IPO"]:
             new_tickers = add.get(cat, [])
@@ -515,16 +521,11 @@ Focus on companies with liquid options for ESTABLISHED and EMERGING categories."
                 tk = tk.strip()
                 if not tk:
                     continue
-                # Check if already in watchlist/theme
-                already = False
-                try:
-                    existing_tickers = [x["ticker"] for x in theme.tickers()]
-                    if tk.upper() in existing_tickers or tk.upper().replace(" ","_")[:10] in existing_tickers:
-                        console.print(f"    [dim]{tk} — already in theme, skipping[/dim]")
-                        already = True
-                except Exception:
-                    pass
-                if already:
+                # Skip if already in theme (check ticker and sanitized form)
+                tk_up = tk.upper()
+                tk_clean = re.sub(r'[^A-Z0-9]', '', tk_up)
+                if tk_up in existing_set or tk_clean in existing_set:
+                    console.print(f"    [dim]{tk} — already in theme, skipping[/dim]")
                     continue
                 answer = Prompt.ask(
                     f"    [{color}]+[/{color}] {tk}  add?",
@@ -553,7 +554,7 @@ Focus on companies with liquid options for ESTABLISHED and EMERGING categories."
         seen_removes = set()
         deduped_remove = []
         for item in remove:
-            tk = _clean_ticker(item)
+            tk = _clean_ticker(item).upper()
             if tk and tk not in seen_removes and tk not in just_added:
                 seen_removes.add(tk)
                 # Normalize the ticker in the item
