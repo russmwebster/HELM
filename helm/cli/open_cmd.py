@@ -143,6 +143,16 @@ STRATEGY_CONFIG = {
         "long_delta_min": 0.55, "long_delta_max": 0.85, "long_delta_sweet": (0.65, 0.75),
         "max_debit_pct": 0.75,
     },
+    "DIAGONAL_PUT": {
+        "option_type": "PUT",
+        "label": "Diagonal Spread (Put)",
+        "is_diagonal_put": True,
+        "short_dte_min": 21,  "short_dte_max": 45,  "short_dte_sweet": 30,
+        "short_delta_min": 0.30, "short_delta_max": 0.55, "short_delta_sweet": (0.38, 0.45),
+        "long_dte_min": 60,   "long_dte_max": 120, "long_dte_sweet": 75,
+        "long_delta_min": 0.55, "long_delta_max": 0.85, "long_delta_sweet": (0.65, 0.75),
+        "max_debit_pct": 0.75,
+    },
 }
 
 # ── Contract scoring (adapted from COTS ladder.py) ────────────────────────────
@@ -1629,6 +1639,7 @@ def run():
     is_strangle = config.get("is_strangle", False)
     is_condor   = config.get("is_condor", False)
     is_diagonal = config.get("is_diagonal", False)
+    is_diagonal_put = config.get("is_diagonal_put", False)
 
     if is_diagonal:
         try:
@@ -1638,6 +1649,16 @@ def run():
             console.print(f"[red]Error:[/red] {e}")
             return
         display_diagonal(ticker, spot_d, diagonals, args)
+        return
+
+    if is_diagonal_put:
+        try:
+            from helm.cli.diagonal import evaluate_diagonal_put, display_diagonal_put
+            spot_dp, diagonals_p = evaluate_diagonal_put(ticker)
+        except Exception as e:
+            console.print(f"[red]Error:[/red] {e}")
+            return
+        display_diagonal_put(ticker, spot_dp, diagonals_p, args)
         return
 
     if is_condor:
