@@ -539,7 +539,15 @@ Focus on companies with liquid options for ESTABLISHED and EMERGING categories."
         # Process removals — ask per ticker
         # Filter out any ticker just added in this session
         just_added = {tk.upper() for cat_list in approved_adds.values() for tk in cat_list}
-        remove = [item for item in remove if (item["ticker"] if isinstance(item, dict) else item).upper() not in just_added]
+        # Dedup remove list by ticker, and filter out anything just added this session
+        seen_removes = set()
+        deduped_remove = []
+        for item in remove:
+            tk = (item["ticker"] if isinstance(item, dict) else item).upper()
+            if tk not in seen_removes and tk not in just_added:
+                seen_removes.add(tk)
+                deduped_remove.append(item)
+        remove = deduped_remove
         if remove:
             has_changes = True
             console.print(f"  [bold]Consider removing:[/bold]")
