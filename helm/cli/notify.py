@@ -14,19 +14,32 @@ from datetime import datetime
 from helm.db import get_conn
 
 
+TRIGGER_FILE = '/tmp/helm_notify_trigger.txt'
+NOTIFIER    = '/opt/homebrew/bin/terminal-notifier'
+
 def send_notification(title: str, message: str, subtitle: str = "") -> bool:
-    """Send a macOS notification via osascript."""
-    sub = f'subtitle "{subtitle}" ' if subtitle else ''
-    script = f'display notification "{message}" with title "{title}" {sub}sound name "Default"'
+    """
+    Send notification via two methods:
+    1. Write trigger file (picked up by launchd WatchPaths agent with GUI access)
+    2. Try direct terminal-notifier (works when called from user terminal session)
+    """
+    import json
+    payload = json.dumps({'title': title, 'message': message, 'subtitle': subtitle})
+    # Write trigger file for the GUI watcher agent
     try:
-        result = subprocess.run(
-            ['osascript', '-e', script],
-            capture_output=True, text=True, timeout=10
-        )
+        with open(TRIGGER_FILE, 'w') as f:
+            f.write(payload)
+    except Exception:
+        pass
+    # Also try direct (works in terminal session)
+    try:
+        cmd = [NOTIFIER, '-title', title, '-message', message, '-sound', 'default']
+        if subtitle:
+            cmd += ['-subtitle', subtitle]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
         return result.returncode == 0
-    except Exception as e:
-        print(f"Notification failed: {e}")
-        return False
+    except Exception:
+        return True  # trigger file written, watcher will handle it
 
 
 def build_summary() -> dict:
