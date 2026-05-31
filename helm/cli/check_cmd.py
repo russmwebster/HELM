@@ -752,6 +752,8 @@ def cmd_check_deep(pos: dict, legs: list, assessment: dict, snap: dict):
         else:
             iv_str = f"{iv_now:.1f}%"
         console.print(f"  IV:          {iv_str}")
+    if _ivr and _ivr.iv_rank is not None:
+        console.print(f"  IVR/IVP:     {_ivr.rank_label}[dim] rank[/dim]  /  {_ivr.percentile_label}[dim] pct  (52wk: {_ivr.iv_52wk_low:.0f}%-{_ivr.iv_52wk_high:.0f}%)[/dim]")
 
     # Delta comparison
     if delta_now is not None:

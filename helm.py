@@ -29,6 +29,7 @@ COMMANDS = {
     'activity':  ('helm.cli.activity_cmd',  'run', 'Import Fidelity activity to close positions'),
     'reconcile': ('helm.cli.reconcile_cmd', 'run', 'Compare HELM positions to Fidelity portfolio'),
     'theme':     ('helm.cli.theme_cmd',     'run', 'Investment themes — setup, refresh, IPO tracking'),
+    'ivr':       ('helm.cli.ivr_cmd',       'run', 'IV Rank / Percentile -- refresh, list, show'),
     'status':    ('helm.cli.status_cmd',    'run', 'Portfolio dashboard — positions, P&L, activity'),
 }
 

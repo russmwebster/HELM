@@ -541,3 +541,20 @@ CREATE TABLE IF NOT EXISTS helm_events (
 
 CREATE INDEX IF NOT EXISTS idx_helm_events_type   ON helm_events(event_type);
 CREATE INDEX IF NOT EXISTS idx_helm_events_entity ON helm_events(entity_id);
+
+
+-- IV Rank and IV Percentile history (updated daily via helm ivr refresh)
+CREATE TABLE IF NOT EXISTS iv_history (
+    ticker          TEXT NOT NULL,
+    date            TEXT NOT NULL,
+    iv_current      REAL,
+    iv_rank         REAL,
+    iv_percentile   REAL,
+    iv_52wk_high    REAL,
+    iv_52wk_low     REAL,
+    days_history    INTEGER,
+    updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (ticker, date)
+);
+CREATE INDEX IF NOT EXISTS idx_iv_history_ticker ON iv_history(ticker);
+CREATE INDEX IF NOT EXISTS idx_iv_history_date   ON iv_history(date);

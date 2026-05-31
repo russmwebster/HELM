@@ -1612,6 +1612,19 @@ def run():
 
     console.print(f"Fetching options chain for [bold]{ticker}[/bold]...")
 
+    # Show IVR context before fetching chain
+    from helm.models.iv_history import IVHistory
+    _ivr_open = IVHistory.latest(ticker)
+    if _ivr_open and _ivr_open.iv_rank is not None:
+        ivr_min = config.get("entry_iv_rank_min")
+        ivr_max = config.get("entry_iv_rank_max")
+        ivr_warn = ""
+        if ivr_min and _ivr_open.iv_rank < ivr_min:
+            ivr_warn = f"  [yellow]⚠ IVR {_ivr_open.iv_rank:.0f} below strategy min {ivr_min}[/yellow]"
+        elif ivr_max and _ivr_open.iv_rank > ivr_max:
+            ivr_warn = f"  [yellow]⚠ IVR {_ivr_open.iv_rank:.0f} above strategy max {ivr_max}[/yellow]"
+        console.print(f"  IVR: {_ivr_open.rank_label}  IVP: {_ivr_open.percentile_label}  [dim]current IV {_ivr_open.iv_current:.1f}% | 52wk {_ivr_open.iv_52wk_low:.0f}%-{_ivr_open.iv_52wk_high:.0f}%[/dim]{ivr_warn}")
+
     # Get spot price for context
     spot = None
     try:

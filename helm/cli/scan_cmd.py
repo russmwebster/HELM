@@ -364,6 +364,8 @@ def run():
     t.add_column("Strategy", width=16, no_wrap=True)
     t.add_column("RSI",      justify="right", width=5, no_wrap=True)
     t.add_column("IV%",      justify="right", width=5, no_wrap=True)
+    t.add_column("IVR",      justify="right", width=5, no_wrap=True)
+    t.add_column("IVP",      justify="right", width=5, no_wrap=True)
     t.add_column("ATR",      justify="right", width=7, no_wrap=True)
     t.add_column("1-ATR Strike", justify="right", width=12, no_wrap=True)
     t.add_column("2-ATR Strike", justify="right", width=12, no_wrap=True)
@@ -374,6 +376,9 @@ def run():
         "SHORT_STRANGLE": "magenta", "IRON_CONDOR": "blue",
         "BEAR_CALL_SPREAD": "red", "LONG_CALL": "yellow",
     }
+
+    from helm.models.iv_history import IVHistory
+    _ivr_data = IVHistory.for_tickers([r["ticker"] for r in valid])
 
     for res in valid:
         score = res["bias_score"]
@@ -387,11 +392,14 @@ def run():
         strikes = res.get("atr_strikes") or {}
         s1 = f"${strikes.get('1atr', 0):.2f}" if strikes.get("1atr") else "--"
         s2 = f"${strikes.get('2atr', 0):.2f}" if strikes.get("2atr") else "--"
+        _ivr = _ivr_data.get(res["ticker"])
+        ivr_str = _ivr.rank_label if _ivr else "[dim]--[/dim]"
+        ivp_str = _ivr.percentile_label if _ivr else "[dim]--[/dim]"
         top_factor = res["bias_factors"][0] if res.get("bias_factors") else "--"
         price = f"${res['price']:.2f}" if res.get("price") else "--"
 
         t.add_row(res["ticker"], price, bias_str, strat_str,
-                  rsi, iv, atr, s1, s2, top_factor)
+                  rsi, iv, ivr_str, ivp_str, atr, s1, s2, top_factor)
 
     console.print(f"[bold]Scan Results — {len(valid)} candidates[/bold]")
     console.print()
