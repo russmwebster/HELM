@@ -427,11 +427,14 @@ def cmd_position(args):
 def run():
     args = sys.argv[1:]
 
-    if not args or args[0] in ('-h', '--help'):
+    if args and args[0] in ('-h', '--help'):
         console.print("\n[bold]Usage:[/bold]  helm analyze <command>\n")
         console.print("  (no command)          Overview: win rates and P&L by strategy")
         console.print("  trends                Trade-life trends across all positions")
         console.print("  position <TICKER>     Full check history for one position\n")
+        return
+    if not args:
+        cmd_overview([])
         return
 
     cmd = args[0].lower()
