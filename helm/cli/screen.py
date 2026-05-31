@@ -84,6 +84,17 @@ def fetch_fundamentals(tk, info):
         return {}
 
 
+
+def _friendly_fail(e):
+    msg = str(e)
+    if 'exchangeTimezoneName' in msg or 'regularMarketPrice' in msg:
+        return 'Not found in market data — may be a company name, delisted, or OTC'
+    if 'No timezone' in msg or 'NoneType' in msg:
+        return 'No market data available'
+    if 'HTTPError' in msg or '404' in msg:
+        return 'Ticker not found'
+    return f'Data error: {msg[:60]}'
+
 def screen_ticker(ticker, min_oi, max_spread_pct, min_volume):
     import yfinance as yf
 
@@ -189,7 +200,7 @@ def screen_ticker(ticker, min_oi, max_spread_pct, min_volume):
         return result
 
     except Exception as e:
-        result["error"] = str(e)[:60]
+        result["error"] = _friendly_fail(e)[:60]
         result["fail_reason"] = f"Error: {str(e)[:40]}"
         return result
 
