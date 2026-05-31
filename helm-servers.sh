@@ -25,6 +25,8 @@ ALLOWED_PREFIXES = [
     '/opt/anaconda3/envs/helm/bin/python3',
     '/opt/anaconda3/envs/cots/bin/python',
     'conda run',
+    'helm ',
+    'bash -c',
 ]
 
 def is_allowed(cmd):
