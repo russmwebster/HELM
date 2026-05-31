@@ -44,7 +44,8 @@ def _days_held(opened_at, closed_at=None):
     try:
         start = date.fromisoformat(opened_at[:10])
         end   = date.fromisoformat((closed_at or datetime.now().isoformat())[:10])
-        return (end - start).days
+        days = (end - start).days
+        return max(0, days)  # clamp; negative = import artifact
     except Exception:
         return None
 
@@ -220,13 +221,17 @@ def cmd_trends(args):
     tbl.add_column("Health", width=8)
 
     for pos in positions:
-        checks = conn.execute("""
+        checks_raw = conn.execute("""
             SELECT checked_at, delta, iv_current, iv_rank, pnl_unrealized,
                    delta_vs_entry, iv_vs_entry, health_flag, rth_flag
             FROM checks
             WHERE position_id = ?
             ORDER BY checked_at ASC
         """, (pos['id'],)).fetchall()
+        seen_days2 = {}
+        for c_row in checks_raw:
+            seen_days2[c_row['checked_at'][:10]] = c_row
+        checks = list(seen_days2.values())
 
         if not checks:
             continue
@@ -318,10 +323,16 @@ def cmd_position(args):
         return
 
     for pos in positions:
-        checks = conn.execute("""
+        checks_raw = conn.execute("""
             SELECT * FROM checks WHERE position_id = ?
             ORDER BY checked_at ASC
         """, (pos['id'],)).fetchall()
+        # Keep only the last check per calendar day
+        seen_days = {}
+        for c_row in checks_raw:
+            day = c_row['checked_at'][:10]
+            seen_days[day] = c_row
+        checks = list(seen_days.values())
 
         days = _days_held(pos['opened_at'], pos['closed_at'])
         status_color = {'OPEN': 'cyan', 'CLOSED': 'green', 'ROLLED_OUT': 'yellow'}.get(pos['status'], 'dim')
