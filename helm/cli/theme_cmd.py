@@ -438,7 +438,7 @@ def cmd_refresh(args, use_web=False):
             "Financial research assistant for an options trader. "
             "Suggest additions/removals for an investment theme watchlist. "
             "Return ONLY valid JSON, no markdown, no explanation. "
-            "Schema: {add:{ESTABLISHED:[],EMERGING:[],PRE_IPO:[]},remove:[],commentary:str}. "
+            "Schema: {add:{ESTABLISHED:[],EMERGING:[],PRE_IPO:[]},remove:[{ticker:str,reason:str}],commentary:str}. "
             "Commentary max 2 sentences."
         )
 
@@ -477,7 +477,14 @@ Focus on companies with liquid options for ESTABLISHED and EMERGING categories."
             continue
 
         add = data.get("add", {})
-        remove = data.get("remove", [])
+        # remove can be [{ticker, reason}] or [str] for backwards compat
+        _remove_raw = data.get("remove", [])
+        remove = []
+        for item in _remove_raw:
+            if isinstance(item, dict):
+                remove.append({"ticker": item.get("ticker",""), "reason": item.get("reason","")})
+            else:
+                remove.append({"ticker": str(item), "reason": ""})
         commentary = data.get("commentary", "")
 
         # Show suggestions with selective accept/reject
@@ -533,7 +540,7 @@ Focus on companies with liquid options for ESTABLISHED and EMERGING categories."
         if remove:
             has_changes = True
             console.print(f"  [bold]Consider removing:[/bold]")
-            for tk in remove:
+            for item in remove:
                 answer = Prompt.ask(
                     f"    [dim]-[/dim] {tk}  remove?",
                     choices=["y", "n"],
@@ -542,7 +549,7 @@ Focus on companies with liquid options for ESTABLISHED and EMERGING categories."
                     show_default=False,
                 )
                 if answer == "y":
-                    approved_removes.append(tk)
+                    approved_removes.append(tk if isinstance(item, dict) else item)
 
         if not has_changes:
             console.print("  [green]Theme looks current — no changes suggested.[/green]")
