@@ -714,6 +714,43 @@ have liquid options once public."""
                 console.print(f"    [dim]{c.get('description','')}[/dim]")
                 console.print()
 
+        # Offer to add recent IPO tickers to watchlist
+        addable_ipos = [c for c in recent if c.get("ticker") and c.get("ticker") != "?"]
+        if addable_ipos:
+            console.print()
+            console.print("  [dim]Add recent IPO tickers to watchlist as Emerging?[/dim]")
+            ipo_added = 0
+            for c in addable_ipos:
+                tk = c.get("ticker","").strip().upper()
+                if not tk:
+                    continue
+                if Confirm.ask(f"    [bold]{tk}[/bold] — {c.get('name','')}  add to watchlist?", default=True):
+                    if theme.add_ticker(tk, category="EMERGING"):
+                        console.print(f"    [green]+ {tk} added as Emerging[/green]")
+                        ipo_added += 1
+                    else:
+                        console.print(f"    [dim]{tk} already in watchlist[/dim]")
+            if ipo_added:
+                console.print()
+
+        # Offer to add pre-IPO companies to PRE_IPO watchlist
+        if pre:
+            console.print()
+            console.print("  [dim]Add pre-IPO companies to watchlist?[/dim]")
+            pre_added = 0
+            for c in pre:
+                name = c.get("name","").strip()
+                if not name:
+                    continue
+                if Confirm.ask(f"    [bold]{name}[/bold]  add as Pre-IPO?", default=True):
+                    if theme.add_ticker(name, category="PRE_IPO"):
+                        console.print(f"    [green]+ {name} added as Pre-IPO[/green]")
+                        pre_added += 1
+                    else:
+                        console.print(f"    [dim]{name} already in watchlist[/dim]")
+            if pre_added:
+                console.print()
+
         log_event("THEME_IPO_UPDATED", entity_id=theme.id, entity_name=theme.name)
 
     console.print()
