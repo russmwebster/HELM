@@ -1,3 +1,4 @@
+import re
 
 # helm/cli/theme_cmd.py
 # helm theme -- Investment Themes management with Claude AI integration
@@ -540,12 +541,24 @@ Focus on companies with liquid options for ESTABLISHED and EMERGING categories."
         # Filter out any ticker just added in this session
         just_added = {tk.upper() for cat_list in approved_adds.values() for tk in cat_list}
         # Dedup remove list by ticker, and filter out anything just added this session
+        def _clean_ticker(raw):
+            # Model sometimes returns "RIGETTI (RGTI)" — extract just the ticker symbol
+            t = (raw.get("ticker","") if isinstance(raw, dict) else str(raw)).strip()
+            # If it contains a space or paren, take the first clean word
+            t = re.split(r'[\s\(]', t)[0]
+            return re.sub(r'[^A-Z0-9]', '', t.upper())
+
         seen_removes = set()
         deduped_remove = []
         for item in remove:
-            tk = (item["ticker"] if isinstance(item, dict) else item).upper()
-            if tk not in seen_removes and tk not in just_added:
+            tk = _clean_ticker(item)
+            if tk and tk not in seen_removes and tk not in just_added:
                 seen_removes.add(tk)
+                # Normalize the ticker in the item
+                if isinstance(item, dict):
+                    item = dict(item, ticker=tk)
+                else:
+                    item = tk
                 deduped_remove.append(item)
         remove = deduped_remove
         if remove:
