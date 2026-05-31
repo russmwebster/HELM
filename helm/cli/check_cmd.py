@@ -186,8 +186,14 @@ def save_check(position_id: str, assessment: dict, pos: dict) -> None:
         buf_pct_val = a.get("buffer_pct")
 
     # Health flag
-    score = a.get("health_score", 0)
-    flag = "GREEN" if score >= 70 else ("RED" if score < 40 else "YELLOW")
+    # Use flag directly from assessment (health_score key is not populated)
+    flag = a.get("flag") or a.get("health_flag") or a.get("health_score")
+    if flag in ("GREEN", "YELLOW", "RED"):
+        pass  # already a valid flag string
+    elif isinstance(flag, (int, float)):
+        flag = "GREEN" if flag >= 70 else ("RED" if flag < 40 else "YELLOW")
+    else:
+        flag = "YELLOW"  # default to monitor, not RED
     action_signal = "HOLD" if flag == "GREEN" else ("CLOSE" if flag == "RED" else "WATCH")
 
     # DTE and narrative
