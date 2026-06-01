@@ -293,7 +293,7 @@ def delta_flag(delta: Optional[float], delta_min: float, delta_max: float,
 # ── Position sizing ───────────────────────────────────────────────────────────
 
 def suggest_contracts(strategy: str, strike: float, mid: float,
-                      account_id: str) -> int:
+                      account_id: str, ticker: str = "") -> int:
     """
     Suggest number of contracts based on risk_pct_per_trade and buying power.
     """
@@ -316,6 +316,17 @@ def suggest_contracts(strategy: str, strike: float, mid: float,
 
         if portfolio_value <= 0:
             return 1
+
+        # Covered call: cap contracts at shares owned / 100
+        if strategy == "COVERED_CALL" and ticker:
+            sp = conn.execute(
+                "SELECT shares FROM stock_positions WHERE ticker=? AND account_id=?",
+                (ticker.upper(), account_id)
+            ).fetchone()
+            if sp:
+                return max(1, sp["shares"] // 100)
+            else:
+                return 1  # no stock position found
 
         # Long options: fixed dollar target (~$5,000)
         # This will be user-configurable in setup in a future version
@@ -1758,7 +1769,7 @@ def run():
 
     for rank, c in enumerate(contracts, 1):
         # Suggest contracts
-        suggested = suggest_contracts(strategy, c["strike"], c["mid"], account_id)
+        suggested = suggest_contracts(strategy, c["strike"], c["mid"], account_id, ticker=ticker)
 
         spread_str = spread_flag(c.get("spread_pct"))
         delta_str  = delta_flag(c.get("delta"), config["delta_min"],
@@ -1797,7 +1808,7 @@ def run():
 
     # Best contract summary
     best = contracts[0]
-    suggested = suggest_contracts(strategy, best["strike"], best["mid"], account_id)
+    suggested = suggest_contracts(strategy, best["strike"], best["mid"], account_id, ticker=ticker)
     total_premium = round(best["mid"] * 100 * suggested, 2)
 
     console.print(Panel(
