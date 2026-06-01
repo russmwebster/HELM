@@ -59,24 +59,30 @@ def bias_to_strategy(score: int, iv_pct, rsi=None, ivr=None):
     CSP:       bullish + high IV — sell premium into elevated volatility
     """
     iv_high      = iv_pct is not None and float(iv_pct) >= 40
-    iv_low       = iv_pct is not None and float(iv_pct) < 30
+    iv_low       = iv_pct is not None and float(iv_pct) < 40
     rsi_oversold = rsi is not None and float(rsi) < 35
     rsi_rising   = rsi is not None and 35 <= float(rsi) < 50
+    # IVR-based overrides when available
+    ivr_low      = ivr is not None and float(ivr) < 40
+    ivr_high     = ivr is not None and float(ivr) >= 50
+    # Prefer IVR over raw IV% when available
+    cheap_options = (ivr_low) or (ivr is None and iv_low)
+    rich_premium  = (ivr_high) or (ivr is None and iv_high)
 
     if score >= 2:  # Bullish
-        if iv_low and rsi_oversold:
-            return "LONG_CALL", "Bullish + low IV + oversold RSI — cheap premium, mean reversion"
-        elif iv_low and rsi_rising:
-            return "DIAGONAL", "Bullish + low IV + rising RSI — diagonal to capture trend"
-        elif iv_high:
-            return "CSP", "Bullish bias + elevated IV — ideal for cash-secured put"
+        if cheap_options and rsi_oversold:
+            return "LONG_CALL", "Bullish + low IVR + oversold RSI — cheap premium, mean reversion"
+        elif cheap_options and rsi_rising:
+            return "DIAGONAL", "Bullish + low IVR + rising RSI — diagonal to capture trend"
+        elif rich_premium:
+            return "CSP", "Bullish bias + elevated IV/IVR — ideal for cash-secured put"
         else:
             return "BULL_PUT_SPREAD", "Bullish bias, moderate IV — defined risk spread"
     elif score == 1:  # Mildly bullish
-        if iv_low and rsi_oversold:
-            return "LONG_CALL", "Mildly bullish + low IV + oversold — long call for directional move"
-        elif iv_high:
-            return "CSP", "Mildly bullish + elevated IV — CSP with comfortable strike"
+        if cheap_options and rsi_oversold:
+            return "LONG_CALL", "Mildly bullish + low IVR + oversold — long call for directional move"
+        elif rich_premium:
+            return "CSP", "Mildly bullish + elevated IV/IVR — CSP with comfortable strike"
         else:
             return "BULL_PUT_SPREAD", "Mildly bullish — defined risk spread preferred"
     elif score == 0:
