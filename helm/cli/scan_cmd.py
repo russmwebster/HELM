@@ -253,6 +253,18 @@ def fetch_technicals(ticker: str) -> dict:
         result["strategy"] = strategy
         result["strategy_rationale"] = rationale
 
+        # IVR signal injection
+        _ivr = result.get("iv_rank")
+        if _ivr is not None:
+            if strategy in ("CSP", "SHORT_STRANGLE", "IRON_CONDOR") and _ivr < 30:
+                result["bias_factors"].insert(0, f"⚠ Low IVR {_ivr:.0f} — selling into cheap IV")
+            elif strategy in ("CSP", "SHORT_STRANGLE") and _ivr >= 50:
+                result["bias_factors"].insert(0, f"✓ IVR {_ivr:.0f} — elevated, good premium")
+            elif strategy == "LONG_CALL" and _ivr < 35:
+                result["bias_factors"].insert(0, f"✓ IVR {_ivr:.0f} — low IV, cheap options")
+            elif strategy == "LONG_CALL" and _ivr > 50:
+                result["bias_factors"].insert(0, f"⚠ IVR {_ivr:.0f} — buying expensive options")
+
         return result
 
     except Exception as e:
