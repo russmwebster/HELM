@@ -58,13 +58,15 @@ def bias_to_strategy(score: int, iv_pct, rsi=None, ivr=None):
     DIAGONAL:  bullish + low IV + RSI 35-50 — steady uptrend, harvest time decay
     CSP:       bullish + high IV — sell premium into elevated volatility
     """
-    iv_high      = iv_pct is not None and float(iv_pct) >= 40
-    iv_low       = iv_pct is not None and float(iv_pct) < 40
-    rsi_oversold = rsi is not None and float(rsi) < 35
-    rsi_rising   = rsi is not None and 35 <= float(rsi) < 50
-    # IVR-based overrides when available
-    ivr_low      = ivr is not None and float(ivr) < 40
-    ivr_high     = ivr is not None and float(ivr) >= 50
+    # Industry-standard thresholds (tastytrade/TradeStation research)
+    iv_high      = iv_pct is not None and float(iv_pct) >= 40  # raw IV% fallback for selling
+    iv_low       = iv_pct is not None and float(iv_pct) < 30   # raw IV% fallback for buying
+    rsi_oversold = rsi is not None and float(rsi) < 30         # Wilder standard oversold
+    rsi_rising   = rsi is not None and 30 <= float(rsi) < 50   # recovering from oversold
+    # IVR thresholds (preferred over raw IV% when available)
+    ivr_low      = ivr is not None and float(ivr) <= 25        # cheap options: IVR bottom quartile
+    ivr_high     = ivr is not None and float(ivr) >= 50        # rich options: IVR upper half
+    ivr_neutral  = ivr is not None and 25 < float(ivr) < 50   # neutral: let directional bias decide
     # Prefer IVR over raw IV% when available
     cheap_options = (ivr_low) or (ivr is None and iv_low)
     rich_premium  = (ivr_high) or (ivr is None and iv_high)
@@ -262,13 +264,13 @@ def fetch_technicals(ticker: str) -> dict:
         # IVR signal injection
         _ivr = result.get("iv_rank")
         if _ivr is not None:
-            if strategy in ("CSP", "SHORT_STRANGLE", "IRON_CONDOR") and _ivr < 30:
+            if strategy in ("CSP", "SHORT_STRANGLE", "IRON_CONDOR") and _ivr < 25:
                 result["bias_factors"].insert(0, f"⚠ Low IVR {_ivr:.0f} — selling into cheap IV")
-            elif strategy in ("CSP", "SHORT_STRANGLE") and _ivr >= 50:
+            elif strategy in ("CSP", "SHORT_STRANGLE", "IRON_CONDOR") and _ivr >= 50:
                 result["bias_factors"].insert(0, f"✓ IVR {_ivr:.0f} — elevated, good premium")
-            elif strategy == "LONG_CALL" and _ivr < 35:
+            elif strategy == "LONG_CALL" and _ivr <= 25:
                 result["bias_factors"].insert(0, f"✓ IVR {_ivr:.0f} — low IV, cheap options")
-            elif strategy == "LONG_CALL" and _ivr > 50:
+            elif strategy == "LONG_CALL" and _ivr > 50:  # IV crush risk
                 result["bias_factors"].insert(0, f"⚠ IVR {_ivr:.0f} — buying expensive options")
 
         return result
