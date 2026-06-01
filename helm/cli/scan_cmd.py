@@ -51,21 +51,31 @@ console = Console()
 
 # ── Strategy mapping ──────────────────────────────────────────────────────────
 
-def bias_to_strategy(score: int, iv_pct: Optional[float]) -> tuple[str, str]:
+def bias_to_strategy(score: int, iv_pct, rsi=None, ivr=None):
     """
-    Map bias score + IV context to best strategy.
-    Returns (strategy, rationale).
+    Map bias score + IV + RSI + IVR to best strategy.
+    LONG_CALL: bullish + low IV + oversold RSI — cheap premium, momentum entry
+    DIAGONAL:  bullish + low IV + RSI 35-50 — steady uptrend, harvest time decay
+    CSP:       bullish + high IV — sell premium into elevated volatility
     """
-    iv_high = iv_pct is not None and iv_pct >= 40
-    iv_low  = iv_pct is not None and iv_pct < 25
+    iv_high      = iv_pct is not None and float(iv_pct) >= 40
+    iv_low       = iv_pct is not None and float(iv_pct) < 30
+    rsi_oversold = rsi is not None and float(rsi) < 35
+    rsi_rising   = rsi is not None and 35 <= float(rsi) < 50
 
-    if score >= 2:
-        if iv_high:
+    if score >= 2:  # Bullish
+        if iv_low and rsi_oversold:
+            return "LONG_CALL", "Bullish + low IV + oversold RSI — cheap premium, mean reversion"
+        elif iv_low and rsi_rising:
+            return "DIAGONAL", "Bullish + low IV + rising RSI — diagonal to capture trend"
+        elif iv_high:
             return "CSP", "Bullish bias + elevated IV — ideal for cash-secured put"
         else:
             return "BULL_PUT_SPREAD", "Bullish bias, moderate IV — defined risk spread"
-    elif score == 1:
-        if iv_high:
+    elif score == 1:  # Mildly bullish
+        if iv_low and rsi_oversold:
+            return "LONG_CALL", "Mildly bullish + low IV + oversold — long call for directional move"
+        elif iv_high:
             return "CSP", "Mildly bullish + elevated IV — CSP with comfortable strike"
         else:
             return "BULL_PUT_SPREAD", "Mildly bullish — defined risk spread preferred"
@@ -76,11 +86,11 @@ def bias_to_strategy(score: int, iv_pct: Optional[float]) -> tuple[str, str]:
             return "IRON_CONDOR", "Neutral, moderate IV — defined risk condor"
     elif score == -1:
         if iv_high:
-            return "BEAR_CALL_SPREAD", "Mildly bearish + elevated IV — sell call spread"
+            return "BEAR_CALL_SPREAD", "Mildly bearish + elevated IV — defined risk spread"
         else:
-            return "IRON_CONDOR", "Mildly bearish, moderate IV — condor or wait"
-    else:  # score <= -2
-        return "BEAR_CALL_SPREAD", "Bearish bias — sell call spread or wait for reversal"
+            return "IRON_CONDOR", "Mildly bearish — defined risk condor"
+    else:  # score <= -2, Bearish
+        return "BEAR_CALL_SPREAD", "Bearish bias — defined risk bear call spread"
 
 
 def score_label(score: int) -> str:
@@ -239,7 +249,7 @@ def fetch_technicals(ticker: str) -> dict:
         result["bias_score"] = max(-3, min(3, score))
         result["bias_factors"] = factors
 
-        strategy, rationale = bias_to_strategy(result["bias_score"], iv)
+        strategy, rationale = bias_to_strategy(result["bias_score"], iv, rsi=result.get("rsi"), ivr=result.get("iv_rank"))
         result["strategy"] = strategy
         result["strategy_rationale"] = rationale
 
@@ -374,7 +384,7 @@ def run():
     strategy_colors = {
         "CSP": "green", "BULL_PUT_SPREAD": "cyan",
         "SHORT_STRANGLE": "magenta", "IRON_CONDOR": "blue",
-        "BEAR_CALL_SPREAD": "red", "LONG_CALL": "yellow",
+        "BEAR_CALL_SPREAD": "red", "LONG_CALL": "yellow", "DIAGONAL": "cyan",
     }
 
     from helm.models.iv_history import IVHistory
