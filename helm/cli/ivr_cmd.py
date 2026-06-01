@@ -25,7 +25,7 @@ from helm.db import get_conn
 console = Console()
 
 LOOKBACK_DAYS = 365
-SLEEP_BETWEEN = 0.4   # seconds between IBKR requests
+SLEEP_BETWEEN = 0.3   # seconds between IBKR requests
 
 
 # ── IBKR fetch ────────────────────────────────────────────────────────────────
@@ -143,7 +143,7 @@ def cmd_refresh(args: list) -> None:
                 results['ok'] += 1
 
             progress.advance(task)
-            time.sleep(SLEEP_BETWEEN)
+            ib.sleep(SLEEP_BETWEEN)
 
     try:
         ib.disconnect()
