@@ -1414,6 +1414,15 @@ def run():
     if tickers:
         for ticker in tickers:
             cmd_check_one(ticker, deep=deep)
+    elif deep:
+        # --deep with no ticker: run deep check on all open positions
+        from helm.db import get_conn as _gc
+        _conn = _gc()
+        _open = _conn.execute(
+            "SELECT DISTINCT ticker FROM positions WHERE status='OPEN' ORDER BY ticker"
+        ).fetchall()
+        for _row in _open:
+            cmd_check_one(_row['ticker'], deep=True)
     else:
         cmd_check_all(args)
 
