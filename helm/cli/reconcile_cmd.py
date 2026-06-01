@@ -259,7 +259,12 @@ def run():
             f"{l['strike']:.0f} " if l['strike'] else f"stock"
             for l in legs
         )
-        status_str = "[green]✓ MATCH[/green]" if pos["status"] == "OPEN" else "[yellow]✓ PENDING[/yellow]"
+        # Auto-promote PENDING to OPEN when matched against Fidelity
+        if pos["status"] == "PENDING":
+            from helm.db import get_conn as _pgc
+            _pgc().execute("UPDATE positions SET status='OPEN' WHERE id=?", (pos["id"],))
+            _pgc().commit()
+        status_str = "[green]✓ MATCH[/green]"
         t.add_row(status_str, pos["ticker"], pos["strategy"], legs_str, "")
 
     # HELM only (not in Fidelity)
