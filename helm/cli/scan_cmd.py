@@ -54,75 +54,55 @@ console = Console()
 def bias_to_strategy(score: int, iv_pct, rsi=None, ivr=None):
     """
     Map directional bias + IV environment to best strategy.
-    Industry-standard thresholds based on tastytrade/TradeStation research.
-
-    LONG_CALL:        bullish conviction + IVR < 60 (don't overpay) + any RSI
-    DIAGONAL:         bullish + IVR < 50 + upward momentum (RSI 40-65)
-    CSP:              bullish + IVR >= 50 (sell rich premium)
-    BULL_PUT_SPREAD:  mildly bullish + IVR 25-50 (neutral zone)
-    SHORT_STRANGLE:   neutral + IVR >= 50 (collect both sides)
-    IRON_CONDOR:      neutral + IVR 25-50 (defined risk, moderate premium)
-    BEAR_CALL_SPREAD: bearish + IVR >= 25 (defined risk)
+    IVR threshold for premium selling lowered to 35 (from 50).
     """
-    # -- Raw IV% fallbacks (used when IVR not available) --
-    iv_high       = iv_pct is not None and float(iv_pct) >= 40
-    iv_moderate   = iv_pct is not None and 25 <= float(iv_pct) < 40
-    iv_low        = iv_pct is not None and float(iv_pct) < 30
-
-    # -- IVR thresholds (preferred when available) --
-    ivr_val       = float(ivr) if ivr is not None else None
-    ivr_rich      = ivr_val is not None and ivr_val >= 50   # sell premium
-    ivr_moderate  = ivr_val is not None and 25 <= ivr_val < 50  # neutral
-    ivr_cheap     = ivr_val is not None and ivr_val < 25    # buy premium (strict)
-    ivr_buyable   = ivr_val is not None and ivr_val < 60    # acceptable for long call
-    ivr_unknown   = ivr_val is None
-
-    # -- RSI context --
-    rsi_val       = float(rsi) if rsi is not None else None
-    rsi_oversold  = rsi_val is not None and rsi_val < 30    # Wilder standard
-    rsi_bullish   = rsi_val is not None and rsi_val < 60    # not overbought
-    rsi_momentum  = rsi_val is not None and 40 <= rsi_val <= 65  # uptrend
+    iv_high      = iv_pct is not None and float(iv_pct) >= 40
+    iv_moderate  = iv_pct is not None and 25 <= float(iv_pct) < 40
+    iv_low       = iv_pct is not None and float(iv_pct) < 30
+    ivr_val      = float(ivr) if ivr is not None else None
+    ivr_rich     = ivr_val is not None and ivr_val >= 35   # sell premium (lowered from 50)
+    ivr_moderate = ivr_val is not None and 15 <= ivr_val < 35
+    ivr_cheap    = ivr_val is not None and ivr_val < 15
+    ivr_buyable  = ivr_val is not None and ivr_val < 60
+    ivr_unknown  = ivr_val is None
+    rsi_val      = float(rsi) if rsi is not None else None
+    rsi_oversold = rsi_val is not None and rsi_val < 30
+    rsi_bullish  = rsi_val is not None and rsi_val < 60
+    rsi_momentum = rsi_val is not None and 40 <= rsi_val <= 65
     rsi_overbought = rsi_val is not None and rsi_val > 65
 
-    # -- Strategy selection --
     if score >= 2:  # Bullish
-        # LONG_CALL: bullish conviction + options not overpriced
-        # IVR < 60 means we're not buying into peak IV
         if (ivr_buyable or ivr_unknown) and not ivr_rich:
-            # When IVR is available and confirms cheap options, trust IVR over raw IV%
             if ivr_val is not None and ivr_val < 60:
-                return 'LONG_CALL', 'Strong bullish bias + IVR confirms reasonable premium — long call'
+                return 'LONG_CALL', 'Strong bullish bias + IVR confirms reasonable premium'
             elif iv_pct is None or float(iv_pct) < 50:
-                return 'LONG_CALL', 'Strong bullish bias + reasonable IV — long call for directional move'
-        # CSP: bullish + rich premium to sell
+                return 'LONG_CALL', 'Strong bullish bias + reasonable IV'
         if ivr_rich or (ivr_unknown and iv_high):
             return 'CSP', 'Bullish bias + elevated IVR — ideal for cash-secured put'
-        # Default bullish with moderate IV
         return 'BULL_PUT_SPREAD', 'Bullish bias, moderate IV — defined risk spread'
 
     elif score == 1:  # Mildly bullish
-        # DIAGONAL: mild bullish + moderate IV + momentum
-        if (ivr_moderate or (ivr_unknown and iv_moderate)) and rsi_momentum:
-            return 'DIAGONAL', 'Mildly bullish + moderate IVR + momentum — diagonal spread'
-        # CSP: mildly bullish + rich premium
+        # CSP takes priority when IVR >= 35
         if ivr_rich or (ivr_unknown and iv_high):
             return 'CSP', 'Mildly bullish + elevated IVR — CSP with comfortable strike'
-        # LONG_CALL: mildly bullish + cheap IV
+        # DIAGONAL when IVR is moderate and momentum present
+        if (ivr_moderate or (ivr_unknown and iv_moderate)) and rsi_momentum:
+            return 'DIAGONAL', 'Mildly bullish + moderate IVR + momentum — diagonal spread'
         if ivr_cheap or (ivr_unknown and iv_low):
             return 'LONG_CALL', 'Mildly bullish + low IVR — long call while options cheap'
         return 'BULL_PUT_SPREAD', 'Mildly bullish — defined risk spread preferred'
 
-    elif score == 0:  # Neutral
+    elif score == 0:
         if ivr_rich or (ivr_unknown and iv_high):
             return 'SHORT_STRANGLE', 'Neutral + elevated IVR — collect premium both sides'
         return 'IRON_CONDOR', 'Neutral, moderate IV — defined risk condor'
 
-    elif score == -1:  # Mildly bearish
+    elif score == -1:
         if ivr_rich or (ivr_unknown and iv_high):
             return 'BEAR_CALL_SPREAD', 'Mildly bearish + elevated IV — defined risk spread'
         return 'IRON_CONDOR', 'Mildly bearish — iron condor for range-bound move'
 
-    else:  # score <= -2, Bearish
+    else:
         return 'BEAR_CALL_SPREAD', 'Bearish bias — bear call spread'
 
 
