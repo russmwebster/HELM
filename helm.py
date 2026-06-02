@@ -31,6 +31,7 @@ COMMANDS = {
     'theme':     ('helm.cli.theme_cmd',     'run', 'Investment themes — setup, refresh, IPO tracking'),
     'ivr':       ('helm.cli.ivr_cmd',       'run', 'IV Rank / Percentile -- refresh, list, show'),
     'notify':    ('helm.cli.notify',        'run', 'Send portfolio summary notification'),
+    'guide':    ('helm.cli.guide_cmd',    'run', 'Strategy guide — matrix, conviction, workflow'),
     'workflow':  ('helm.cli.workflow_cmd',  'run', 'Show trading workflow and command reference'),
     'stock':     ('helm.cli.stock_cmd',     'run', 'Manage stock positions for covered call sizing'),
     'status':    ('helm.cli.status_cmd',    'run', 'Portfolio dashboard — positions, P&L, activity'),

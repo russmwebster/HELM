@@ -508,7 +508,7 @@ def run():
         console.print()
 
     console.print(Panel.fit(
-        "[dim]Next step: [bold]helm open <ticker>[/bold] to evaluate a specific contract[/dim]",
+        "[dim]Next step: [bold]helm open <ticker>[/bold] to evaluate a specific contract[/dim]  ·  [dim]New? Run [bold]helm guide[/bold] to understand strategy assignments[/dim]",
         border_style="dim"
     ))
     console.print()

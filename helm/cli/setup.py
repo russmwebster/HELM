@@ -358,7 +358,8 @@ def run():
         f'[dim]Next steps:[/dim]\n'
         f'  [cyan]helm watchlist add AAPL[/cyan]   Add tickers to your universe\n'
         f'  [cyan]helm scan[/cyan]                  Scan for opportunities\n'
-        f'  [cyan]helm settings[/cyan]              View or adjust strategy rules',
+        f'  [cyan]helm settings[/cyan]              View or adjust strategy rules
+  [cyan]helm guide[/cyan]                 Understand how HELM selects strategies',
         border_style='green',
         title='Setup Complete'
     ))
