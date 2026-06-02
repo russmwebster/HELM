@@ -69,10 +69,10 @@ STRATEGY_CONFIG = {
     "LONG_CALL": {
         "option_type": "CALL",
         "direction": "LONG",
-        "delta_min": 0.30,
+        "delta_min": 0.40,   # industry standard: ATM/slightly ITM for better R/R
         "delta_max": 0.70,
-        "delta_sweet": (0.40, 0.60),
-        "dte_min": 30,
+        "delta_sweet": (0.45, 0.60),
+        "dte_min": 60,       # minimum 60 DTE to give move time to develop
         "dte_max": 90,
         "label": "Long Call",
     },
@@ -1503,6 +1503,7 @@ def evaluate_spreads(ticker: str, strategy: str, config: dict,
                     spread_pct_long = round((long_data["ask"]-long_data["bid"]) / mid_long * 100, 1) if mid_long > 0 else None
 
                     # Score: favor good R/R, tight spreads, adequate OI
+                    if credit_to_width < 20: continue  # min 20% credit/width
                     score = 0.0
                     d_lo, d_hi = delta_sweet
                     if d_lo <= delta <= d_hi: score += 30
@@ -1623,6 +1624,10 @@ def run():
 
     console.print(f"Fetching options chain for [bold]{ticker}[/bold]...")
 
+    if strategy == "SHORT_STRANGLE":
+        console.print()
+        console.print("  [yellow]⚠  SHORT_STRANGLE requires naked options approval (Level 3+) and margin account.[/yellow]")
+        console.print()
     # Show IVR context before fetching chain
     from helm.models.iv_history import IVHistory
     _ivr_open = IVHistory.latest(ticker)
