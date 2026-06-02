@@ -190,6 +190,31 @@ def match_positions(helm_positions: list, fidelity_positions: list) -> dict:
     return {"matched": matched, "helm_only": helm_only, "fidelity_only": fidelity_only}
 
 
+def parse_fidelity_cash(filepath):
+    cash = {}
+    try:
+        import csv
+        with open(filepath, encoding="utf-8-sig") as f:
+            for row in csv.DictReader(f):
+                if "SPAXX" not in row.get("Symbol",""):
+                    continue
+                an = row.get("Account Number","").strip()
+                nm = row.get("Account Name","").strip()
+                vs = row.get("Current Value","").replace("$","").replace(",","").strip()
+                try: v = float(vs)
+                except: continue
+                if an not in cash: cash[an] = {"name":nm, "cash":0.0}
+                cash[an]["cash"] += v
+    except: pass
+    return cash
+
+
+def get_csp_collateral():
+    from helm.db import get_conn
+    rows = get_conn().execute("SELECT l.strike, l.contracts FROM legs l JOIN positions p ON l.position_id=p.id WHERE p.status='OPEN' AND p.strategy IN ('CSP','COVERED_CALL') AND l.direction='SHORT' AND l.option_type='PUT'").fetchall()
+    return sum(r['strike']*r['contracts']*100 for r in rows)
+
+
 def run():
     args = sys.argv[1:]
 
@@ -311,6 +336,21 @@ def run():
             border_style="yellow" if (helm_only or fid_only) else "green",
             title="Reconcile Summary"
         ))
+    _cd = parse_fidelity_cash(str(filepath))
+    if _cd:
+        _col = get_csp_collateral()
+        _tc = sum(a['cash'] for a in _cd.values())
+        _nd = _tc - _col
+        from rich.table import Table as _T; from rich import box as _bx
+        _t = _T(box=_bx.SIMPLE, show_header=False, padding=(0,1))
+        _t.add_column('', style='dim', width=34); _t.add_column('', justify='right', width=14)
+        for _an, _av in sorted(_cd.items()):
+            _t.add_row(f"{_av['name']} ({_an})", f"[green]${_av['cash']:,.0f}[/green]")
+        _t.add_row('─'*32, '─'*12)
+        _t.add_row('[bold]Total cash[/bold]', f'[bold green]${_tc:,.0f}[/bold green]')
+        _t.add_row('CSP collateral committed', f'[yellow]-${_col:,.0f}[/yellow]')
+        _t.add_row('[bold]Net deployable[/bold]', f'[bold cyan]${_nd:,.0f}[/bold cyan]')
+        console.print(); console.print(Panel(_t, title='[bold]Available Capital[/bold]', border_style='green')); console.print()
     console.print()
 
     try:
