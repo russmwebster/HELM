@@ -271,9 +271,9 @@ def fetch_technicals(ticker: str) -> dict:
         # IVR signal injection
         _ivr = result.get("iv_rank")
         if _ivr is not None:
-            if strategy in ("CSP", "SHORT_STRANGLE", "IRON_CONDOR") and _ivr < 25:
+            if strategy in ("CSP", "IRON_CONDOR") and _ivr < 25:
                 result["bias_factors"].insert(0, f"⚠ Low IVR {_ivr:.0f} — selling into cheap IV")
-            elif strategy in ("CSP", "SHORT_STRANGLE", "IRON_CONDOR") and _ivr >= 50:
+            elif strategy in ("CSP", "IRON_CONDOR") and _ivr >= 50:
                 result["bias_factors"].insert(0, f"✓ IVR {_ivr:.0f} — elevated, good premium")
             elif strategy == "LONG_CALL" and _ivr <= 25:
                 result["bias_factors"].insert(0, f"✓ IVR {_ivr:.0f} — low IV, cheap options")
@@ -410,7 +410,7 @@ def run():
 
     strategy_colors = {
         "CSP": "green", "BULL_PUT_SPREAD": "cyan",
-        "SHORT_STRANGLE": "magenta", "IRON_CONDOR": "blue",
+        "IRON_CONDOR": "blue",
         "BEAR_CALL_SPREAD": "red", "LONG_CALL": "yellow", "DIAGONAL": "cyan",
     }
 

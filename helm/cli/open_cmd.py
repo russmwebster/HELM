@@ -110,7 +110,7 @@ STRATEGY_CONFIG = {
         "is_spread": True,
         "spread_widths": [5, 10, 15, 20, 25],
     },
-    "SHORT_STRANGLE": {
+    "IRON_CONDOR": {
         "option_type": "BOTH",
         "direction": "SHORT",
         "delta_min": 0.15,
@@ -118,7 +118,7 @@ STRATEGY_CONFIG = {
         "delta_sweet": (0.20, 0.30),
         "dte_min": 21,
         "dte_max": 56,
-        "label": "Short Strangle",
+        "label": "Iron Condor",
         "is_strangle": True,
     },
     "IRON_CONDOR": {
@@ -334,7 +334,7 @@ def suggest_contracts(strategy: str, strike: float, mid: float,
 
         if strategy in ("LONG_CALL", "LONG_PUT"):
             max_contracts = int(LONG_OPTION_TARGET / (mid * 100)) if mid > 0 else 1
-        elif strategy in ("CSP", "SHORT_STRANGLE"):
+        elif strategy in ("CSP", "IRON_CONDOR"):
             # CSP: max collateral = strike * 100 * contracts
             max_risk = portfolio_value * risk_pct
             max_contracts = int(max_risk / (strike * 100))
@@ -1087,7 +1087,7 @@ def display_condors(ticker: str, strategy: str, config: dict, condors: list,
 def evaluate_strangles(ticker: str, strategy: str, config: dict,
                        dte_target: int = None, top_n: int = 6) -> list:
     """
-    Evaluate short strangle contracts.
+    Evaluate iron condor contracts.
     Finds best OTM put + OTM call pair for the same expiration.
     Returns list of strangle dicts sorted by score.
     """
@@ -1262,7 +1262,7 @@ def evaluate_strangles(ticker: str, strategy: str, config: dict,
 
 def display_strangles(ticker: str, strategy: str, config: dict, strangles: list,
                       spot: float, atr: float, account_id: str, args: list):
-    """Display short strangle evaluation results."""
+    """Display iron condor evaluation results."""
 
     console.print()
     if spot:
@@ -1324,7 +1324,7 @@ def display_strangles(ticker: str, strategy: str, config: dict, strangles: list,
             f"[bold]{suggested}[/bold]",
         )
 
-    console.print(f"[bold]Top {len(strangles)} strangles — {ticker} Short Strangle[/bold]")
+    console.print(f"[bold]Top {len(strangles)} strangles — {ticker} Iron Condor[/bold]")
     console.print()
     console.print(t)
     console.print()
@@ -1347,7 +1347,7 @@ def display_strangles(ticker: str, strategy: str, config: dict, strangles: list,
     total_credit = round(best["net_credit"] * 100 * suggested_best, 0)
 
     console.print(Panel(
-        f"[bold green]Top pick:[/bold green] {ticker} Short Strangle "
+        f"[bold green]Top pick:[/bold green] {ticker} Iron Condor "
         f"{best['expiration']} ({best['dte']}d)\n"
         f"  Sell PUT  ${best['put_strike']:.0f} @ ${best['put_mid']:.2f}  "
         f"(Δ {best['put_delta']:.3f})\n"
@@ -1359,7 +1359,7 @@ def display_strangles(ticker: str, strategy: str, config: dict, strangles: list,
         f"${best['call_strike']+best['net_credit']:.2f}\n\n"
         f"  Suggested: [bold]{suggested_best} contract(s)[/bold]  |  "
         f"Collect: [green]${total_credit:.0f}[/green]\n\n"
-        f"[dim]To open: [bold]helm open {ticker} SHORT_STRANGLE --confirm[/bold][/dim]",
+        f"[dim]To open: [bold]helm open {ticker} IRON_CONDOR --confirm[/bold][/dim]",
         title="Recommendation",
         border_style="green"
     ))
