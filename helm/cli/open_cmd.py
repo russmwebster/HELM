@@ -408,7 +408,7 @@ def evaluate_contracts(ticker: str, strategy: str, config: dict,
 
                 if bid is None or ask is None or bid <= 0 or ask <= 0:
                     continue
-                if oi < 50:
+                if oi < 1000:
                     continue
 
                 mid = (float(bid) + float(ask)) / 2
@@ -1141,7 +1141,7 @@ def evaluate_strangles(ticker: str, strategy: str, config: dict,
                     if float(bid) <= 0 or float(ask) <= 0:
                         continue
                     oi = int(row.get("openInterest", 0) or 0)
-                    if oi < 50:
+                    if oi < 1000:
                         continue
                     mid = (float(bid) + float(ask)) / 2
                     iv  = row.get("impliedVolatility", None)
@@ -1441,7 +1441,7 @@ def evaluate_spreads(ticker: str, strategy: str, config: dict,
                 if bid <= 0 or ask <= 0:
                     continue
                 oi = int(row.get("openInterest", 0) or 0)
-                if oi < 50:
+                if oi < 1000:
                     continue
 
                 mid_short = (float(bid) + float(ask)) / 2
