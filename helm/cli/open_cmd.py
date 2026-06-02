@@ -110,6 +110,44 @@ STRATEGY_CONFIG = {
         "is_spread": True,
         "spread_widths": [5, 10, 15, 20, 25],
     },
+    "BEAR_PUT_SPREAD": {
+        "option_type": "PUT",
+        "direction": "LONG",       # buy the higher strike put (debit)
+        "delta_min": 0.30,
+        "delta_max": 0.60,
+        "delta_sweet": (0.40, 0.55),
+        "dte_min": 30,
+        "dte_max": 90,
+        "dte_sweet": 60,
+        "label": "Bear Put Spread",
+        "is_debit_spread": True,
+        "spread_widths": [5, 10, 15, 20, 25],
+    },
+    "LONG_STRADDLE": {
+        "option_type": "BOTH",     # buy ATM call + ATM put
+        "direction": "LONG",
+        "delta_min": 0.40,
+        "delta_max": 0.60,
+        "delta_sweet": 0.50,
+        "dte_min": 30,
+        "dte_max": 90,
+        "dte_sweet": 45,
+        "label": "Long Straddle",
+        "is_straddle": True,
+    },
+    "BULL_CALL_SPREAD": {
+        "option_type": "CALL",
+        "direction": "LONG",       # buy the lower strike call (debit)
+        "delta_min": 0.30,
+        "delta_max": 0.60,
+        "delta_sweet": (0.40, 0.55),
+        "dte_min": 30,
+        "dte_max": 90,
+        "dte_sweet": 60,
+        "label": "Bull Call Spread",
+        "is_debit_spread": True,
+        "spread_widths": [5, 10, 15, 20, 25],
+    },
     "IRON_CONDOR": {
         "option_type": "BOTH",
         "direction": "SHORT",
@@ -1553,6 +1591,226 @@ def evaluate_spreads(ticker: str, strategy: str, config: dict,
     return spreads[:top_n]
 
 
+
+def evaluate_straddles(ticker, strategy, config, dte_target=None, top_n=5):
+    import yfinance as yf
+    from datetime import date, datetime
+    tk = yf.Ticker(ticker)
+    spot = tk.fast_info.get('last_price') or tk.fast_info.get('previous_close', 0)
+    if not spot: return []
+    dte_min = config.get('dte_min', 30)
+    dte_max = config.get('dte_max', 90)
+    dte_sweet = config.get('dte_sweet', 45)
+    today = date.today()
+    results = []
+    for exp in tk.options:
+        d = datetime.strptime(exp, '%Y-%m-%d').date()
+        dte = (d - today).days
+        if not (dte_min <= dte <= dte_max): continue
+        if dte_target and abs(dte - dte_target) > 10: continue
+        try:
+            chain = tk.option_chain(exp)
+        except Exception:
+            continue
+        calls = chain.calls[chain.calls['bid'] > 0].copy()
+        puts  = chain.puts[chain.puts['bid'] > 0].copy()
+        if calls.empty or puts.empty: continue
+        calls['spot_dist'] = abs(calls['strike'] - spot)
+        for _, call_row in calls.nsmallest(3, 'spot_dist').iterrows():
+            strike = call_row['strike']
+            pm = puts[puts['strike'] == strike]
+            if pm.empty: continue
+            put_row = pm.iloc[0]
+            call_mid = (call_row['bid'] + call_row['ask']) / 2
+            put_mid  = (put_row['bid']  + put_row['ask'])  / 2
+            total_debit = round(call_mid + put_mid, 2)
+            call_oi = int(call_row.get('openInterest', 0) or 0)
+            put_oi  = int(put_row.get('openInterest', 0)  or 0)
+            if min(call_oi, put_oi) < 500: continue
+            call_sp = (call_row['ask'] - call_row['bid']) / call_mid * 100 if call_mid > 0 else 99
+            put_sp  = (put_row['ask']  - put_row['bid'])  / put_mid  * 100 if put_mid  > 0 else 99
+            if max(call_sp, put_sp) > 25: continue
+            score = 50.0 - abs(strike - spot) / spot * 50
+            score += max(0, 10 - max(call_sp, put_sp)) - abs(dte - dte_sweet) * 0.2
+            score += min(10, min(call_oi, put_oi) / 500)
+            results.append({'exp': exp, 'dte': dte, 'strike': strike,
+                'call_mid': call_mid, 'put_mid': put_mid, 'total_debit': total_debit,
+                'call_oi': call_oi, 'put_oi': put_oi,
+                'be_down': round(strike - total_debit, 2),
+                'be_up':   round(strike + total_debit, 2),
+                'pct_move_needed': round(total_debit / spot * 100, 1),
+                'score': round(score, 1)})
+    return sorted(results, key=lambda x: -x['score'])[:top_n]
+
+def display_straddles(ticker, strategy, config, straddles, spot, atr, account_id, args):
+    from rich.table import Table
+    from rich import box as _box
+    console.print()
+    console.print(Panel.fit(
+        f'[bold]HELM Open -- {ticker} Long Straddle[/bold]\n'
+        f'[dim]Buy ATM call + put | DTE {config["dte_min"]}-{config["dte_max"]} | Data: IBKR live[/dim]',
+        border_style='cyan'))
+    console.print()
+    try:
+        from helm.models.iv_history import IVHistory
+        ivr_data = IVHistory.for_tickers([ticker]).get(ticker, {})
+        ivr_val = ivr_data.get('iv_rank') if ivr_data else None
+        if ivr_val is not None:
+            if ivr_val > 40:
+                console.print(f'  [yellow]Warning IVR {ivr_val:.0f} -- elevated. Best at IVR < 35.[/yellow]')
+            else:
+                console.print(f'  [green]IVR {ivr_val:.0f} -- cheap. Good straddle entry.[/green]')
+            console.print()
+    except Exception:
+        pass
+    if atr:
+        console.print(f'  Spot: ${spot:,.2f}  ATR(14): ${atr:.2f}')
+        console.print()
+    tbl = Table(box=_box.SIMPLE, show_header=True, header_style='bold dim')
+    for col, w in [('Rank',5),('Exp',10),('DTE',5),('Strike',8),('Call Mid',9),('Put Mid',9),('Total Cost',11),('Min OI',8),('Break-evens',22),('Move Needed',12),('Score',7)]:
+        tbl.add_column(col, justify='right' if col not in ('Rank','Exp','Break-evens') else 'left', width=w)
+    for i, s in enumerate(straddles, 1):
+        tbl.add_row(f'#{i}', s['exp'], str(s['dte']), f'${s["strike"]:.1f}',
+            f'${s["call_mid"]:.2f}', f'${s["put_mid"]:.2f}', f'${s["total_debit"]:.2f}',
+            f'{min(s["call_oi"],s["put_oi"]):,}', f'${s["be_down"]:.2f} / ${s["be_up"]:.2f}',
+            f'{s["pct_move_needed"]:.1f}%', str(s['score']))
+    console.print(f'Top {len(straddles)} straddles -- {ticker} Long Straddle')
+    console.print()
+    console.print(tbl)
+    console.print()
+    best = straddles[0]
+    contracts = suggest_contracts(strategy, best['strike'], best['total_debit'], account_id, ticker=ticker)
+    total_cost = round(best['total_debit'] * contracts * 100, 2)
+    console.print(Panel(
+        f'[bold green]Top pick:[/bold green] {ticker} Straddle ${best["strike"]:.1f} {best["exp"]} ({best["dte"]}d)\n'
+        f'  Buy CALL ${best["strike"]:.1f} @ ${best["call_mid"]:.2f}  |  Buy PUT ${best["strike"]:.1f} @ ${best["put_mid"]:.2f}\n'
+        f'  Total debit: ${best["total_debit"]:.2f}/contract  |  Break-evens: ${best["be_down"]:.2f} / ${best["be_up"]:.2f}\n'
+        f'  Move needed: {best["pct_move_needed"]:.1f}% in either direction\n\n'
+        f'  Suggested: {contracts} contract(s)  |  Total cost: ${total_cost:,.0f}\n\n'
+        f'[dim]To open: [bold]helm open {ticker} LONG_STRADDLE --confirm[/bold][/dim]',
+        title='Recommendation', border_style='green'))
+    console.print()
+
+
+
+def evaluate_debit_spreads(ticker, strategy, config, dte_target=None, top_n=5):
+    import yfinance as yf
+    from datetime import date, datetime
+    is_bear = strategy == 'BEAR_PUT_SPREAD'
+    tk = yf.Ticker(ticker)
+    spot = tk.fast_info.get('last_price') or tk.fast_info.get('previous_close', 0)
+    if not spot: return []
+    dte_min = config.get('dte_min', 30)
+    dte_max = config.get('dte_max', 90)
+    dte_sweet = config.get('dte_sweet', 60)
+    widths = config.get('spread_widths', [5, 10, 15, 20, 25])
+    today = date.today()
+    results = []
+    for exp in tk.options:
+        d = datetime.strptime(exp, '%Y-%m-%d').date()
+        dte = (d - today).days
+        if not (dte_min <= dte <= dte_max): continue
+        if dte_target and abs(dte - dte_target) > 10: continue
+        try:
+            chain = tk.option_chain(exp)
+            opts = chain.puts if is_bear else chain.calls
+        except Exception:
+            continue
+        opts = opts[opts['bid'] > 0].copy()
+        if opts.empty: continue
+        for _, long_row in opts.iterrows():
+            long_strike = long_row['strike']
+            sp = long_strike / spot
+            if is_bear:
+                if not (0.88 <= sp <= 1.02): continue
+            else:
+                if not (0.98 <= sp <= 1.12): continue
+            long_mid = (long_row['bid'] + long_row['ask']) / 2
+            long_oi = int(long_row.get('openInterest', 0) or 0)
+            if long_oi < 500 or long_mid <= 0: continue
+            for width in widths:
+                short_strike = long_strike - width if is_bear else long_strike + width
+                sm = opts[opts['strike'] == short_strike]
+                if sm.empty: continue
+                short_row = sm.iloc[0]
+                short_mid = (short_row['bid'] + short_row['ask']) / 2
+                short_oi = int(short_row.get('openInterest', 0) or 0)
+                if short_oi < 500 or short_mid <= 0: continue
+                net_debit = round(long_mid - short_mid, 2)
+                if net_debit <= 0: continue
+                max_profit = round(width - net_debit, 2)
+                if max_profit <= 0: continue
+                dtw = round(net_debit / width * 100, 1)
+                rr = round(max_profit / net_debit, 2)
+                lsp = (long_row['ask'] - long_row['bid']) / long_mid * 100
+                ssp = (short_row['ask'] - short_row['bid']) / short_mid * 100
+                if max(lsp, ssp) > 30: continue
+                score = 0.0
+                if dtw <= 40: score += 20
+                elif dtw <= 50: score += 12
+                else: score += 5
+                if rr >= 1.5: score += 20
+                elif rr >= 1.0: score += 12
+                if min(long_oi, short_oi) >= 1000: score += 15
+                elif min(long_oi, short_oi) >= 500: score += 8
+                score -= abs(dte - dte_sweet) * 0.2
+                results.append({'exp': exp, 'dte': dte, 'long_strike': long_strike,
+                    'short_strike': short_strike, 'width': width, 'long_mid': long_mid,
+                    'short_mid': short_mid, 'net_debit': net_debit, 'max_profit': max_profit,
+                    'debit_to_width_pct': dtw, 'rr': rr,
+                    'long_oi': long_oi, 'short_oi': short_oi, 'score': round(score, 1)})
+    return sorted(results, key=lambda x: -x['score'])[:top_n]
+
+def display_debit_spreads(ticker, strategy, config, spreads, spot, atr, account_id, args):
+    from rich.table import Table
+    from rich import box as _box
+    is_bear  = strategy == 'BEAR_PUT_SPREAD'
+    label    = config.get('label', strategy)
+    leg_type = 'PUT' if is_bear else 'CALL'
+    console.print()
+    console.print(Panel.fit(
+        f'[bold]HELM Open -- {ticker} {label}[/bold]\n'
+        f'[dim]Debit spread | DTE {config["dte_min"]}-{config["dte_max"]} | Data: IBKR live[/dim]',
+        border_style='cyan'))
+    console.print()
+    if atr:
+        s1 = round(spot - atr, 2)
+        s2 = round(spot - 2*atr, 2)
+        console.print(f'  Spot: ${spot:,.2f}  ATR(14): ${atr:.2f}  -- 1-ATR: ${s1:,.2f}  2-ATR: ${s2:,.2f}')
+        console.print()
+    tbl = Table(box=_box.SIMPLE, show_header=True, header_style='bold dim')
+    for col, w, just in [('Rank',5,'left'),('Exp',10,'left'),('DTE',5,'right'),
+        ('Long',8,'right'),('Short',8,'right'),('Width',6,'right'),
+        ('Debit',8,'right'),('Max Profit',10,'right'),('D/W%',6,'right'),
+        ('R/R',6,'right'),('OI',7,'right'),('Score',7,'right')]:
+        tbl.add_column(col, justify=just, width=w)
+    for i, s in enumerate(spreads, 1):
+        tbl.add_row(f'#{i}', s['exp'], str(s['dte']),
+            f'${s["long_strike"]:.0f}', f'${s["short_strike"]:.0f}', f'${s["width"]}',
+            f'${s["net_debit"]:.2f}', f'${s["max_profit"]:.2f}',
+            f'{s["debit_to_width_pct"]:.0f}%', str(s['rr']),
+            f'{min(s["long_oi"],s["short_oi"]):,}', str(s['score']))
+    console.print(f'Top {len(spreads)} spreads -- {ticker} {label}')
+    console.print()
+    console.print(tbl)
+    console.print()
+    best = spreads[0]
+    contracts = suggest_contracts(strategy, best['long_strike'], best['net_debit'], account_id, ticker=ticker)
+    total_cost = round(best['net_debit'] * contracts * 100, 2)
+    console.print(Panel(
+        f'[bold green]Top pick:[/bold green] {ticker} {label} '
+        f'${best["long_strike"]:.0f}/${best["short_strike"]:.0f} {best["exp"]} ({best["dte"]}d)\n'
+        f'  Buy  {leg_type} ${best["long_strike"]:.0f} @ ${best["long_mid"]:.2f}  |  '
+        f'Sell {leg_type} ${best["short_strike"]:.0f} @ ${best["short_mid"]:.2f}\n'
+        f'  Net debit: ${best["net_debit"]:.2f}/contract  |  '
+        f'Max profit: ${best["max_profit"]:.2f}/contract  |  Width: ${best["width"]}\n'
+        f'  Debit/width: {best["debit_to_width_pct"]:.0f}%  |  R/R: {best["rr"]}\n\n'
+        f'  Suggested: {contracts} contract(s)  |  Total cost: ${total_cost:,.0f}\n\n'
+        f'[dim]To open: [bold]helm open {ticker} {strategy} --confirm[/bold][/dim]',
+        title='Recommendation', border_style='green'))
+    console.print()
+
+
 def run():
     args = sys.argv[1:]
 
@@ -1660,11 +1918,13 @@ def run():
     except Exception:
         pass
 
-    is_spread   = config.get("is_spread", False)
-    is_strangle = config.get("is_strangle", False)
-    is_condor   = config.get("is_condor", False)
-    is_diagonal = config.get("is_diagonal", False)
+    is_spread       = config.get("is_spread", False)
+    is_strangle     = config.get("is_strangle", False)
+    is_condor       = config.get("is_condor", False)
+    is_diagonal     = config.get("is_diagonal", False)
     is_diagonal_put = config.get("is_diagonal_put", False)
+    is_debit_spread = config.get("is_debit_spread", False)
+    is_straddle     = config.get("is_straddle", False)
 
     if is_diagonal:
         try:
@@ -1714,6 +1974,32 @@ def run():
             return
 
         display_strangles(ticker, strategy, config, strangles, spot, atr, account_id, args)
+        return
+
+    if is_straddle:
+        try:
+            straddles = evaluate_straddles(ticker, strategy, config, dte_target, top_n)
+        except Exception as e:
+            console.print(f"[red]Error:[/red] {e}")
+            return
+        if not straddles:
+            console.print(f"[yellow]No straddle contracts found matching criteria.[/yellow]")
+            console.print(f"[dim]Try --dte with a different target, or check IVR (low IVR preferred).[/dim]")
+            return
+        display_straddles(ticker, strategy, config, straddles, spot, atr, account_id, args)
+        return
+
+    if is_debit_spread:
+        try:
+            debit_spreads = evaluate_debit_spreads(ticker, strategy, config, dte_target, top_n)
+        except Exception as e:
+            console.print(f"[red]Error:[/red] {e}")
+            return
+        if not debit_spreads:
+            console.print(f"[yellow]No contracts found matching criteria.[/yellow]")
+            console.print(f"[dim]Try --dte with a different target, or check helm screen output.[/dim]")
+            return
+        display_debit_spreads(ticker, strategy, config, debit_spreads, spot, atr, account_id, args)
         return
 
     if is_spread:
