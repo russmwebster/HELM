@@ -51,6 +51,45 @@ console = Console()
 
 # ── Strategy mapping ──────────────────────────────────────────────────────────
 
+
+def compute_conviction(score: int, ivr=None) -> str:
+    """
+    Compute conviction level for a strategy recommendation.
+
+    Conviction emerges from two axes:
+      - Score magnitude: how strong is the directional signal
+      - IVR distance from 50: how clearly is IV in buy or sell territory
+
+    High:     strong direction (abs >= 2) + IV clearly actionable (distance >= 15)
+    Moderate: either moderate direction (abs=1) + clear IV, or strong direction + mild IV
+    Low:      no direction (score=0), or both signal dimensions weak
+
+    Returns: 'High', 'Moderate', or 'Low'
+    """
+    if score == 0:
+        return 'Low'
+
+    abs_score = abs(score)
+    ivr_val = float(ivr) if ivr is not None else None
+    ivr_distance = abs(ivr_val - 50) if ivr_val is not None else None
+
+    if abs_score >= 2:
+        if ivr_distance is None:
+            return 'Moderate'   # strong score, unknown IV
+        if ivr_distance >= 15:
+            return 'High'       # strong score + clearly actionable IV
+        return 'Moderate'       # strong score + mild IV advantage
+
+    elif abs_score == 1:
+        if ivr_distance is None:
+            return 'Low'
+        if ivr_distance >= 20:
+            return 'Moderate'   # mild score but clear IV environment
+        return 'Low'            # mild score + weak IV edge
+
+    return 'Low'
+
+
 def bias_to_strategy(score: int, iv_pct, rsi=None, ivr=None):
     """
     Map directional bias + IV environment to best strategy.
@@ -95,15 +134,21 @@ def bias_to_strategy(score: int, iv_pct, rsi=None, ivr=None):
     elif score == 0:
         if ivr_rich or (ivr_unknown and iv_high):
             return 'IRON_CONDOR', 'Neutral + elevated IVR — iron condor (IRA-safe defined risk)'
+        if ivr_cheap or (ivr_unknown and iv_low):
+            return 'LONG_STRADDLE', 'Neutral + low IVR — buy cheap volatility on both sides'
         return 'IRON_CONDOR', 'Neutral, moderate IV — defined risk condor'
 
     elif score == -1:
         if ivr_rich or (ivr_unknown and iv_high):
-            return 'BEAR_CALL_SPREAD', 'Mildly bearish + elevated IV — defined risk spread'
-        return 'IRON_CONDOR', 'Mildly bearish — iron condor for range-bound move'
+            return 'BEAR_CALL_SPREAD', 'Mildly bearish + elevated IVR — bear call credit spread'
+        if ivr_cheap or (ivr_unknown and iv_low):
+            return 'BEAR_PUT_SPREAD', 'Mildly bearish + low IVR — buy cheap puts via debit spread'
+        return 'IRON_CONDOR', 'Mildly bearish, moderate IV — iron condor for range-bound move'
 
-    else:
-        return 'BEAR_CALL_SPREAD', 'Bearish bias — bear call spread'
+    else:  # score <= -2, Bearish
+        if ivr_rich or (ivr_unknown and iv_high):
+            return 'BEAR_CALL_SPREAD', 'Bearish + elevated IVR — bear call credit spread'
+        return 'BEAR_PUT_SPREAD', 'Bearish + low IVR — buy cheap puts via debit spread'
 
 
 def score_label(score: int) -> str:
@@ -140,6 +185,7 @@ def fetch_technicals(ticker: str) -> dict:
         "bias_factors": [],
         "strategy": None,
         "strategy_rationale": None,
+        "conviction": None,
         "atr_strikes": None,  # suggested strike range based on ATR
         "error": None,
     }
@@ -265,6 +311,8 @@ def fetch_technicals(ticker: str) -> dict:
         result["bias_factors"] = factors
 
         strategy, rationale = bias_to_strategy(result["bias_score"], iv, rsi=result.get("rsi"), ivr=result.get("iv_rank"))
+        conviction = compute_conviction(result["bias_score"], result.get("iv_rank"))
+        result["conviction"] = conviction
         result["strategy"] = strategy
         result["strategy_rationale"] = rationale
 
@@ -399,6 +447,7 @@ def run():
     t.add_column("Price",    justify="right", width=8, no_wrap=True)
     t.add_column("Bias",     width=16, no_wrap=True)
     t.add_column("Strategy", width=16, no_wrap=True)
+    t.add_column("Conviction",  width=10, no_wrap=True)
     t.add_column("RSI",      justify="right", width=5, no_wrap=True)
     t.add_column("IV%",      justify="right", width=5, no_wrap=True)
     t.add_column("IVR",      justify="right", width=5, no_wrap=True)
@@ -411,7 +460,7 @@ def run():
     strategy_colors = {
         "CSP": "green", "BULL_PUT_SPREAD": "cyan",
         "IRON_CONDOR": "blue",
-        "BEAR_CALL_SPREAD": "red", "LONG_CALL": "yellow", "DIAGONAL": "cyan",
+        "BEAR_CALL_SPREAD": "red", "LONG_CALL": "yellow", "DIAGONAL": "cyan", "LONG_STRADDLE": "magenta", "BEAR_PUT_SPREAD": "red",
     }
 
     from helm.models.iv_history import IVHistory
@@ -434,8 +483,11 @@ def run():
         ivp_str = _ivr.percentile_label if _ivr else "[dim]--[/dim]"
         top_factor = res["bias_factors"][0] if res.get("bias_factors") else "--"
         price = f"${res['price']:.2f}" if res.get("price") else "--"
+        _conv = res.get("conviction", "Low")
+        _cc = {"High": "green", "Moderate": "yellow", "Low": "dim"}.get(_conv, "dim")
+        conv_str = f"[{_cc}]{_conv}[/{_cc}]"
 
-        t.add_row(res["ticker"], price, bias_str, strat_str,
+        t.add_row(res["ticker"], price, bias_str, strat_str, conv_str,
                   rsi, iv, ivr_str, ivp_str, atr, s1, s2, top_factor)
 
     console.print(f"[bold]Scan Results — {len(valid)} candidates[/bold]")
