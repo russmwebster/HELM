@@ -64,9 +64,11 @@ def cmd_overview(args):
                MIN(p.opened_at) as opened_at, p.closed_at,
                p.total_contracts, p.net_premium,
                e.iv_rank as entry_ivr, e.delta as entry_delta,
-               e.dte as entry_dte, e.spot_price as entry_spot
+               e.dte as entry_dte, e.spot_price as entry_spot,
+               MAX(l.strike) as leg_strike, SUM(l.contracts) as leg_contracts
         FROM positions p
         LEFT JOIN entry_snapshots e ON p.id = e.position_id
+        LEFT JOIN legs l ON l.position_id = p.id AND l.direction = 'SHORT'
         WHERE p.status IN ('CLOSED', 'EXPIRED', 'ASSIGNED', 'ROLLED_OUT')
         GROUP BY p.ticker, p.strategy, p.closed_at
         ORDER BY p.closed_at DESC
@@ -105,6 +107,8 @@ def cmd_overview(args):
     tbl.add_column("Avg days", justify="right", width=9)
     tbl.add_column("Avg IVR entry", justify="right", width=13)
     tbl.add_column("Avg delta entry", justify="right", width=15)
+    tbl.add_column("Ann. Return", justify="right", width=12)
+    tbl.add_column("Efficiency", justify="right", width=11)
 
     totals_pnl = 0
     totals_wins = 0
@@ -128,6 +132,29 @@ def cmd_overview(args):
         totals_n += n
 
         win_color = "green" if win_pct >= 60 else ("yellow" if win_pct >= 40 else "red")
+        # Annualized return and efficiency
+        _ann_str, _eff_str = "--", "--"
+        _ann_color, _eff_color = "dim", "dim"
+        if avg_days and avg_days > 0 and n > 0:
+            _pcols = []
+            for _r in rows:
+                _rd = dict(_r)
+                _s = _rd.get("strategy", "")
+                _np = _rd.get("net_premium") or 0
+                _sk = _rd.get("leg_strike") or 0
+                _lc = _rd.get("leg_contracts") or 1
+                if _s in ("CSP", "COVERED_CALL", "BULL_PUT_SPREAD") and _sk:
+                    _pcols.append(_sk * _lc * 100)
+                elif _np:
+                    _pcols.append(abs(_np))
+            _ac = sum(_pcols) / len(_pcols) if _pcols else 0
+            if _ac > 0:
+                _av = (total_pnl / n / _ac) * (365.0 / avg_days)
+                _ev = (total_pnl / sum(abs(dict(_r).get("net_premium") or 1) for _r in rows)) * 100
+                _ann_str = f"{_av*100:.0f}%"
+                _eff_str = f"{_ev:.0f}%"
+                _ann_color = "green" if _av >= 0 else "red"
+                _eff_color = "green" if _ev >= 0 else "red"
         tbl.add_row(
             strat,
             str(n),
@@ -137,6 +164,8 @@ def cmd_overview(args):
             f"{avg_days:.0f}d" if avg_days is not None else "--",
             _fmt_ivr(avg_ivr),
             f"{avg_delta:.2f}" if avg_delta else "[dim]--[/dim]",
+            f"[{_ann_color}]{_ann_str}[/{_ann_color}]",
+            f"[{_eff_color}]{_eff_str}[/{_eff_color}]",
         )
 
     console.print("[bold]Strategy Performance[/bold]")
