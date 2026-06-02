@@ -22,7 +22,7 @@ logging.getLogger("asyncio").setLevel(logging.CRITICAL)
 # ── Default connection settings ───────────────────────────────
 IBKR_HOST      = "127.0.0.1"
 IBKR_PORT      = 4002   # IB Gateway live (change to 4003 for paper)
-IBKR_CLIENT_ID = 10     # HELM client ID -- avoids conflict with COTS (uses 1)
+IBKR_CLIENT_ID = 11     # HELM client ID -- avoids conflict with COTS (uses 1) and stale 10
 IBKR_TIMEOUT   = 10     # seconds
 
 # Module-level connection cache
