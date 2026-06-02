@@ -94,7 +94,7 @@ def bias_to_strategy(score: int, iv_pct, rsi=None, ivr=None):
 
     elif score == 0:
         if ivr_rich or (ivr_unknown and iv_high):
-            return 'SHORT_STRANGLE', 'Neutral + elevated IVR — collect premium both sides'
+            return 'IRON_CONDOR', 'Neutral + elevated IVR — iron condor (IRA-safe defined risk)'
         return 'IRON_CONDOR', 'Neutral, moderate IV — defined risk condor'
 
     elif score == -1:

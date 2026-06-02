@@ -1624,10 +1624,6 @@ def run():
 
     console.print(f"Fetching options chain for [bold]{ticker}[/bold]...")
 
-    if strategy == "SHORT_STRANGLE":
-        console.print()
-        console.print("  [yellow]⚠  SHORT_STRANGLE requires naked options approval (Level 3+) and margin account.[/yellow]")
-        console.print()
     # Show IVR context before fetching chain
     from helm.models.iv_history import IVHistory
     _ivr_open = IVHistory.latest(ticker)
