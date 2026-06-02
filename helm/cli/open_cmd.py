@@ -408,7 +408,7 @@ def evaluate_contracts(ticker: str, strategy: str, config: dict,
 
                 if bid is None or ask is None or bid <= 0 or ask <= 0:
                     continue
-                if oi < 100:
+                if oi < 50:
                     continue
 
                 mid = (float(bid) + float(ask)) / 2
@@ -1141,7 +1141,7 @@ def evaluate_strangles(ticker: str, strategy: str, config: dict,
                     if float(bid) <= 0 or float(ask) <= 0:
                         continue
                     oi = int(row.get("openInterest", 0) or 0)
-                    if oi < 100:
+                    if oi < 50:
                         continue
                     mid = (float(bid) + float(ask)) / 2
                     iv  = row.get("impliedVolatility", None)
@@ -1441,7 +1441,7 @@ def evaluate_spreads(ticker: str, strategy: str, config: dict,
                 if bid <= 0 or ask <= 0:
                     continue
                 oi = int(row.get("openInterest", 0) or 0)
-                if oi < 100:
+                if oi < 50:
                     continue
 
                 mid_short = (float(bid) + float(ask)) / 2
@@ -1616,7 +1616,7 @@ def run():
         f"[bold cyan]HELM Open[/bold cyan] — {ticker} {config['label']}\n"
         f"[dim]Delta {config.get("delta_min", config.get("short_delta_min",0)):.2f}-{config.get("delta_max", config.get("short_delta_max",1)):.2f} | "
         f"DTE {dte_target or config.get("dte_min", config.get("short_dte_min",0))}-{dte_target or config.get("dte_max", config.get("short_dte_max",90))} | "
-        f"Spread threshold: 15% | Data: {data_source}[/dim]",
+        f"Spread threshold: 25% | Data: {data_source}[/dim]",
         border_style="cyan"
     ))
     console.print()
