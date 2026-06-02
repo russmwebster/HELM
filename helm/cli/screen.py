@@ -37,7 +37,7 @@ from helm.models.watchlist import WatchlistItem
 
 console = Console()
 
-DEFAULT_MIN_OI         = 500
+DEFAULT_MIN_OI         = 5_000
 DEFAULT_MAX_SPREAD_PCT = 15.0
 DEFAULT_MIN_VOLUME     = 500
 DEFAULT_WORKERS        = 8
@@ -47,7 +47,7 @@ EXPIRIES_TO_SCAN       = 4
 def oi_tier(total_oi):
     if total_oi >= 200_000: return "1", "[green]Tier 1[/green]"
     elif total_oi >= 50_000: return "2", "[cyan]Tier 2[/cyan]"
-    elif total_oi >= 500:   return "3", "[yellow]Tier 3[/yellow]"
+    elif total_oi >= 5_000:  return "3", "[yellow]Tier 3[/yellow]"
     else:                     return "X", "[red]Below min[/red]"
 
 
