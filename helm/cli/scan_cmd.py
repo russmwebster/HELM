@@ -267,7 +267,7 @@ def fetch_technicals(ticker: str) -> dict:
             if pct_52 <= 25:
                 score += 1; factors.append(f"Near 52wk low ({pct_52:.0f}% of range) — mean reversion")
             elif pct_52 >= 75:
-                score -= 1; factors.append(f"Near 52wk high ({pct_52:.0f}% of range)")
+                factors.append(f"Near 52wk high ({pct_52:.0f}% of range) — momentum")  # neutral, not bearish
 
         # IV context
         iv = result["iv_current"]
@@ -277,7 +277,9 @@ def fetch_technicals(ticker: str) -> dict:
             elif iv >= 35:
                 factors.append(f"IV {iv:.0f}% — elevated")
             elif iv < 20:
-                score -= 1; factors.append(f"IV {iv:.0f}% — low, premium selling less attractive")
+                if iv and iv > 1.0:  # only penalize if IV is real data (>1%)
+                    score -= 1; factors.append(f"IV {iv:.0f}% — low, premium selling less attractive")
+                # else: iv=0 is missing yfinance data, skip scoring
 
         result["bias_score"] = max(-3, min(3, score))
         result["bias_factors"] = factors
