@@ -25,7 +25,8 @@ from helm.db import get_conn
 console = Console()
 
 LOOKBACK_DAYS = 365
-SLEEP_BETWEEN = 0.3   # seconds between IBKR requests
+SLEEP_BETWEEN = 0.5   # seconds between batches
+BATCH_SIZE    = 12    # concurrent requests per batch
 
 
 # ── IBKR fetch ────────────────────────────────────────────────────────────────
@@ -68,6 +69,39 @@ def _fetch_iv_history(ib, ticker: str):
 
 
 # ── Refresh ───────────────────────────────────────────────────────────────────
+
+
+
+async def _fetch_iv_batch_async(ib, tickers: list) -> dict:
+    import pandas as pd
+    from ib_insync import Stock, util
+
+    async def _one(ticker):
+        contract = Stock(ticker, 'SMART', 'USD')
+        try:
+            bars = await ib.reqHistoricalDataAsync(
+                contract, endDateTime='', durationStr='1 Y',
+                barSizeSetting='1 day', whatToShow='OPTION_IMPLIED_VOLATILITY',
+                useRTH=True, formatDate=1, keepUpToDate=False,
+            )
+            if not bars: return ticker, None
+            df = util.df(bars)
+            if df is None or df.empty or 'close' not in df.columns: return ticker, None
+            iv = df['close'].dropna()
+            if len(iv) < 30: return ticker, None
+            if iv.max() <= 5: iv = iv * 100
+            return ticker, iv
+        except Exception:
+            return ticker, None
+
+    import asyncio
+    raw = await asyncio.gather(*[_one(t) for t in tickers], return_exceptions=True)
+    return {t: s for item in raw if not isinstance(item, Exception) for t, s in [item]}
+
+
+def _chunks(lst, n):
+    for i in range(0, len(lst), n):
+        yield lst[i:i+n]
 
 def cmd_refresh(args: list) -> None:
     """Fetch IV history from IBKR and compute IVR/IVP for watchlist tickers."""
@@ -118,7 +152,9 @@ def cmd_refresh(args: list) -> None:
 
     today = date.today().isoformat()
     results = {'ok': 0, 'fail': 0, 'skip': 0}
+    results = {'ok': 0, 'fail': 0, 'skip': 0}
     failures = []
+    batches = list(_chunks(tickers, BATCH_SIZE))
 
     with Progress(
         SpinnerColumn(),
@@ -129,21 +165,26 @@ def cmd_refresh(args: list) -> None:
     ) as progress:
         task = progress.add_task(f"Fetching IV data...", total=len(tickers))
 
-        for ticker in tickers:
-            progress.update(task, description=f"[cyan]{ticker:<8}[/cyan] fetching...")
+        for batch_num, batch in enumerate(batches, 1):
+            preview = ', '.join(batch[:4]) + ('...' if len(batch) > 4 else '')
+            progress.update(task,
+                description=f"[cyan]Batch {batch_num}/{len(batches)}[/cyan] [{preview}]")
 
-            iv_series = _fetch_iv_history(ib, ticker)
+            batch_results = ib.run(_fetch_iv_batch_async(ib, batch))
 
-            if iv_series is None:
-                failures.append(ticker)
-                results['fail'] += 1
-            else:
-                computed = IVHistory.compute(iv_series)
-                IVHistory.upsert(ticker, computed, as_of_date=today)
-                results['ok'] += 1
+            for ticker in batch:
+                iv_series = batch_results.get(ticker)
+                if iv_series is None:
+                    failures.append(ticker)
+                    results['fail'] += 1
+                else:
+                    computed = IVHistory.compute(iv_series)
+                    IVHistory.upsert(ticker, computed, as_of_date=today)
+                    results['ok'] += 1
+                progress.advance(task)
 
-            progress.advance(task)
-            ib.sleep(SLEEP_BETWEEN)
+            if batch_num < len(batches):
+                ib.sleep(SLEEP_BETWEEN)
 
     try:
         ib.disconnect()
