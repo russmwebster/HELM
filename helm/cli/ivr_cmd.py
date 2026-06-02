@@ -72,31 +72,55 @@ def _fetch_iv_history(ib, ticker: str):
 
 
 
-async def _fetch_iv_batch_async(ib, tickers: list) -> dict:
+def _fetch_iv_batch_async(ib, tickers: list) -> dict:
+    """
+    Fetch IV history for a batch of tickers concurrently using ib_insync async.
+    Uses ib_insync.util.run() to execute coroutines on the existing event loop.
+    Returns dict: {ticker: iv_series or None}
+    """
     import pandas as pd
-    from ib_insync import Stock, util
+    from ib_insync import Stock, util as ib_util
 
-    async def _one(ticker):
-        contract = Stock(ticker, 'SMART', 'USD')
-        try:
-            bars = await ib.reqHistoricalDataAsync(
-                contract, endDateTime='', durationStr='1 Y',
-                barSizeSetting='1 day', whatToShow='OPTION_IMPLIED_VOLATILITY',
-                useRTH=True, formatDate=1, keepUpToDate=False,
-            )
-            if not bars: return ticker, None
-            df = util.df(bars)
-            if df is None or df.empty or 'close' not in df.columns: return ticker, None
-            iv = df['close'].dropna()
-            if len(iv) < 30: return ticker, None
-            if iv.max() <= 5: iv = iv * 100
-            return ticker, iv
-        except Exception:
-            return ticker, None
+    async def _fetch_all():
+        async def _one(ticker):
+            contract = Stock(ticker, 'SMART', 'USD')
+            try:
+                bars = await ib.reqHistoricalDataAsync(
+                    contract,
+                    endDateTime='',
+                    durationStr='1 Y',
+                    barSizeSetting='1 day',
+                    whatToShow='OPTION_IMPLIED_VOLATILITY',
+                    useRTH=True,
+                    formatDate=1,
+                    keepUpToDate=False,
+                )
+                if not bars:
+                    return ticker, None
+                df = ib_util.df(bars)
+                if df is None or df.empty or 'close' not in df.columns:
+                    return ticker, None
+                iv = df['close'].dropna()
+                if len(iv) < 30:
+                    return ticker, None
+                if iv.max() <= 5:
+                    iv = iv * 100
+                return ticker, iv
+            except Exception:
+                return ticker, None
 
-    import asyncio
-    raw = await asyncio.gather(*[_one(t) for t in tickers], return_exceptions=True)
-    return {t: s for item in raw if not isinstance(item, Exception) for t, s in [item]}
+        import asyncio
+        tasks = [_one(t) for t in tickers]
+        raw = await asyncio.gather(*tasks, return_exceptions=True)
+        results = {}
+        for item in raw:
+            if isinstance(item, Exception):
+                continue
+            ticker, series = item
+            results[ticker] = series
+        return results
+
+    return ib_util.run(_fetch_all())
 
 
 def _chunks(lst, n):
@@ -141,13 +165,15 @@ def cmd_refresh(args: list) -> None:
     ))
     console.print()
 
-    # Connect to IBKR
+    # Connect to IBKR using dedicated IVR clientId (17) to avoid conflicts
     try:
-        ib = get_ib()
-        ib.reqMarketDataType(2)  # frozen data OK when market closed
+        from ib_insync import IB
+        ib = IB()
+        ib.connect('127.0.0.1', 4002, clientId=17, timeout=15)
+        ib.reqMarketDataType(2)  # frozen data — works pre-market and post-market
     except Exception as e:
         console.print(f"[red]Could not connect to IBKR:[/red] {e}")
-        console.print("[dim]Make sure TWS or IB Gateway is running.[/dim]")
+        console.print("[dim]Make sure TWS or IB Gateway is running on port 4002.[/dim]")
         return
 
     today = date.today().isoformat()
@@ -170,7 +196,7 @@ def cmd_refresh(args: list) -> None:
             progress.update(task,
                 description=f"[cyan]Batch {batch_num}/{len(batches)}[/cyan] [{preview}]")
 
-            batch_results = ib.run(_fetch_iv_batch_async(ib, batch))
+            batch_results = _fetch_iv_batch_async(ib, batch)
 
             for ticker in batch:
                 iv_series = batch_results.get(ticker)
