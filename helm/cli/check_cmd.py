@@ -692,7 +692,7 @@ def cmd_check_all(args):
 
 
 
-def cmd_check_deep(pos: dict, legs: list, assessment: dict, snap: dict):
+def cmd_check_deep_csp(pos: dict, legs: list, assessment: dict, snap: dict):
     """
     Deep narrative check for a single position.
     Shows full context: entry vs now, Greeks comparison, guidance.
@@ -788,6 +788,11 @@ def cmd_check_deep(pos: dict, legs: list, assessment: dict, snap: dict):
         else:
             iv_str = f"{iv_now:.1f}%"
         console.print(f"  IV:          {iv_str}")
+    try:
+        from helm.models.iv_history import IVHistory as _IVH
+        _ivr = _IVH.for_tickers([ticker]).get(ticker)
+    except Exception:
+        _ivr = None
     if _ivr and _ivr.iv_rank is not None:
         console.print(f"  IVR/IVP:     {_ivr.rank_label}[dim] rank[/dim]  /  {_ivr.percentile_label}[dim] pct  (52wk: {_ivr.iv_52wk_low:.0f}%-{_ivr.iv_52wk_high:.0f}%)[/dim]")
 
@@ -866,6 +871,25 @@ def cmd_check_deep(pos: dict, legs: list, assessment: dict, snap: dict):
                     console.print(f"  [yellow]Stock needs to rally {gap_pct:.1f}% to reach strike[/yellow]")
                 else:
                     console.print(f"  [dim]Stock needs to rally {gap_pct:.1f}% to reach strike[/dim]")
+
+    # ── Break-even ─────────────────────────────────────────────────────────────────
+    if spot and strike and open_price:
+        _be = round(strike - open_price, 2)
+        _buf_be = round(spot - _be, 2)
+        _buf_be_pct = round(_buf_be / spot * 100, 1) if spot else 0
+        _be_clr = "green" if _buf_be_pct > 10 else "yellow" if _buf_be_pct > 0 else "bold red"
+        console.print()
+        console.print(f"  [bold]Break-even & Stop[/bold]")
+        console.print(f"  Break-even:       [cyan]${_be:.2f}[/cyan]   (strike ${strike:.0f} − premium ${open_price:.2f}/share)")
+        console.print(f"  Buffer to b/e:    [{_be_clr}]${_buf_be:.2f}  ({_buf_be_pct:.1f}%)[/{_be_clr}]")
+        if _buf_be < 0:
+            console.print(f"  [bold red]⚠  Stock ${abs(_buf_be):.2f} BELOW break-even — real loss at expiry if held[/bold red]")
+        _stop1x = net_premium if net_premium else 0
+        _pnl = pnl_mtm if pnl_mtm is not None else 0
+        _stop_pct = round(abs(min(_pnl, 0)) / _stop1x * 100, 0) if _stop1x else 0
+        _stop_rem = round(_stop1x - abs(min(_pnl, 0)), 0) if _stop1x else 0
+        _sc = "green" if _stop_pct < 50 else "yellow" if _stop_pct < 80 else "red"
+        console.print(f"  1x Stop loss:     ${_stop1x:,.0f}   [{_sc}]{_stop_pct:.0f}% used[/{_sc}]  (${_stop_rem:,.0f} remaining)")
 
     # ── Entry Context ─────────────────────────────────────────────────────────
     if entry_spot or entry_rsi or entry_bias is not None:
@@ -1335,7 +1359,11 @@ def cmd_check_one(ticker: str, deep: bool = False):
     primary = a["primary_leg"]
 
     if deep:
-        cmd_check_deep(pos, legs, a, snap)
+        strat = pos.get('strategy', '')
+        if strat in ('CSP', 'CASH_SECURED_PUT'):
+            cmd_check_deep_csp(pos, legs, a, snap)
+        else:
+            cmd_check_deep(pos, legs, a, snap)
         return
 
     flag_colors = {"GREEN": "green", "YELLOW": "yellow", "RED": "red", "UNKNOWN": "dim"}

@@ -140,6 +140,7 @@ def open_position_with_snapshot(
         strike=contract["strike"],
         expiration=contract["expiration"],
         contracts=contracts,
+        entry_delta=contract.get("delta"),
     )
 
     # Log lifecycle event

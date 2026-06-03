@@ -28,6 +28,7 @@ class Leg:
     close_price:  Optional[float] = None
     close_date:   Optional[str] = None
     status:       str = 'OPEN'
+    entry_delta:  Optional[float] = None
     notes:        Optional[str] = None
     created_at:   str = field(default_factory=lambda: datetime.now().isoformat())
 
@@ -90,14 +91,14 @@ class Leg:
                     id, position_id, leg_role, option_type, direction,
                     strike, expiration, contracts, multiplier,
                     open_price, close_price, open_date, close_date,
-                    status, notes, created_at
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    status, notes, created_at, entry_delta
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, (
                 self.id, self.position_id, self.leg_role, self.option_type,
                 self.direction, self.strike, self.expiration, self.contracts,
                 self.multiplier, self.open_price, self.close_price,
                 self.open_date, self.close_date, self.status,
-                self.notes, self.created_at
+                self.notes, self.created_at, self.entry_delta
             ))
         return self
 
