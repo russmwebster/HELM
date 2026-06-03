@@ -105,7 +105,7 @@ def bias_to_strategy(score: int, iv_pct, rsi=None, ivr=None):
     ivr_moderate = ivr_val is not None and 15 <= ivr_val < 35
     ivr_cheap    = ivr_val is not None and ivr_val < 15
     ivr_buyable  = ivr_val is not None and ivr_val < 60
-    ivr_unknown  = ivr_val is None
+    ivr_unknown  = ivr_val is None  # No IBKR data — defer strategy, use score only
     rsi_val      = float(rsi) if rsi is not None else None
     rsi_oversold = rsi_val is not None and rsi_val < 30
     rsi_bullish  = rsi_val is not None and rsi_val < 60
@@ -163,7 +163,7 @@ def score_label(score: int) -> str:
 
 # ── Technical indicator fetch ─────────────────────────────────────────────────
 
-def fetch_technicals(ticker: str) -> dict:
+def fetch_technicals(ticker: str, ivr_record=None) -> dict:
     """
     Fetch technical indicators for a ticker using yfinance.
     Returns dict with RSI, EMAs, SMAs, ATR, IV, price context.
@@ -180,6 +180,8 @@ def fetch_technicals(ticker: str) -> dict:
         "sma_200": None,
         "atr_14": None,
         "iv_current": None,
+        "iv_rank": None,
+        "iv_pct": None,
         "week_52_high": None,
         "week_52_low": None,
         "price_vs_52wk_pct": None,  # 0=at low, 100=at high
@@ -191,6 +193,11 @@ def fetch_technicals(ticker: str) -> dict:
         "atr_strikes": None,  # suggested strike range based on ATR
         "error": None,
     }
+
+    # Load IVR from IBKR-sourced DB record (populated by helm ivr refresh)
+    if ivr_record is not None:
+        result["iv_rank"] = ivr_record.iv_rank
+        result["iv_pct"]  = ivr_record.iv_percentile
 
     try:
         tk = yf.Ticker(ticker)
@@ -312,7 +319,7 @@ def fetch_technicals(ticker: str) -> dict:
         result["bias_score"] = max(-3, min(3, score))
         result["bias_factors"] = factors
 
-        strategy, rationale = bias_to_strategy(result["bias_score"], iv, rsi=result.get("rsi"), ivr=result.get("iv_rank"))
+        strategy, rationale = bias_to_strategy(result["bias_score"], None, rsi=result.get("rsi"), ivr=result.get("iv_rank"))
         conviction = compute_conviction(result["bias_score"], result.get("iv_rank"))
         result["conviction"] = conviction
         result["strategy"] = strategy
@@ -391,6 +398,13 @@ def run():
     ))
     console.print()
 
+    # Pre-load IVR data from DB for all tickers (populated by helm ivr refresh)
+    try:
+        from helm.models.iv_history import IVHistory
+        _ivr_preload = IVHistory.for_tickers(tickers)
+    except Exception:
+        _ivr_preload = {}
+
     results = []
     completed = 0
 
@@ -404,7 +418,7 @@ def run():
         task = progress.add_task("Scanning...", total=len(tickers))
 
         with ThreadPoolExecutor(max_workers=workers) as executor:
-            futures = {executor.submit(fetch_technicals, t): t for t in tickers}
+            futures = {executor.submit(fetch_technicals, t, _ivr_preload.get(t)): t for t in tickers}
             for future in as_completed(futures):
                 ticker = futures[future]
                 try:
@@ -472,6 +486,8 @@ def run():
         ).fetchall())
     except Exception:
         _open_tickers = set()
+    # Build ivr display data from results (already loaded per-ticker in fetch_technicals)
+    # Keep IVHistory for label formatting
     from helm.models.iv_history import IVHistory
     _ivr_data = IVHistory.for_tickers([r["ticker"] for r in valid])
 
