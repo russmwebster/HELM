@@ -544,6 +544,7 @@ def run():
         console.print(f"[dim]{len(errors)} ticker(s) had errors: {', '.join(r['ticker'] for r in errors[:5])}[/dim]")
         console.print()
 
+    console.print("[dim]  * = open position  |  Priority: [green]70+[/green] high  [yellow]50-69[/yellow] moderate  <50 low[/dim]")
     console.print(Panel.fit(
         "[dim]Next step: [bold]helm open <ticker>[/bold] to evaluate a specific contract[/dim]  ·  [dim]New? Run [bold]helm guide[/bold] to understand strategy assignments[/dim]",
         border_style="dim"
