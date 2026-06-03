@@ -403,6 +403,7 @@ def fetch_chain_from_ibkr(ticker, opt_type, target_exps, spot, atr,
     try:
         ib.connect("127.0.0.1", 4002, clientId=15, readonly=True, timeout=15)
         ib.reqMarketDataType(1)
+        import atexit; atexit.register(lambda: ib.disconnect() if ib.isConnected() else None)
 
         for exp, days in target_exps:
             exp_fmt = exp.replace("-", "")

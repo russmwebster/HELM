@@ -171,6 +171,7 @@ def cmd_refresh(args: list) -> None:
         ib = IB()
         ib.connect('127.0.0.1', 4002, clientId=17, timeout=15)
         ib.reqMarketDataType(2)  # frozen data — works pre-market and post-market
+        import atexit; atexit.register(lambda: ib.disconnect() if ib.isConnected() else None)
     except Exception as e:
         console.print(f"[red]Could not connect to IBKR:[/red] {e}")
         console.print("[dim]Make sure TWS or IB Gateway is running on port 4002.[/dim]")
