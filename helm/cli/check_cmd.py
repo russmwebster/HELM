@@ -692,6 +692,52 @@ def cmd_check_all(args):
 
 
 
+
+def render_csp_position_diagram(spot, strike, open_price, atr, net_premium):
+    if not all([spot, strike, open_price]): return
+    breakeven = round(strike - open_price, 2)
+    atr1 = round(spot - atr, 2) if atr else None
+    low  = min(breakeven * 0.96, spot * 0.91)
+    high = max(spot * 1.05, strike * 1.10)
+    rng  = high - low
+    if rng <= 0: return
+    W = 54
+    def px(p): return max(0, min(W-1, int((p-low)/rng*(W-1))))
+    be_p=px(breakeven); st_p=px(strike); sp_p=px(spot)
+    a1_p=px(atr1) if atr1 else None
+    line = '  '
+    for i in range(W):
+        pr = low+(i/(W-1))*rng
+        if i==be_p: line += '[red bold]▲[/red bold]'
+        elif i==st_p: line += '[bold]|[/bold]'
+        elif i==sp_p: line += '[green bold]●[/green bold]'
+        elif a1_p and i==a1_p: line += '[dim].[/dim]'
+        elif pr < breakeven: line += '[red]─[/red]'
+        elif pr < strike:    line += '[yellow]─[/yellow]'
+        else:                line += '[green]─[/green]'
+    console.print()
+    console.print('  [bold dim]Position map[/bold dim]')
+    console.print()
+    console.print(line)
+    console.print()
+    lbs=[' ']*(W+8)
+    def pl(p,t):
+        s=max(0,min(p-len(t)//2,W+8-len(t)))
+        for j,c in enumerate(t):
+            if s+j<len(lbs): lbs[s+j]=c
+    for p,t in sorted([(be_p,'b/e'),(st_p,'strike'),(sp_p,'now')],key=lambda x:x[0]): pl(p,t)
+    console.print('  '+''.join(lbs))
+    console.print()
+    bv=round(spot-breakeven,2); bvp=round(bv/spot*100,1) if spot else 0
+    sv=round(spot-strike,2);   svp=round(sv/spot*100,1) if spot else 0
+    bc='green' if bvp>10 else 'yellow' if bvp>5 else 'red'
+    console.print(f'  Buffer to b/e  [{bc}]${bv:.2f} ({bvp:.1f}%)[/{bc}]   Buffer to strike ${sv:.2f} ({svp:.1f}%)')
+    if atr1:
+        note='[green]above 1-ATR ✓[/green]' if spot>atr1 else '[yellow]approaching 1-ATR[/yellow]'
+        console.print(f'  1-ATR: ${atr1:.2f}   Spot is {note}')
+    console.print()
+
+
 def cmd_check_deep_csp(pos: dict, legs: list, assessment: dict, snap: dict):
     """
     Deep narrative check for a single position.
@@ -915,6 +961,9 @@ def cmd_check_deep_csp(pos: dict, legs: list, assessment: dict, snap: dict):
     for line in guidance:
         console.print(f"  {line}")
 
+    if spot and strike and open_price:
+        _atr = a.get("atr_14") or (spot * 0.03)
+        render_csp_position_diagram(spot, strike, open_price, _atr, net_premium)
     console.print()
 
 
