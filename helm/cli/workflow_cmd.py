@@ -37,7 +37,7 @@ def run():
     # ── Automated ────────────────────────────────────────────
     section("AUTOMATED  (no action needed)")
     auto("9:35am",  "Mon-Fri", "helm ivr refresh",     "IVR/IVP updated for all watchlist tickers")
-    auto("10:00am", "Mon-Fri", "helm check --silent",  "All positions checked, data saved to DB")
+    auto("10am/12pm/2pm/3:30pm", "Mon-Fri", "helm check --silent", "Positions checked 4x daily — P&L, flags, DTE")
     auto("10:00am", "Mon-Fri", "helm notify",          "Portfolio summary → HELM Reminders → iPhone")
     auto("10:15am", "Monday",  "helm screen",          "Optionability refresh — live OI data (market must be open)")
 
