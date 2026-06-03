@@ -39,7 +39,7 @@ def run():
     auto("9:35am",  "Mon-Fri", "helm ivr refresh",     "IVR/IVP updated for all watchlist tickers")
     auto("10:00am", "Mon-Fri", "helm check --silent",  "All positions checked, data saved to DB")
     auto("10:00am", "Mon-Fri", "helm notify",          "Portfolio summary → HELM Reminders → iPhone")
-    auto("9:45am",  "Monday",  "helm screen",          "Optionability refresh for full watchlist")
+    auto("10:15am", "Monday",  "helm screen",          "Optionability refresh — live OI data (market must be open)")
 
     # ── Morning routine ───────────────────────────────────────
     section("MORNING ROUTINE")
@@ -52,6 +52,7 @@ def run():
     section("FIND OPPORTUNITIES")
     cmd("helm scan",                     "Scan watchlist for entry setups by strategy")
     cmd("helm screen",                   "Refresh optionability (manual run)")
+    cmd("helm reconcile",                "Sync HELM positions with Fidelity CSV — shows available capital")
     cmd("helm theme",                    "Review investment themes and tickers")
     cmd("helm ivr list",                 "IV rank summary across full watchlist")
     cmd("helm ivr show TICKER",          "IV rank detail for one ticker")
@@ -76,7 +77,8 @@ def run():
 
     # ── Analyze outcomes ──────────────────────────────────────
     section("ANALYZE OUTCOMES")
-    cmd("helm analyze",                  "Win rates, P&L, avg days by strategy")
+    cmd("helm analyze",                  "Win rates, P&L, ann. return, efficiency by strategy")
+    console.print("  [dim]  Tip: Scan shows Conviction (High/Moderate/Low) — Low = valid trade, size smaller[/dim]")
     cmd("helm analyze trends",           "Trade-life trends — delta drift, IV movement")
     cmd("helm analyze TICKER",           "Full check history and trend summary for one position")
 
@@ -85,10 +87,21 @@ def run():
     cmd("helm watchlist add TICKER",     "Add ticker to watchlist")
     cmd("helm watchlist list",           "Show full watchlist")
     cmd("helm screen TICKER",            "Check optionability for a specific ticker")
+
+    console.print("\n  [bold dim]STRATEGY REFERENCE[/bold dim]")
+    cmd("helm open TICKER CSP",           "Bullish + high IVR — sell cash-secured put")
+    cmd("helm open TICKER LONG_CALL",     "Bullish + low IVR — buy cheap call")
+    cmd("helm open TICKER IRON_CONDOR",   "Neutral + high IVR — sell both sides")
+    cmd("helm open TICKER LONG_STRADDLE", "Neutral + low IVR — buy ATM call + put")
+    cmd("helm open TICKER BEAR_CALL_SPREAD", "Bearish + high IVR — credit spread")
+    cmd("helm open TICKER BEAR_PUT_SPREAD",  "Bearish + low IVR — debit put spread")
+    cmd("helm open TICKER BULL_CALL_SPREAD", "Bullish + low IVR alt — debit call spread")
     cmd("helm status",                   "Portfolio dashboard — positions and P&L")
     cmd("helm notify",                   "Send portfolio summary to HELM Reminders now")
     cmd("helm notify test",              "Send test notification to verify setup")
     cmd("helm workflow",                 "Show this workflow guide")
+    cmd("helm guide",                    "Strategy matrix quick reference — bias, IVR, conviction")
+    cmd("helm guide --full",              "Interactive 5-step strategy walkthrough")
 
     console.print()
     console.print("[dim]  Tip: run [bold]helm check --deep[/bold] each morning for full position analysis.[/dim]")
