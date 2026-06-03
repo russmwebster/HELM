@@ -195,7 +195,7 @@ STRATEGY_CONFIG = {
 
 # ── Contract scoring (adapted from COTS ladder.py) ────────────────────────────
 
-def fetch_ibkr_greeks(contracts: list) -> dict:
+def fetch_ibkr_greeks(contracts: list) -> dict:  # DEPRECATED
     """
     Fetch live Greeks from IBKR for a list of contracts.
     Returns dict keyed by (expiration, strike, opt_type) -> greeks dict.
@@ -388,6 +388,140 @@ def suggest_contracts(strategy: str, strike: float, mid: float,
 
 # ── Main fetch and evaluation ─────────────────────────────────────────────────
 
+
+def fetch_chain_from_ibkr(ticker, opt_type, target_exps, spot, atr,
+                           delta_min, delta_max, delta_sweet,
+                           spread_threshold=0.25):
+    # Fetch live/frozen options chain from IBKR.
+    # reqMarketDataType(1) = live, auto-serves frozen outside RTH.
+    # Returns list of contract dicts. Empty list = fallback to yfinance.
+    import math
+    from ib_insync import IB, Option as IBOption
+
+    results = []
+    ib = IB()
+    try:
+        ib.connect("127.0.0.1", 4002, clientId=15, readonly=True, timeout=15)
+        ib.reqMarketDataType(1)
+
+        for exp, days in target_exps:
+            exp_fmt = exp.replace("-", "")
+
+            # Qualify stock to get conId (required for reqSecDefOptParams)
+            from ib_insync import Stock as IBStock
+            stk = IBStock(ticker, "SMART", "USD")
+            try:
+                ib.qualifyContracts(stk)
+            except Exception:
+                pass
+            con_id = getattr(stk, "conId", 0) or 0
+
+            # Discover strikes via reqSecDefOptParams
+            params = ib.reqSecDefOptParams(ticker, "", "STK", con_id)
+            ib.sleep(1)
+
+            all_strikes = set()
+            for p in params:
+                if exp_fmt in p.expirations:
+                    all_strikes.update(p.strikes)
+            if not all_strikes:
+                continue
+
+            # Filter to spot +/- 3xATR
+            atr_buf = atr * 3
+            filtered = sorted(s for s in all_strikes
+                               if (spot - atr_buf) <= s <= (spot + atr_buf))
+            if not filtered:
+                filtered = sorted(all_strikes, key=lambda s: abs(s - spot))[:20]
+
+            opt_right = "P" if opt_type == "PUT" else "C"
+            raw_opts = [(s, IBOption(ticker, exp_fmt, s, opt_right, "SMART", "", "USD"))
+                        for s in filtered]
+
+            try:
+                ib.qualifyContracts(*[o for _, o in raw_opts])
+            except Exception:
+                pass
+
+            tmap = []
+            for (strike, opt) in raw_opts:
+                if not getattr(opt, "conId", 0):
+                    continue
+                t = ib.reqMktData(opt, "106,101", False, False)
+                tmap.append((strike, opt, t))
+
+            ib.sleep(3)
+
+            def vld(v):
+                try:
+                    f = float(v)
+                    return not math.isnan(f) and f not in (-1.0, 0.0)
+                except Exception:
+                    return False
+
+            for (strike, opt, t) in tmap:
+                bid = float(t.bid) if vld(t.bid) else None
+                ask = float(t.ask) if vld(t.ask) else None
+                if not bid or not ask or bid <= 0 or ask <= 0:
+                    continue
+                mid = round((bid + ask) / 2, 2)
+                spread_pct = round((ask - bid) / mid * 100, 1) if mid > 0 else 99
+                if spread_pct > spread_threshold * 100:
+                    continue
+
+                delta = theta = iv = None
+                for gattr in ("modelGreeks", "lastGreeks"):
+                    g = getattr(t, gattr, None)
+                    if g:
+                        if vld(getattr(g, "delta", None)):
+                            delta = abs(float(g.delta))
+                        if vld(getattr(g, "theta", None)):
+                            theta = abs(float(g.theta))
+                        if vld(getattr(g, "impliedVol", None)):
+                            iv = round(float(g.impliedVol) * 100, 1)
+                        break
+
+                if delta is None and iv is not None:
+                    try:
+                        from scipy.stats import norm as _n
+                        iv_d = iv / 100.0
+                        T = days / 365.0
+                        d1 = (math.log(spot / strike) + (0.045 + 0.5 * iv_d**2) * T) / (iv_d * math.sqrt(T))
+                        delta = abs(_n.cdf(d1) - 1) if opt_type == "PUT" else _n.cdf(d1)
+                    except Exception:
+                        pass
+
+                if delta is not None and not (delta_min <= delta <= delta_max):
+                    continue
+
+                oi = 0
+                try:
+                    v = getattr(t, "openInterest", None)
+                    if vld(v):
+                        oi = int(float(v))
+                except Exception:
+                    pass
+
+                results.append({
+                    "ticker": ticker, "expiration": exp, "dte": days,
+                    "strike": strike, "opt_type": opt_type, "direction": "SHORT",
+                    "bid": round(bid, 2), "ask": round(ask, 2), "mid": mid,
+                    "spread": round(ask - bid, 2), "spread_pct": spread_pct,
+                    "delta": round(delta, 3) if delta else None,
+                    "theta": round(theta, 3) if theta else None,
+                    "iv": iv, "oi": oi, "volume": 0,
+                    "source": "ibkr",
+                })
+
+    except Exception:
+        pass
+    finally:
+        try: ib.disconnect()
+        except Exception: pass
+
+    return results
+
+
 def evaluate_contracts(ticker: str, strategy: str, config: dict,
                        dte_target: Optional[int] = None,
                        top_n: int = 8) -> list:
@@ -419,6 +553,18 @@ def evaluate_contracts(ticker: str, strategy: str, config: dict,
     if not spot:
         raise ValueError(f"Cannot fetch price for {ticker}")
 
+    # Quick ATR(14) for strike range filtering
+    atr = spot * 0.05  # default: 5% of spot
+    try:
+        _hist = tk.history(period="30d", interval="1d")
+        if not _hist.empty and len(_hist) >= 14:
+            _tr = (_hist["High"] - _hist["Low"]).rolling(14).mean()
+            _atr = _tr.iloc[-1]
+            if _atr and not (_atr != _atr):  # not NaN
+                atr = round(float(_atr), 2)
+    except Exception:
+        pass
+
     today = date.today()
     expirations = tk.options
     target_exps = []
@@ -430,6 +576,25 @@ def evaluate_contracts(ticker: str, strategy: str, config: dict,
     if not target_exps:
         raise ValueError(f"No expiries found in {dte_min}-{dte_max} DTE range")
 
+    # ── Try IBKR primary chain ────────────────────────────────────────────────
+    contracts = fetch_chain_from_ibkr(
+        ticker, opt_type, target_exps, spot, atr or (spot * 0.05),
+        delta_min, delta_max, delta_sweet,
+        spread_threshold=config.get("spread_threshold", 0.25),
+    )
+    _ibkr_source = len(contracts) > 0
+    if not _ibkr_source:
+        # ── yfinance fallback ─────────────────────────────────────────────────
+        console.print("  [yellow]⚠  IBKR chain unavailable — using yfinance data (may be stale)[/yellow]")
+        console.print()
+    if _ibkr_source:
+        # Score IBKR contracts
+        for c in contracts:
+            c["score"] = score_contract(c, direction, delta_sweet)
+        contracts.sort(key=lambda x: -x["score"])
+        return contracts[:top_n]
+
+    # yfinance fallback path
     contracts = []
     for exp, days in target_exps:
         try:
@@ -2063,7 +2228,7 @@ def run():
                                 config["delta_max"], config["delta_sweet"])
         theta_str  = f"${c['theta']:.3f}" if c.get("theta") else "--"
         iv_str     = f"{c['iv']:.0f}%" if c.get("iv") else "--"
-        premium_str = f"${c['premium_total']:.0f}/contract"
+        premium_str = f"${(c.get('premium_total') or c.get('mid',0)*100):.0f}/contract"
         score_str  = f"{c['score']:.0f}"
 
         # Rank indicator
