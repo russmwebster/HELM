@@ -588,6 +588,25 @@ def evaluate_contracts(ticker: str, strategy: str, config: dict,
         console.print("  [yellow]⚠  IBKR chain unavailable — using yfinance data (may be stale)[/yellow]")
         console.print()
     if _ibkr_source:
+        # Enrich OI from yfinance (IBKR OI unreliable in snapshot)
+        try:
+            _oi_map = {}
+            for exp, _ in target_exps:
+                try:
+                    _chain = tk.option_chain(exp)
+                    _df = _chain.puts if opt_type == "PUT" else _chain.calls
+                    for _, _row in _df.iterrows():
+                        _k = (exp, float(_row["strike"]))
+                        _oi_map[_k] = int(_row.get("openInterest", 0) or 0)
+                except Exception:
+                    pass
+            for c in contracts:
+                _k = (c["expiration"], c["strike"])
+                if _k in _oi_map and _oi_map[_k] > 0:
+                    c["oi"] = _oi_map[_k]
+        except Exception:
+            pass
+
         # Score IBKR contracts
         for c in contracts:
             c["score"] = score_contract(c, direction, delta_sweet)
