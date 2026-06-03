@@ -631,6 +631,7 @@ def cmd_check_all(args):
     t.add_column("DTE",        justify="right", width=5, no_wrap=True)
     t.add_column("Underlying", justify="right", width=11, no_wrap=True)
     t.add_column("Buffer",     justify="right", width=9, no_wrap=True)
+    t.add_column("Buf%",       justify="right", width=6, no_wrap=True)
     t.add_column("P&L",        justify="right", width=9, no_wrap=True)
     t.add_column("P&L%",       justify="right", width=8, no_wrap=True)
     t.add_column("Assessment", width=50, no_wrap=True)
@@ -662,9 +663,13 @@ def cmd_check_all(args):
 
         underlying_str = fmt_price(a["underlying_price"])
         buffer_str = f"${a['intrinsic_buffer']:.1f}" if a["intrinsic_buffer"] is not None else "--"
+        buf_pct_str = "--"  # default, overwritten below if buffer exists
         if a["intrinsic_buffer"] is not None:
             buf_color = "red" if a["intrinsic_buffer"] < 0 else                         "yellow" if a["intrinsic_buffer"] < a["underlying_price"] * 0.03 else "green"
             buffer_str = f"[{buf_color}]{buffer_str}[/{buf_color}]"
+            buf_pct_v = a["intrinsic_buffer"] / a["underlying_price"] * 100 if a["underlying_price"] else None
+            _bpc = "green" if (buf_pct_v or 0) > 10 else ("yellow" if (buf_pct_v or 0) > 5 else "red")
+            buf_pct_str = f"[{_bpc}]{buf_pct_v:.1f}%[/{_bpc}]"
 
         pnl_str = fmt_pnl(a["pnl_mtm"])
         pct_str = fmt_pct(a["pnl_pct"])
@@ -673,7 +678,7 @@ def cmd_check_all(args):
         t.add_row(
             flag_str, pos["ticker"], pos["strategy"],
             strike_str, dte_fmt,
-            underlying_str, buffer_str,
+            underlying_str, buffer_str, buf_pct_str,
             pnl_str, pct_str, reason
         )
 
