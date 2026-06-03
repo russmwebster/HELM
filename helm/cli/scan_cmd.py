@@ -90,6 +90,22 @@ def compute_conviction(score: int, ivr=None) -> str:
     return 'Low'
 
 
+
+
+def compute_priority(score: int, ivr=None, rsi=None) -> int:
+    # 0-100 priority score: score magnitude + IVR edge + RSI extremity + conviction
+    pts = 0
+    abs_score = abs(score)
+    pts += {3: 40, 2: 28, 1: 14, 0: 0}.get(abs_score, 0)
+    if ivr is not None:
+        pts += min(30, int(abs(float(ivr) - 50) * 0.6))
+    if rsi is not None:
+        pts += min(20, int(abs(float(rsi) - 50) * 0.4))
+    conv = compute_conviction(score, ivr)
+    pts += {'High': 10, 'Moderate': 5, 'Low': 0}.get(conv, 0)
+    return min(100, pts)
+
+
 def bias_to_strategy(score: int, iv_pct, rsi=None, ivr=None):
     """
     Map directional bias + IV environment to best strategy.
@@ -313,6 +329,11 @@ def fetch_technicals(ticker: str) -> dict:
         strategy, rationale = bias_to_strategy(result["bias_score"], iv, rsi=result.get("rsi"), ivr=result.get("iv_rank"))
         conviction = compute_conviction(result["bias_score"], result.get("iv_rank"))
         result["conviction"] = conviction
+        result["priority"] = compute_priority(
+            result["bias_score"],
+            ivr=result.get("iv_rank"),
+            rsi=result.get("rsi_14") or result.get("rsi"),
+        )
         result["strategy"] = strategy
         result["strategy_rationale"] = rationale
 
@@ -432,7 +453,7 @@ def run():
         valid = [r for r in valid if r.get("iv_current") and r["iv_current"] >= min_iv]
 
     # Sort by bias score (absolute value first, then bullish bias for CSP focus)
-    valid.sort(key=lambda r: (-abs(r["bias_score"]), -r["bias_score"]))
+    valid.sort(key=lambda r: -r.get("priority", 0))
 
     if top_n:
         valid = valid[:top_n]
@@ -448,6 +469,7 @@ def run():
     t.add_column("Bias",     width=16, no_wrap=True)
     t.add_column("Strategy", width=16, no_wrap=True)
     t.add_column("Conviction",  width=10, no_wrap=True)
+    t.add_column("Priority", justify="right", width=9, no_wrap=True)
     t.add_column("RSI",      justify="right", width=5, no_wrap=True)
     t.add_column("IV%",      justify="right", width=5, no_wrap=True)
     t.add_column("IVR",      justify="right", width=5, no_wrap=True)
@@ -463,6 +485,13 @@ def run():
         "BEAR_CALL_SPREAD": "red", "LONG_CALL": "yellow", "DIAGONAL": "cyan", "LONG_STRADDLE": "magenta", "BEAR_PUT_SPREAD": "red",
     }
 
+    try:
+        from helm.db import get_conn as _gc
+        _open_tickers = set(r[0] for r in _gc().execute(
+            "SELECT ticker FROM positions WHERE status='OPEN'"
+        ).fetchall())
+    except Exception:
+        _open_tickers = set()
     from helm.models.iv_history import IVHistory
     _ivr_data = IVHistory.for_tickers([r["ticker"] for r in valid])
 
@@ -486,8 +515,16 @@ def run():
         _conv = res.get("conviction", "Low")
         _cc = {"High": "green", "Moderate": "yellow", "Low": "dim"}.get(_conv, "dim")
         conv_str = f"[{_cc}]{_conv}[/{_cc}]"
+        _pri = res.get("priority", 0)
+        _pc = "green" if _pri >= 70 else ("yellow" if _pri >= 50 else "dim")
+        pri_str = f"[{_pc}]{_pri}[/{_pc}]"
+        _tk = res["ticker"]
+        _tk_str = _tk
+        if _tk in _open_tickers:
+            _tk_str = f"{_tk}*"
+            strat_str = strat_str + "[dim] open[/dim]"
 
-        t.add_row(res["ticker"], price, bias_str, strat_str, conv_str,
+        t.add_row(_tk_str, price, bias_str, strat_str, conv_str, pri_str,
                   rsi, iv, ivr_str, ivp_str, atr, s1, s2, top_factor)
 
     console.print(f"[bold]Scan Results — {len(valid)} candidates[/bold]")
