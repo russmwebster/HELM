@@ -49,6 +49,7 @@ def build_summary() -> dict:
     # Get latest check per open position
     rows = conn.execute("""
         SELECT p.ticker, p.strategy, p.id,
+               p.net_premium,
                c.health_flag, c.action_signal,
                c.pnl_unrealized, c.dte_now, c.iv_rank
         FROM positions p
@@ -72,13 +73,25 @@ def build_summary() -> dict:
     # Expiring soon (<=7 DTE)
     expiring = [r for r in rows if r['dte_now'] and r['dte_now'] <= 7]
 
+    take_profit = []
+    stop_loss   = []
+    for r in rows:
+        pnl  = float(r['pnl_unrealized'] or 0)
+        prem = abs(float(r['net_premium'] or 0))
+        if prem > 0:
+            if pnl >= prem * 0.50:
+                take_profit.append(r)
+            elif pnl <= -prem * 2.0:
+                stop_loss.append(r)
     return {
-        'n':        len(rows),
-        'total_pnl': total_pnl,
-        'reds':     reds,
-        'yellows':  yellows,
-        'greens':   greens,
-        'expiring': expiring,
+        'n':           len(rows),
+        'total_pnl':   total_pnl,
+        'reds':        reds,
+        'yellows':     yellows,
+        'greens':      greens,
+        'expiring':    expiring,
+        'take_profit': take_profit,
+        'stop_loss':   stop_loss,
     }
 
 
@@ -95,19 +108,33 @@ def format_notification(summary: dict) -> tuple:
     n_green  = len(summary['greens'])
     n_exp    = len(summary['expiring'])
 
+    tp_list = summary.get('take_profit', [])
+    sl_list = summary.get('stop_loss', [])
+    n_tp = len(tp_list)
+    n_sl = len(sl_list)
+    need_action = n_tp + n_sl + n_red
+
     # Title: portfolio snapshot
     title = f"HELM  {pnl_str}  |  {summary['n']} positions"
 
-    # Subtitle: health breakdown
+    # Subtitle: action flags + health
     parts = []
+    if n_tp:     parts.append(f"TAKE PROFIT: {n_tp}")
+    if n_sl:     parts.append(f"STOP LOSS: {n_sl}")
     if n_red:    parts.append(f"{n_red} RED")
     if n_yellow: parts.append(f"{n_yellow} YELLOW")
-    if n_green:  parts.append(f"{n_green} GREEN")
-    subtitle = "  ".join(parts)
+    if not parts: parts.append(f"{n_green} GREEN")
+    subtitle = "  |  ".join(parts)
 
     # Message: actionable items
     lines = []
 
+    if n_tp:
+        tickers = ", ".join(r['ticker'] for r in tp_list)
+        lines.append(f"TAKE PROFIT: {tickers}")
+    if n_sl:
+        tickers = ", ".join(r['ticker'] for r in sl_list)
+        lines.append(f"STOP LOSS: {tickers}")
     if n_exp:
         tickers = ", ".join(r['ticker'] for r in summary['expiring'])
         lines.append(f"Expiring ≤7d: {tickers}")
