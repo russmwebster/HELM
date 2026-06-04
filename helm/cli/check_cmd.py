@@ -968,8 +968,7 @@ def cmd_check_deep_csp(pos: dict, legs: list, assessment: dict, snap: dict):
         console.print(f"  {line}")
 
     if spot and strike and open_price:
-        _atr = a.get("atr_14") or (spot * 0.03)
-        render_csp_position_diagram(spot, strike, open_price, _atr, net_premium)
+        render_csp_position_diagram(spot, strike, open_price, atr or (spot * 0.03), net_premium)
     console.print()
 
 
