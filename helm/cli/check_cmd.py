@@ -721,7 +721,9 @@ def render_csp_position_diagram(spot, strike, open_price, atr, net_premium):
     console.print(line)
     console.print()
     # Label row — sorted, non-overlapping
-    items = sorted([(be_p,'b/e'),(st_p,'strike'),(sp_p,'now')],key=lambda x:x[0])
+    items = [(be_p,'b/e'),(st_p,'strike'),(sp_p,'now')]
+    if a1_p is not None: items.append((a1_p,'1-ATR'))
+    items = sorted(items, key=lambda x:x[0])
     lbs = list(' '*(W+12))
     cursor = 0
     for p,t in items:
