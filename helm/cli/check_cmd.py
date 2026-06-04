@@ -720,12 +720,16 @@ def render_csp_position_diagram(spot, strike, open_price, atr, net_premium):
     console.print()
     console.print(line)
     console.print()
-    lbs=[' ']*(W+8)
-    def pl(p,t):
-        s=max(0,min(p-len(t)//2,W+8-len(t)))
+    # Label row — sorted, non-overlapping
+    items = sorted([(be_p,'b/e'),(st_p,'strike'),(sp_p,'now')],key=lambda x:x[0])
+    lbs = list(' '*(W+12))
+    cursor = 0
+    for p,t in items:
+        start = max(cursor, p - len(t)//2)
+        start = min(start, W+12-len(t))
         for j,c in enumerate(t):
-            if s+j<len(lbs): lbs[s+j]=c
-    for p,t in sorted([(be_p,'b/e'),(st_p,'strike'),(sp_p,'now')],key=lambda x:x[0]): pl(p,t)
+            if start+j < len(lbs): lbs[start+j]=c
+        cursor = start + len(t) + 2
     console.print('  '+''.join(lbs))
     console.print()
     bv=round(spot-breakeven,2); bvp=round(bv/spot*100,1) if spot else 0
