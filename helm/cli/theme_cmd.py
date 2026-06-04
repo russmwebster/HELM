@@ -727,7 +727,26 @@ have liquid options once public."""
                 console.print()
 
         # Offer to add recent IPO tickers to watchlist
-        addable_ipos = [c for c in recent if c.get("ticker") and c.get("ticker") != "?"]
+        # Verify tickers exist in yfinance before offering to add
+        def _ticker_exists(tk):
+            try:
+                import yfinance as yf
+                info = yf.Ticker(tk).fast_info
+                price = getattr(info, "last_price", None)
+                return price is not None and float(price) > 0
+            except Exception:
+                return False
+        console.print("  [dim]Verifying tickers...[/dim]")
+        addable_ipos = []
+        for c in recent:
+            tk = c.get("ticker","").strip().upper()
+            if not tk or tk == "?":
+                continue
+            if _ticker_exists(tk):
+                addable_ipos.append(c)
+            else:
+                console.print(f"  [dim red]  {tk} — not found on exchange, skipping[/dim red]")
+
         if addable_ipos:
             console.print()
             console.print("  [dim]Add recent IPO tickers to watchlist as Emerging?[/dim]")
