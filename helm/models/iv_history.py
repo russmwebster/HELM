@@ -143,20 +143,20 @@ class IVHistory:
             return '[dim]--[/dim]'
         if self.iv_rank >= 70:
             return f'[red]{self.iv_rank:.0f}[/red]'
-            return f'[green]{self.iv_rank:.0f}[/green]'
+            return f'{self.iv_rank:.0f}'
             return f'[yellow]{self.iv_rank:.0f}[/yellow]'
-        return f'[green]{self.iv_rank:.0f}[/green]'
-        return f'[red]{self.iv_rank:.0f}[/red]'
+            return f'{self.iv_rank:.0f}'
+        return f'{self.iv_rank:.0f}'
     @property
     def percentile_label(self) -> str:
         if self.iv_percentile is None:
             return '[dim]--[/dim]'
         if self.iv_percentile >= 70:
             return f'[red]{self.iv_percentile:.0f}[/red]'
-            return f'[green]{self.iv_percentile:.0f}[/green]'
+            return f'{self.iv_percentile:.0f}'
             return f'[yellow]{self.iv_percentile:.0f}[/yellow]'
-        return f'[green]{self.iv_percentile:.0f}[/green]'
-        return f'[red]{self.iv_percentile:.0f}[/red]'
+            return f'{self.iv_percentile:.0f}'
+        return f'{self.iv_percentile:.0f}'
     @property
     def stale(self) -> bool:
         """True if data is more than 2 days old (weekend-aware approx)."""
