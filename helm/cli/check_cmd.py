@@ -1078,6 +1078,129 @@ def generate_guidance(pos: dict, primary: dict, assessment: dict, snap: dict,
 
 
 
+
+def cmd_check_deep_iron_condor(pos, legs, assessment, snap):
+    a = assessment
+    spot = a.get('underlying_price')
+    net_premium = pos.get('net_premium') or 0
+    contracts = pos.get('total_contracts') or 1
+    per_contract = round(net_premium / contracts / 100, 2) if contracts else 0
+    pnl_mtm = a.get('pnl_mtm') or 0
+    profit_pct = round(pnl_mtm / net_premium * 100, 1) if net_premium else 0
+    target = round(net_premium * 0.50, 0)
+    expiration = None
+    short_put = long_put = short_call = long_call = None
+    for l in legs:
+        expiration = expiration or l.get('expiration','')
+        r = l.get('leg_role','').upper()
+        if r == 'SHORT_PUT':  short_put  = l
+        elif r == 'LONG_PUT': long_put   = l
+        elif r == 'SHORT_CALL': short_call = l
+        elif r == 'LONG_CALL': long_call  = l
+    if not all([short_put, short_call]):
+        console.print('  [red]Missing legs — cannot display Iron Condor deep check[/red]')
+        return
+    sp_str = short_put.get('strike',0)
+    sc_str = short_call.get('strike',0)
+    lp_str = long_put.get('strike',0) if long_put else None
+    lc_str = long_call.get('strike',0) if long_call else None
+    spread_w = round(float(sc_str) - float(sp_str), 0) if sp_str and sc_str else None
+    be_low  = pos.get('breakeven_low')  or (round(float(sp_str) - per_contract, 2) if sp_str else None)
+    be_high = pos.get('breakeven_high') or (round(float(sc_str) + per_contract, 2) if sc_str else None)
+    days_left = dte(expiration) if expiration else None
+    dte_color = 'red' if (days_left or 99) <= 7 else 'yellow' if (days_left or 99) <= 21 else 'green'
+    # Distance to short strikes
+    dist_put  = round(float(spot) - float(sp_str), 2) if (spot and sp_str) else None
+    dist_call = round(float(sc_str) - float(spot), 2) if (spot and sc_str) else None
+    pct_put   = round(dist_put  / float(spot) * 100, 1) if (dist_put  and spot) else None
+    pct_call  = round(dist_call / float(spot) * 100, 1) if (dist_call and spot) else None
+    put_color  = 'red' if (pct_put  or 99) < 3 else 'yellow' if (pct_put  or 99) < 7 else 'green'
+    call_color = 'red' if (pct_call or 99) < 3 else 'yellow' if (pct_call or 99) < 7 else 'green'
+    # Is stock in profit zone?
+    in_zone = sp_str and sc_str and float(sp_str) < float(spot) < float(sc_str)
+    zone_str = '[green]centered in profit zone ✓[/green]' if in_zone else '[red]outside profit zone ✗[/red]'
+    console.print()
+    console.print(Panel.fit(
+        f'[bold cyan]{pos[chr(116)+chr(105)+chr(99)+chr(107)+chr(101)+chr(114)]}[/bold cyan]  IRON CONDOR  {expiration}  [{dte_color}]{days_left}d remaining[/{dte_color}]  x{contracts}',
+        border_style='cyan'
+    ))
+    console.print()
+    console.print('  [bold]Structure[/bold]')
+    lp_s = f'Long ${lp_str:.0f} / ' if lp_str else ''
+    lc_s = f' / Long ${lc_str:.0f}' if lc_str else ''
+    console.print(f'  Put spread:   {lp_s}[bold]Short ${sp_str:.0f}[/bold]   (protect below ${sp_str:.0f})')
+    console.print(f'  Call spread:  [bold]Short ${sc_str:.0f}[/bold]{lc_s}   (protect above ${sc_str:.0f})')
+    console.print(f'  Profit zone:  [green]${sp_str:.0f} → ${sc_str:.0f}[/green]   (${spread_w:.0f} wide)')
+    if be_low and be_high:
+        console.print(f'  Break-evens:  [cyan]${be_low:.2f}[/cyan] (put side)  /  [cyan]${be_high:.2f}[/cyan] (call side)')
+    console.print()
+    console.print('  [bold]Current Position[/bold]')
+    console.print(f'  HON now:  ${spot:.2f}  —  {zone_str}')
+    console.print(f'  Put side:  [{put_color}]${dist_put:.2f} ({pct_put:.1f}%)[/{put_color}] above short put ${sp_str:.0f}')
+    console.print(f'  Call side: [{call_color}]${dist_call:.2f} ({pct_call:.1f}%)[/{call_color}] below short call ${sc_str:.0f}')
+    pct_used = min(abs(pct_put or 99), abs(pct_call or 99))
+    if pct_used < 3:
+        console.print(f'  [red bold]⚠  Short strike within 3% — adjustment may be needed[/red bold]')
+    console.print()
+    console.print('  [bold]P&L[/bold]')
+    console.print(f'  Collected:   ${net_premium:,.0f}  ({contracts} x ${per_contract:.2f}/contract)')
+    pnl_color = 'green' if pnl_mtm >= 0 else 'red'
+    console.print(f'  Current P&L: [{pnl_color}]{pnl_mtm:+,.0f}  ({profit_pct:.1f}% of max profit)[/{pnl_color}]')
+    console.print(f'  Target:      ${target:,.0f} (50% of premium)  —  {round(100 - profit_pct, 0):.0f}% remaining')
+    console.print()
+    # Position map
+    if spot and sp_str and sc_str:
+        low  = float(lp_str or sp_str) * 0.97
+        high = float(lc_str or sc_str) * 1.03
+        rng  = high - low
+        W = 54
+        def px(p): return max(0, min(W-1, int((float(p)-low)/rng*(W-1))))
+        sp_p = px(sp_str); sc_p = px(sc_str); spot_p = px(spot)
+        lp_p = px(lp_str) if lp_str else None
+        lc_p = px(lc_str) if lc_str else None
+        line = '  '
+        for i in range(W):
+            pr = low + (i/(W-1))*rng
+            if i == sp_p:   line += '[bold]|[/bold]'
+            elif i == sc_p: line += '[bold]|[/bold]'
+            elif i == spot_p: line += '[green bold]●[/green bold]'
+            elif lp_p and i == lp_p: line += '[dim][[/dim]'
+            elif lc_p and i == lc_p: line += '[dim]][/dim]'
+            elif float(sp_str) <= pr <= float(sc_str): line += '[green]─[/green]'
+            else: line += '[red]─[/red]'
+        console.print('  [bold dim]Position map[/bold dim]')
+        console.print()
+        console.print(line)
+        console.print()
+        lbs = list(' '*(W+12))
+        cursor = 0
+        items = sorted([(sp_p, f'${sp_str:.0f}'), (spot_p, f'now ${spot:.2f}'), (sc_p, f'${sc_str:.0f}')], key=lambda x:x[0])
+        for p,t in items:
+            start = max(cursor, p - len(t)//2)
+            start = min(start, W+12-len(t))
+            for j,c in enumerate(t):
+                if start+j < len(lbs): lbs[start+j]=c
+            cursor = start + len(t) + 2
+        console.print('  '+''.join(lbs))
+        console.print()
+    # Guidance
+    console.print('  [bold]Guidance[/bold]')
+    if (days_left or 99) <= 7:
+        console.print('  [bold red]⚠  7 DTE — close immediately, gamma risk extreme[/bold red]')
+    elif (days_left or 99) <= 21:
+        console.print('  [yellow]⚠  21 DTE — consider closing regardless of P&L[/yellow]')
+    elif profit_pct >= 50:
+        console.print('  [green]🎯 50% profit target reached — close and redeploy[/green]')
+    elif in_zone:
+        console.print('  [green]✓ Centered in profit zone — hold, let theta work[/green]')
+        alert_put  = round(float(sp_str) * 1.03, 2)
+        alert_call = round(float(sc_str) * 0.97, 2)
+        console.print(f'  Alert if HON moves below [yellow]${alert_put:.2f}[/yellow] or above [yellow]${alert_call:.2f}[/yellow] (within 3% of short strikes)')
+    else:
+        console.print('  [red]⚠  Outside profit zone — evaluate adjustment or close[/red]')
+    console.print()
+
+
 def cmd_check_deep(pos: dict, legs: list, assessment: dict, snap: dict):
     """
     Deep narrative check for a single position.
@@ -1416,6 +1539,8 @@ def cmd_check_one(ticker: str, deep: bool = False):
         strat = pos.get('strategy', '')
         if strat in ('CSP', 'CASH_SECURED_PUT'):
             cmd_check_deep_csp(pos, legs, a, snap)
+        elif strat == 'IRON_CONDOR':
+            cmd_check_deep_iron_condor(pos, legs, a, snap)
         else:
             cmd_check_deep(pos, legs, a, snap)
         return
