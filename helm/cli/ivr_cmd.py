@@ -263,7 +263,7 @@ def cmd_list(args: list) -> None:
 
     for ivr in items:
         days_old = IVHistory.staleness_days(ivr.ticker)
-        age = f"[dim]{days_old}d ago[/dim]" if days_old else "[dim]--[/dim]"
+        age = ("[green]today[/green]" if days_old == 0 else f"[dim]{days_old}d ago[/dim]") if days_old is not None else "[dim]--[/dim]"
         tbl.add_row(
             ivr.ticker,
             f"{ivr.iv_current:.1f}%" if ivr.iv_current else "--",
