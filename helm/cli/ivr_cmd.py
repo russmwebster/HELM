@@ -277,7 +277,9 @@ def cmd_list(args: list) -> None:
 
     console.print()
     console.print(f"[bold]IV Rank / Percentile[/bold]  ({len(items)} tickers)")
-    console.print("[dim]IVR and IVP shown as raw numbers — use helm scan to combine with directional signals for strategy[/dim]")
+    console.print("[dim]IVR (IV Rank): 0-100 scale of where current IV sits in its own 52-week range. 0=at 52wk low, 100=at 52wk high.[/dim]")
+    console.print("[dim]IVP (IV Percentile): % of trading days in the past year where IV was lower than today. IVP 90 = IV higher than 90% of past year.[/dim]")
+    console.print("[dim]High IVR/IVP = elevated premium. Low = compressed. Direction still matters -- use helm scan for strategy.[/dim]")
     console.print()
     console.print(tbl)
     console.print()
