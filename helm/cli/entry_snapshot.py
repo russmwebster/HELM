@@ -108,6 +108,13 @@ def open_position_with_snapshot(
     now = datetime.now().isoformat()
     today = date.today().isoformat()
 
+    # Fetch company name for display
+    try:
+        import yfinance as _yf
+        company_name = (_yf.Ticker(ticker).fast_info.display_name or "")
+    except Exception:
+        company_name = ""
+
     # Net premium: SHORT = positive (collected), LONG = negative (paid)
     direction = contract["direction"]
     mid = fill_price
@@ -120,6 +127,7 @@ def open_position_with_snapshot(
         account_id=account_id,
         strategy=strategy,
         ticker=ticker,
+        company_name=company_name,
         status='OPEN',
         opened_at=now,
         total_contracts=contracts,

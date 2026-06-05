@@ -675,8 +675,10 @@ def cmd_check_all(args):
         pct_str = fmt_pct(a["pnl_pct"])
         reason = a["reasons"][0] if a["reasons"] else "--"
 
+        _co = (pos.get("company_name") or "")[:14]
+        _tk_display = (f"{pos['ticker']}  [dim]{_co}[/dim]") if _co else pos["ticker"]
         t.add_row(
-            flag_str, pos["ticker"], pos["strategy"],
+            flag_str, _tk_display, pos["strategy"],
             strike_str, dte_fmt,
             underlying_str, buffer_str, buf_pct_str,
             pnl_str, pct_str, reason
