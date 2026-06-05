@@ -1551,7 +1551,7 @@ def cmd_check_one(ticker: str, deep: bool = False):
     flag_color = flag_colors.get(a["flag"], "dim")
 
     lines = [
-        f"[bold cyan]{ticker}[/bold cyan]  {pos['strategy']}",
+        f"[bold cyan]{ticker}[/bold cyan]  [dim]{(pos.get('company_name') or '')[:30]}[/dim]  {pos['strategy']}",
         "",
     ]
 
