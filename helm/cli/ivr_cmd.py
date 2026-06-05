@@ -277,7 +277,7 @@ def cmd_list(args: list) -> None:
 
     console.print()
     console.print(f"[bold]IV Rank / Percentile[/bold]  ({len(items)} tickers)")
-    console.print("[dim]IVR: green <40 | yellow 40-70 | red >70[/dim]")
+    console.print("[dim]IVR: [green]green >70[/green] rich premium (credit)  |  [yellow]yellow 40-70[/yellow]  |  [red]red <40[/red] cheap premium (debit)[/dim]")
     console.print()
     console.print(tbl)
     console.print()
