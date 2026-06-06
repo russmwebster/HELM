@@ -74,3 +74,64 @@ no data:    bg=#f5f5f3 bd=#dddcd5 text=#888780 val=#5f5e5a (gray)
 - Iron Condor health profile (two-sided — put side + call side each scored)
 - Guidance redesign using composite score not P&L% threshold
 - ITM-but-above-b/e deserves its own guidance message (not emergency RED)
+
+---
+
+## LONG CALL health profile
+
+### Key difference from CSP
+- Theta is your ENEMY — time decay costs you money every day
+- Delta rising = GOOD (stock moving toward or through strike)
+- IV rising = GOOD (increases option value)
+- You need the stock to MOVE — not sit still
+
+### Variables (Long Call)
+Variable           Weight   Notes
+buffer to strike   25%      How far stock needs to rise to reach strike (OTM)
+delta              20%      Want HIGH and RISING — 0.50+ is good
+theta decay rate   15%      INVERTED vs CSP. High theta = bad for buyer.
+                            Score: theta/day as % of option value. <1%/d=good, >3%/d=bad
+DTE                15%      Less time = MORE urgent (opposite of CSP)
+                            >60d=10, 45-60d=8, 30-45d=6, 21-30d=4, <21d=2, <7d=0
+time value %       10%      % of option price that is time value (not intrinsic)
+                            High time value = more decay risk. Lower = safer
+IV change          10%      Rising IV since entry = good. Falling = bad.
+stop used          5%       Max loss = premium paid. Same logic as CSP.
+
+### Heat map layout (Long Call)
+Row 1: buffer to strike (2.2fr) | delta (1.8fr)
+Row 2: theta decay rate (1fr) | DTE (1fr) | IV change (1.4fr)
+Row 3: time value % | stop used | intrinsic value | premium paid
+
+---
+
+## IRON CONDOR health profile
+
+### Key difference
+Two-sided — put spread below AND call spread above.
+Profit when stock stays INSIDE the range.
+Net delta near zero = healthy. Drift = risk.
+
+### Variables (Iron Condor)
+Variable              Weight   Notes
+put side b/e buffer   20%      spot - (short_put_strike - net_credit/share)
+call side b/e buffer  20%      (short_call_strike + net_credit/share) - spot
+net delta             15%      |net_delta|<0.05=10, <0.10=7, <0.20=4, >0.20=1
+DTE                   10%      Same as CSP — more time = better
+put side delta        10%      Short put delta — want LOW, rising = bad
+call side delta       10%      Short call delta — want LOW, rising = bad
+1x stop used          10%      Max loss = spread width - credit collected
+theta/day             5%       Earning from both spreads — good
+
+### Alert thresholds
+- Stock within 3% of either short strike = warning
+- Either short delta > 0.25 = watch
+- Either short delta > 0.40 = action required
+- 21 DTE = evaluate close
+- 7 DTE = close immediately
+
+### Heat map layout (Iron Condor)
+Row 1: put b/e buffer (2fr) | call b/e buffer (2fr)
+Row 2: net delta (1fr) | put delta (1fr) | call delta (1fr)
+Row 3: DTE | 1x stop used | theta/day | profit zone width remaining
+
