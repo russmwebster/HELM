@@ -171,6 +171,23 @@ STRATEGY_CONFIG = {
         "is_condor": True,
         "spread_widths": [5, 10, 15, 20],
     },
+    "PMCC": {
+        "option_type": "CALL",
+        "label": "Poor Man's Covered Call (PMCC)",
+        "is_pmcc": True,
+        # Header display values (actual filters live in PMCC_CONFIG in diagonal.py)
+        "delta_min": 0.20,   "delta_max": 0.90,
+        "delta_sweet": (0.75, 0.85),
+        "dte_min": 21,       "dte_max": 730,
+    },
+    "PERM": {
+        "option_type": "CALL",
+        "label": "Pre-Earnings Run-up (PERM)",
+        "is_perm": True,
+        "delta_min": 0.35,   "delta_max": 0.65,
+        "delta_sweet": (0.45, 0.55),
+        "dte_min": 14,       "dte_max": 60,
+    },
     "DIAGONAL": {
         "option_type": "CALL",
         "label": "Diagonal Spread",
@@ -2110,6 +2127,8 @@ def run():
     is_diagonal_put = config.get("is_diagonal_put", False)
     is_debit_spread = config.get("is_debit_spread", False)
     is_straddle     = config.get("is_straddle", False)
+    is_pmcc         = config.get("is_pmcc", False)
+    is_perm          = config.get("is_perm", False)
 
     if is_diagonal:
         try:
@@ -2129,6 +2148,26 @@ def run():
             console.print(f"[red]Error:[/red] {e}")
             return
         display_diagonal_put(ticker, spot_dp, diagonals_p, args)
+        return
+
+    if is_pmcc:
+        try:
+            from helm.cli.diagonal import evaluate_diagonal, display_diagonal, PMCC_CONFIG
+            spot_pm, pmcc_d = evaluate_diagonal(ticker, PMCC_CONFIG)
+        except Exception as e:
+            console.print(f"[red]Error:[/red] {e}")
+            return
+        display_diagonal(ticker, spot_pm, pmcc_d, args, label="Poor Man's Covered Call (PMCC)")
+        return
+
+    if is_perm:
+        try:
+            from helm.cli.perm import evaluate_perm, display_perm
+            spot_p, earn_d, days_earn, exit_d, cands = evaluate_perm(ticker)
+        except Exception as e:
+            console.print(f"[red]Error:[/red] {e}")
+            return
+        display_perm(ticker, spot_p, earn_d, days_earn, exit_d, cands, args)
         return
 
     if is_condor:

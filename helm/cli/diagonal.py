@@ -35,6 +35,28 @@ DIAGONAL_CONFIG = {
     "max_debit_pct":     0.75,
 }
 
+PMCC_CONFIG = {
+    "option_type":       "CALL",
+    "label":             "Poor Man's Covered Call (PMCC)",
+    # Short leg — OTM front-month call, rolled monthly
+    "short_dte_min":     21,
+    "short_dte_max":     45,
+    "short_dte_sweet":   30,
+    "short_delta_min":   0.20,
+    "short_delta_max":   0.35,
+    "short_delta_sweet": (0.25, 0.30),
+    # Long leg — deep ITM LEAPS, held 1-2 years
+    "long_dte_min":      150,
+    "long_dte_max":      730,
+    "long_dte_sweet":    365,
+    "long_delta_min":    0.70,
+    "long_delta_max":    0.90,
+    "long_delta_sweet":  (0.75, 0.85),
+    "max_debit_pct":     0.30,
+}
+
+
+
 
 def _score_delta(delta, sweet):
     mid = (sweet[0] + sweet[1]) / 2
@@ -175,10 +197,10 @@ def evaluate_diagonal(ticker: str, config: dict = None) -> tuple:
     return spot, diagonals
 
 
-def display_diagonal(ticker: str, spot: float, diagonals: list, args: list):
+def display_diagonal(ticker: str, spot: float, diagonals: list, args: list, label: str = "Diagonal Spread"):
     """Display diagonal candidates and handle confirm flow."""
     console.print()
-    console.print(f"  [bold]{ticker}[/bold]  Diagonal Spread  ·  spot [bold cyan]${spot:.2f}[/bold cyan]")
+    console.print(f"  [bold]{ticker}[/bold]  {label}  ·  spot [bold cyan]${spot:.2f}[/bold cyan]")
     console.print()
 
     tbl = Table(box=box.SIMPLE, show_header=True, header_style="bold dim")

@@ -41,10 +41,52 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.send_response(200); self.end_headers()
 
     def do_GET(self):
+        if self.path.startswith('/health'):
+            self._health()
+            return
         if self.path.startswith('/read?path='):
             self._read(self.path[11:])
         else:
             super().do_GET()
+
+    def _health(self):
+        import urllib.parse as _up
+        try:
+            import sys as _sys
+            if str(BASE) not in _sys.path:
+                _sys.path.insert(0, str(BASE))
+            import importlib
+            import helm.db as _db
+            import helm.health as _H
+            importlib.reload(_H)
+            q = _up.urlparse(self.path).query
+            ticker = _up.parse_qs(q).get('ticker', [None])[0]
+            conn = _db.get_conn()
+            try:
+                out = _H.render(conn, ticker)
+            finally:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+            body = out.encode('utf-8')
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/html; charset=utf-8')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except Exception:
+            import traceback, html as _htmlmod
+            tb = traceback.format_exc()
+            page = ("<!doctype html><html><body>"
+                    "<h2>HELM health error</h2><pre>"
+                    + _htmlmod.escape(tb) + "</pre></body></html>")
+            body = page.encode('utf-8')
+            self.send_response(500)
+            self.send_header('Content-Type', 'text/html; charset=utf-8')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
 
     def do_PUT(self):
         path = BASE / self.path.lstrip('/')

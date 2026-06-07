@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+*.pyc
+*.pyo
+*.pyd
+.DS_Store
+*.bak
+*.bak*
+data/helm.db
+_ic_*
+_p*_*
+_plc_*
+_pm_*
+*.log
+.env

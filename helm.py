@@ -14,6 +14,7 @@ COMMANDS = {
     'open':      ('helm.cli.open_cmd',  'run',  'Open a new position'),
     'positions': ('helm.cli.positions', 'run',  'View open positions'),
     'check':     ('helm.cli.check',     'run',  'Run a health check on a position'),
+    'health':    ('helm.cli.health_cmd', 'run',  'Portfolio CSP health map (opens in browser)'),
     'close':     ('helm.cli.close_cmd', 'run',  'Close a position'),
     'roll':      ('helm.cli.roll',      'run',  'Roll a position'),
     'settings':  ('helm.cli.settings',  'run',  'View or edit strategy settings'),

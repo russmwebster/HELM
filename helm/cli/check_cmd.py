@@ -285,9 +285,6 @@ def fetch_ibkr_option(ticker: str, expiration: str, strike: float,
         "iv": None, "source": "ibkr", "live": False, "error": None
     }
     try:
-        if not is_market_open():
-            result["error"] = "Market closed — no live option data from IBKR"
-            return result
 
         from helm.ibkr import check_connection
         if not check_connection()["connected"]:
@@ -296,14 +293,19 @@ def fetch_ibkr_option(ticker: str, expiration: str, strike: float,
 
         from ib_insync import IB, Option
         ib = IB()
-        ib.connect("127.0.0.1", 4002, clientId=12, readonly=True)
+        ib.connect("127.0.0.1", 4002, clientId=13, readonly=True)
         try:
             exp_fmt = expiration.replace("-", "")  # YYYYMMDD
             opt = Option(ticker, exp_fmt, strike,
                          option_type[0].upper(), "SMART", multiplier="100")
             ib.qualifyContracts(opt)
+            ib.reqMarketDataType(1 if is_market_open() else 2)  # 2=frozen — last close data, requires subscription
             t = ib.reqMktData(opt, "106", False, False)
-            ib.sleep(2)
+            for _ in range(8):
+                ib.sleep(1)
+                _g = t.modelGreeks
+                if _g and _g.delta is not None and not math.isnan(_g.delta):
+                    break
 
             def valid(v):
                 return v is not None and not math.isnan(v) and v not in (-1, 0)
@@ -556,19 +558,24 @@ def check_one(pos: dict, legs: list, deep: bool = False) -> dict:
         strike = primary["strike"]
         option_type = primary["option_type"]
 
-        # Try IBKR live first (only useful during market hours)
-        if is_market_open():
-            ibkr_opt = fetch_ibkr_option(ticker, expiration, strike, option_type)
-            if ibkr_opt.get("mid"):
-                opt_data = ibkr_opt
-                opt_source = "ibkr-live"
+        # Try IBKR first (frozen greeks available even when market closed)
+        ibkr_opt = fetch_ibkr_option(ticker, expiration, strike, option_type)
+        if ibkr_opt.get("mid") or ibkr_opt.get("delta") is not None:
+            opt_data = ibkr_opt
+            opt_source = "ibkr-live" if is_market_open() else "ibkr-frozen"
 
-        # Fall back to yfinance
+        # Fall back to yfinance for price; preserve IBKR greeks if present
         if not opt_data.get("mid"):
             yf_data = fetch_yf_data(ticker, expiration, strike, option_type)
             if yf_data.get("mid"):
-                opt_data = yf_data
-                opt_source = "yfinance"
+                if opt_data.get("delta") is not None:
+                    for _k in ("mid", "bid", "ask", "last"):
+                        if yf_data.get(_k) is not None:
+                            opt_data[_k] = yf_data[_k]
+                    opt_source = "ibkr-greeks+yf-price"
+                else:
+                    opt_data = yf_data
+                    opt_source = "yfinance"
 
     # Get strategy settings
     conn = get_conn()
