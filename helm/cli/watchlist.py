@@ -780,6 +780,100 @@ def cmd_show(args):
 
 # ── Router ────────────────────────────────────────────────────────────────────
 
+
+
+def _fetch_watchlist_fundamentals(ticker):
+    import yfinance as yf
+    try:
+        tk = yf.Ticker(ticker)
+        info = tk.fast_info
+        full = {}
+        try: full = tk.info
+        except Exception: pass
+        market_cap = getattr(info, 'market_cap', None)
+        if market_cap: market_cap = round(market_cap / 1e9, 2)
+        next_earn = None
+        try:
+            cal = tk.calendar
+            if isinstance(cal, dict) and 'Earnings Date' in cal:
+                dates = cal['Earnings Date']
+                if dates: next_earn = str(dates[0])[:10]
+        except Exception: pass
+        if not next_earn:
+            ed = full.get('earningsDate')
+            if isinstance(ed, list) and ed: next_earn = str(ed[0])[:10]
+            elif ed: next_earn = str(ed)[:10]
+        return ticker, {
+            'company_name':     full.get('longName') or full.get('shortName'),
+            'sector':           full.get('sector'),
+            'market_cap':       market_cap,
+            'avg_daily_volume': getattr(info, 'three_month_average_volume', None),
+            'week_52_high':     getattr(info, 'fifty_two_week_high', None),
+            'week_52_low':      getattr(info, 'fifty_two_week_low', None),
+            'beta':             round(full['beta'], 2) if full.get('beta') else None,
+            'dividend_yield':   round(full['dividendYield'], 4) if full.get('dividendYield') else None,
+            'next_earnings':    next_earn,
+        }, None
+    except Exception as e:
+        return ticker, {}, str(e)
+
+
+def cmd_refresh(args):
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from datetime import datetime
+    from helm.db import get_conn
+    from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, MofNCompleteColumn
+    force = '--force' in args
+    conn = get_conn()
+    if force:
+        rows = conn.execute('SELECT ticker FROM watchlist ORDER BY ticker').fetchall()
+    else:
+        rows = conn.execute(
+            'SELECT ticker FROM watchlist '
+            'WHERE last_fundamentals_at IS NULL '
+            "   OR last_fundamentals_at < date('now', '-30 days') "
+            'ORDER BY ticker'
+        ).fetchall()
+    tickers = [r[0] for r in rows]
+    if not tickers:
+        console.print('  [green]All fundamentals are current.[/green] Use --force to refresh all.')
+        return
+    console.print()
+    console.print(f"  Refreshing fundamentals for [bold]{len(tickers)}[/bold] tickers...")
+    console.print()
+    updated = failed = 0
+    now = datetime.now().isoformat()
+    with Progress(SpinnerColumn(), TextColumn('[progress.description]{task.description}'),
+                  BarColumn(), MofNCompleteColumn(), console=console, transient=True) as progress:
+        task = progress.add_task('Fetching...', total=len(tickers))
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            futures = {pool.submit(_fetch_watchlist_fundamentals, t): t for t in tickers}
+            for fut in as_completed(futures):
+                ticker, data, err = fut.result()
+                progress.advance(task)
+                if err or not data:
+                    failed += 1
+                    continue
+                fields = {k: v for k, v in data.items() if v is not None}
+                fields['last_fundamentals_at'] = now
+                set_clause = ', '.join(f'{k} = ?' for k in fields)
+                vals = list(fields.values()) + [ticker]
+                conn.execute(f'UPDATE watchlist SET {set_clause} WHERE ticker = ?', vals)
+                conn.commit()
+                updated += 1
+    console.print(f"  [green]Updated:[/green] {updated}  [dim]Failed:[/dim] {failed}")
+    console.print()
+    sectors = conn.execute(
+        'SELECT sector, COUNT(*) as n FROM watchlist WHERE sector IS NOT NULL GROUP BY sector ORDER BY n DESC'
+    ).fetchall()
+    if sectors:
+        console.print('  [bold dim]Sector breakdown:[/bold dim]')
+        t = Table(box=box.SIMPLE, show_header=False, padding=(0,2))
+        t.add_column(style='cyan'); t.add_column(style='dim', justify='right')
+        for s, n in sectors: t.add_row(s, str(n))
+        console.print(t)
+    console.print()
+
 def run():
     args = sys.argv[1:]
 
@@ -802,6 +896,7 @@ def run():
     elif cmd == "screen":  cmd_screen_manual(rest)
     elif cmd == "wto":     cmd_wto(rest)
     elif cmd == "show":    cmd_show(rest)
+    elif cmd == "refresh": cmd_refresh(rest)
     else:
         console.print(f"[red]Unknown watchlist command:[/red] {cmd}")
         print_usage()
@@ -818,6 +913,7 @@ def print_usage():
     t.add_row("add AAPL,NVDA",           "Fast add (instant, no API)")
     t.add_row("add AAPL,NVDA --evaluate","Add with OI/volume feedback")
     t.add_row("suggest AAPL,NVDA",       "Evaluate without adding")
+    t.add_row("refresh",             "Refresh fundamentals for all tickers")
     t.add_row("list [--optionable|--wto]","Show watchlist")
     t.add_row("remove AAPL",             "Remove a ticker")
     t.add_row("screen AAPL",             "Mark as optionable manually")
