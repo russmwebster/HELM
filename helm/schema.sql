@@ -167,6 +167,8 @@ CREATE TABLE IF NOT EXISTS positions (
 
     opened_at             TEXT NOT NULL,
     closed_at             TEXT,
+    exit_reason           TEXT,
+    -- TARGET | STOP | EXPIRED | ASSIGNED | ROLLED | MANUAL (why the position closed)
     earnings_date         TEXT,
 
     total_contracts       INTEGER NOT NULL DEFAULT 1,
@@ -558,3 +560,56 @@ CREATE TABLE IF NOT EXISTS iv_history (
 );
 CREATE INDEX IF NOT EXISTS idx_iv_history_ticker ON iv_history(ticker);
 CREATE INDEX IF NOT EXISTS idx_iv_history_date   ON iv_history(date);
+
+
+-- ============================================================
+-- ANALYSIS LAYER: entry -> lifecycle -> exit (read-only views)
+-- ============================================================
+DROP VIEW IF EXISTS v_trade_summary;
+CREATE VIEW v_trade_summary AS
+SELECT
+  p.id AS position_id, p.account_id, p.ticker, p.company_name, p.strategy, p.status,
+  1 AS traded, p.opened_at, p.closed_at,
+  round(julianday(coalesce(replace(substr(p.closed_at,1,19),'T',' '),'now')) - julianday(replace(substr(p.opened_at,1,19),'T',' ')),2) AS days_held,
+  p.total_contracts, p.net_premium, p.max_profit, p.max_loss,
+  p.breakeven_low, p.breakeven_high, p.spread_width, p.credit_to_width_ratio,
+  p.realized_pnl, p.exit_reason,
+  CASE p.strategy
+    WHEN 'CSP' THEN (SELECT l.strike*100*l.contracts FROM legs l WHERE l.position_id=p.id AND l.leg_role='SHORT_PUT' LIMIT 1)
+    WHEN 'COVERED_CALL' THEN (SELECT s.shares*s.cost_basis FROM stock_positions s WHERE s.ticker=p.ticker AND s.account_id=p.account_id LIMIT 1)
+    WHEN 'LONG_CALL' THEN ABS(p.net_premium)
+    WHEN 'LONG_PUT' THEN ABS(p.net_premium)
+    WHEN 'BEAR_PUT_SPREAD' THEN ABS(p.net_premium)
+    WHEN 'PMCC' THEN ABS(p.net_premium)
+    WHEN 'DIAGONAL' THEN ABS(p.net_premium)
+    ELSE p.max_loss END AS capital_deployed,
+  es.snapshot_at AS entry_at, es.spot_price AS entry_spot, es.iv_current AS entry_iv,
+  es.iv_rank AS entry_iv_rank, es.iv_percentile AS entry_iv_pct, es.delta AS entry_delta,
+  es.dte AS entry_dte, es.days_to_earnings AS entry_days_to_earnings, es.atr_14 AS entry_atr_14,
+  es.hv_30d AS entry_hv_30d, es.theta_per_day AS entry_theta_per_day, es.extrinsic_ratio AS entry_extrinsic_ratio,
+  (SELECT COUNT(*) FROM checks ck WHERE ck.position_id=p.id) AS n_checks,
+  (SELECT MIN(ck.pnl_unrealized) FROM checks ck WHERE ck.position_id=p.id) AS mae_pnl,
+  (SELECT MAX(ck.pnl_unrealized) FROM checks ck WHERE ck.position_id=p.id) AS mfe_pnl,
+  (SELECT ck.health_flag FROM checks ck WHERE ck.position_id=p.id ORDER BY ck.checked_at DESC LIMIT 1) AS last_health_flag,
+  p.earnings_date
+FROM positions p
+LEFT JOIN entry_snapshots es ON es.id=(SELECT e2.id FROM entry_snapshots e2 WHERE e2.position_id=p.id ORDER BY e2.snapshot_at ASC LIMIT 1);
+
+DROP VIEW IF EXISTS v_trade_lifecycle;
+CREATE VIEW v_trade_lifecycle AS
+SELECT
+  ck.position_id, p.ticker, p.strategy, p.status, 1 AS traded, p.opened_at,
+  es.spot_price AS entry_spot, es.iv_current AS entry_iv, es.iv_rank AS entry_iv_rank,
+  es.delta AS entry_delta, es.dte AS entry_dte,
+  ck.checked_at, ck.days_open, ck.dte_now, ck.days_to_earnings,
+  ck.spot_price, ck.current_bid, ck.current_ask, ck.current_price,
+  ck.delta, ck.gamma, ck.theta, ck.vega, ck.iv_current, ck.iv_rank, ck.iv_percentile,
+  ck.delta_vs_entry, ck.iv_vs_entry, ck.spot_pct_change,
+  ck.skew_put_iv, ck.skew_call_iv, ck.skew_value,
+  ck.pnl_unrealized, ck.pnl_pct, ck.buffer_dollars, ck.buffer_pct,
+  ck.health_flag, ck.action_signal, ck.greeks_source, ck.data_quality, ck.rth_flag,
+  p.closed_at, p.realized_pnl, p.exit_reason
+FROM checks ck
+JOIN positions p ON p.id=ck.position_id
+LEFT JOIN entry_snapshots es ON es.id=(SELECT e2.id FROM entry_snapshots e2 WHERE e2.position_id=p.id ORDER BY e2.snapshot_at ASC LIMIT 1);
+
