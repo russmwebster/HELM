@@ -599,6 +599,7 @@ def render(conn, ticker=None):
     rows = gather_csp(conn, ticker)
     lc_rows = gather_longcall(conn, ticker)
     ic_rows = gather_icondor(conn, ticker)
+    bps_rows = gather_bearput(conn, ticker)
     if ticker:
         if not rows:
             if lc_rows:
@@ -613,6 +614,15 @@ def render(conn, ticker=None):
                     + _legend_lc()
                 )
                 return _page(f"HELM Health \u00b7 {r['ticker']}", body)
+        if bps_rows:
+            ic_r = bps_rows[0]; ic_sc = score_bearput(ic_r)
+            body = (f"<a class='back' href='/health'>\u2190 all positions</a>"
+                    + _card_bps(ic_r, ic_sc, link=False)
+                    + _legend_bps())
+            return _page(f"HELM Health \u00b7 {ic_r['ticker']}", body)
+            body = (f"<a class='back' href='/health'>\u2190 all positions</a>"
+                    f"<div class='empty'>No open position found for <b>{_esc(ticker.upper())}</b>.</div>")
+            return _page(f"HELM Health \u00b7 {ticker.upper()}", body)
         if ic_rows:
             ic_r = ic_rows[0]; ic_sc = score_icondor(ic_r)
             body = (f"<a class='back' href='/health'>\u2190 all positions</a>"
@@ -688,7 +698,19 @@ def render(conn, ticker=None):
             + "</div>"
             + _legend_ic()
         )
-    return _page("HELM · Portfolio Health", top + summary + cards + _legend() + lc_section + ic_section)
+    bps_scored = [(r, score_bearput(r)) for r in bps_rows]
+    bps_scored.sort(key=lambda t: (t[1]["composite"] is None, -(t[1]["composite"] or 0)))
+    bps_section = ""
+    if bps_scored:
+        bps_section = (
+            "<div style='font-size:.75rem;font-weight:600;color:var(--fg);opacity:.6;"
+            "text-transform:uppercase;letter-spacing:.08em;padding:.25rem 0 .5rem;'>Bear Put Spreads</div>"
+            + "<div class='cards'>"
+            + "".join(_card_bps(r, sc) for r, sc in bps_scored)
+            + "</div>"
+            + _legend_bps()
+        )
+    return _page("HELM · Portfolio Health", top + summary + cards + _legend() + lc_section + ic_section + bps_section)
 
 
 # ── Long Call scoring ────────────────────────────────────────────────────────
@@ -1582,3 +1604,232 @@ def _legend():
     )
     grid = "<div class='vgrid'>" + "".join(cards) + "</div>"
     return keyline + "<div class='vardefs-title'>Cash Secured Put — variable definitions &amp; scoring</div>" + grid
+
+
+
+
+def _bs_put_price_bps(spot, strike, T_days, iv, r=0.043):
+    if not (spot and strike and T_days and T_days > 0 and iv and iv > 0): return None
+    try:
+        T = T_days / 365.0
+        d1 = (_ic_math.log(spot/strike) + (r + 0.5*iv**2)*T) / (iv*_ic_math.sqrt(T))
+        d2 = d1 - iv*_ic_math.sqrt(T)
+        from scipy.stats import norm as _n
+        call = spot*_n.cdf(d1) - strike*_ic_math.exp(-r*T)*_n.cdf(d2)
+        return max(0.0, call - spot + strike*_ic_math.exp(-r*T))
+    except Exception:
+        return None
+
+BPS_WEIGHTS = {'be_buffer':0.30,'dte':0.20,'spread_value':0.20,'long_put_delta':0.15,'max_profit_pct':0.10,'stop_used':0.05}
+
+def s_bps_be_buffer(p):
+    if p is None: return None
+    if p <= -5: return 10
+    if p <= 0: return 8
+    if p <= 2: return 6
+    if p <= 5: return 4
+    if p <= 10: return 2
+    return 0
+
+def s_bps_spread_value(p):
+    if p is None: return None
+    if p >= 80: return 10
+    if p >= 60: return 8
+    if p >= 40: return 6
+    if p >= 20: return 4
+    if p >= 10: return 2
+    return 0
+
+def s_bps_delta(d):
+    if d is None: return None
+    if d >= 0.70: return 10
+    if d >= 0.50: return 8
+    if d >= 0.35: return 6
+    if d >= 0.25: return 4
+    if d >= 0.15: return 2
+    return 0
+
+def s_bps_max_profit(p):
+    if p is None: return None
+    if p >= 80: return 10
+    if p >= 60: return 8
+    if p >= 40: return 6
+    if p >= 20: return 4
+    if p >= 0: return 3
+    if p >= -50: return 1
+    return 0
+
+def gather_bearput(conn, ticker=None):
+    sql = """SELECT p.id,p.ticker,p.company_name,p.net_premium,p.total_contracts,p.max_loss,p.max_profit,p.earnings_date,c.spot_price,c.delta,c.theta,c.dte_now,c.pnl_unrealized,c.iv_current,c.checked_at FROM positions p LEFT JOIN checks c ON c.id=(SELECT id FROM checks WHERE position_id=p.id ORDER BY checked_at DESC LIMIT 1) WHERE p.status='OPEN' AND p.strategy='BEAR_PUT_SPREAD'"""
+    args = []
+    if ticker:
+        sql += " AND p.ticker=?"
+        args.append(ticker.upper())
+    sql += " ORDER BY p.ticker"
+    rows = [dict(r) for r in conn.execute(sql, args).fetchall()]
+    for r in rows:
+        legs = [dict(l) for l in conn.execute("SELECT leg_role,direction,strike,open_price,contracts,expiration FROM legs WHERE position_id=? ORDER BY strike DESC", (r["id"],)).fetchall()]
+        lp = next((l for l in legs if l['leg_role']=='LONG_PUT'), None)
+        sp = next((l for l in legs if l['leg_role']=='SHORT_PUT'), None)
+        r['long_strike'] = lp['strike'] if lp else None
+        r['short_strike'] = sp['strike'] if sp else None
+        r['expiration'] = lp['expiration'] if lp else (sp['expiration'] if sp else None)
+        c = r['total_contracts'] or (lp['contracts'] if lp else 1)
+        r['total_contracts'] = c
+        d = abs(r['net_premium'] or 0); r['debit_paid'] = d
+        r['debit_per_share'] = d/(c*100) if (d and c) else None
+        r['breakeven'] = (r['long_strike'] - r['debit_per_share']) if (r['long_strike'] and r['debit_per_share']) else None
+        r['spread_width'] = (r['long_strike'] - r['short_strike']) if (r['long_strike'] and r['short_strike']) else None
+        r['max_spread_value'] = (r['spread_width']*c*100) if r['spread_width'] else None
+        s = r['spot_price']
+        r['be_buffer_pct'] = ((s - r['breakeven'])/s*100) if (s and r['breakeven']) else None
+        r['in_profit_zone'] = bool(s and r['breakeven'] and s < r['breakeven'])
+        iv = (r['iv_current']/100.0) if r['iv_current'] else None
+        dte = r['dte_now']
+        lpp = _bs_put_price_bps(s, r['long_strike'], dte, iv) if iv else None
+        spp = _bs_put_price_bps(s, r['short_strike'], dte, iv) if iv else None
+        if lpp is not None and spp is not None:
+            r['spread_current_value'] = (lpp - spp)*c*100; r['pnl_calc'] = r['spread_current_value'] - d
+        else:
+            r['spread_current_value'] = None; r['pnl_calc'] = r['pnl_unrealized']
+        r['spread_value_pct'] = (r['spread_current_value']/r['max_spread_value']*100) if (r['spread_current_value'] is not None and r['max_spread_value']) else None
+        r['long_put_delta_raw'] = _bs_delta_ic(s, r['long_strike'], dte, iv, option_type='put') if iv else None
+        r['abs_long_put_delta'] = abs(r['long_put_delta_raw']) if r['long_put_delta_raw'] is not None else None
+        pnl = r['pnl_calc'] if r['pnl_calc'] is not None else r['pnl_unrealized']
+        r['pnl_display'] = pnl
+        mp = r['max_profit'] or ((r['max_spread_value'] - d) if r['max_spread_value'] else None)
+        r['max_profit_display'] = mp
+        r['max_profit_pct'] = (pnl/mp*100) if (pnl is not None and mp and mp > 0) else None
+        r['stop_used_pct'] = (max(0.0, -pnl)/d*100) if (pnl is not None and d > 0) else None
+    return rows
+
+def score_bearput(r):
+    scores = {
+        'be_buffer': s_bps_be_buffer(r['be_buffer_pct']),
+        'dte': s_ic_dte(r['dte_now']),
+        'spread_value': s_bps_spread_value(r['spread_value_pct']),
+        'long_put_delta': s_bps_delta(r['abs_long_put_delta']),
+        'max_profit_pct': s_bps_max_profit(r['max_profit_pct']),
+        'stop_used': s_stop_used(r['stop_used_pct']),
+    }
+    num = den = 0.0
+    for k, sc in scores.items():
+        if sc is None: continue
+        w = BPS_WEIGHTS[k]; num += w*sc; den += w
+    composite = (num/den*10) if den > 0 else None
+    band, band_color = composite_band(composite)
+    return {'scores': scores, 'composite': composite, 'band': band, 'band_color': band_color}
+
+def guidance_bearput(r, scored):
+    c = scored['composite']; pct = r.get('be_buffer_pct'); dte = r.get('dte_now'); mp = r.get('max_profit_pct')
+    if mp is not None and mp >= 80:
+        return ('green', 'Approaching maximum profit \u2014 close this position and lock in the gain.')
+    if c is None:
+        return ('gray', 'Insufficient data \u2014 run a fresh check.')
+    if r.get('in_profit_zone'):
+        if mp is not None and mp >= 40:
+            return ('green', 'Position in profit \u2014 stock below break-even and gaining. Monitor for exit.')
+        return ('green', 'Stock below break-even \u2014 position profitable. Let it work or take partial profits.')
+    if dte is not None and dte <= 7:
+        return ('red', 'Under 7 DTE \u2014 close immediately. Not enough time for the required move.')
+    if dte is not None and dte <= 14:
+        if pct is not None and pct > 5:
+            return ('red', 'Under 14 DTE and still far from break-even \u2014 consider closing to limit loss.')
+        return ('amber', 'Under 14 DTE \u2014 monitor closely. Stock needs to move soon.')
+    if c >= 70:
+        return ('green', 'On track \u2014 stock moving toward break-even. Let theta work.')
+    if c >= 40:
+        return ('amber', 'Watch \u2014 stock needs to continue lower. Monitor for time decay erosion.')
+    return ('red', 'At risk \u2014 significant move needed with limited time. Evaluate cutting loss.')
+
+def _summary_facts_bps(r):
+    spot = r['spot_price']; pnl = r['pnl_display']; be = r['breakeven']; ls = r['long_strike']; ss = r['short_strike']
+    spot_str = ('%.2f' % spot) if spot is not None else '\u2014'
+    be_str = ('$%.2f' % be) if be is not None else '\u2014'
+    pct = r.get('be_buffer_pct')
+    if r.get('in_profit_zone'): spot_cls = 'spot-g'
+    elif pct is not None and pct <= 7: spot_cls = 'spot-a'
+    else: spot_cls = 'spot-r'
+    pill_cls = 'pill-g' if (pnl is not None and pnl >= 0) else 'pill-r'
+    pill = ("<span class='pill " + pill_cls + " mono'>" + _money(pnl) + "</span>") if pnl is not None else ''
+    itm = "<span class='badge-itm'>PROFITABLE</span>" if r.get('in_profit_zone') else ''
+    strikes = ('%.0f\u2013%.0f' % (ss, ls)) if (ls and ss) else '\u2014'
+    return ("<div class='facts'>"
+        + "<span class='fact'><span class='lbl'>Spot</span><b class='mono " + spot_cls + "'>" + spot_str + "</b></span>"
+        + "<span class='fact'><span class='lbl'>Strikes</span><b class='mono'>" + strikes + "</b></span>"
+        + "<span class='fact'><span class='lbl'>B/E</span><b class='mono'>" + be_str + "</b></span>"
+        + "<span class='fact'><span class='lbl'>DTE</span><b class='mono'>" + str(r['dte_now']) + "</b></span>"
+        + pill + itm + "</div>")
+
+def _render_map_bps(r, sc):
+    s = sc['scores']
+    pct = r['be_buffer_pct']
+    pct_str = ('%+.1f%%' % pct) if pct is not None else '\u2014'
+    pct_sub = 'below b/e \u2014 profitable' if r.get('in_profit_zone') else (('b/e at $%.2f' % r['breakeven']) if r['breakeven'] else 'no data')
+    dte = r['dte_now']; dte_val = (str(dte) + 'd') if dte is not None else '\u2014'
+    row1 = ("<div class='maprow' style='grid-template-columns:2.5fr 1.5fr;'>"
+        + _cell('B/E buffer', pct_str, s['be_buffer'], pct_sub)
+        + _cell('DTE', dte_val, s['dte'], 'days remaining') + "</div>")
+    sv = r['spread_value_pct']; sv_val = ('%.0f%%' % sv) if sv is not None else '\u2014'
+    sv_sub = ('$%.0f of $%.0f max' % (r['spread_current_value'], r['max_spread_value'])) if (r['spread_current_value'] and r['max_spread_value']) else 'BS approx'
+    ld = r['abs_long_put_delta']; ld_val = ('%.3f' % ld) if ld is not None else '\u2014'
+    mp = r['max_profit_pct']; mp_val = ('%.0f%%' % mp) if mp is not None else '\u2014'
+    row2 = ("<div class='maprow' style='grid-template-columns:1fr 1fr 1fr;'>"
+        + _cell('Spread value', sv_val, s['spread_value'], sv_sub, 'sm')
+        + _cell('Long put \u03b4', ld_val, s['long_put_delta'], 'BS approx', 'sm')
+        + _cell('% max profit', mp_val, s['max_profit_pct'], 'of max', 'sm') + "</div>")
+    su = r['stop_used_pct']; su_val = ('%.0f%%' % su) if su is not None else '\u2014'
+    gc = CELL['gray']; gs = 'background:' + gc['bg'] + ';border-color:' + gc['bd'] + ';color:' + gc['tx'] + ';'
+    debit_cell = ("<div class='cell sm' style='" + gs + "'><div class='clabel'>Net debit</div>"
+        + "<div class='cellfoot'><span class='cval mono' style='color:" + gc['vl'] + ";'>" + _money(r['debit_paid']) + "</span></div>"
+        + "<div class='cellfoot'><span class='csub'>paid to enter</span><span class='schip'>ref</span></div></div>")
+    mp_ref = r['max_profit_display']; ss = r['short_strike']
+    mp_money = _money(mp_ref) if mp_ref else '\u2014'
+    ss_str = ('%.0f' % ss) if ss is not None else '\u2014'
+    mpp_cell = ("<div class='cell sm' style='" + gs + "'><div class='clabel'>Max profit</div>"
+        + "<div class='cellfoot'><span class='cval mono' style='color:" + gc['vl'] + ";'>" + mp_money + "</span></div>"
+        + "<div class='cellfoot'><span class='csub'>if spot &lt; " + ss_str + "</span><span class='schip'>ref</span></div></div>")
+    row3 = ("<div class='maprow' style='grid-template-columns:1fr 1fr 1fr;'>"
+        + _cell('1\u00d7 stop', su_val, s['stop_used'], 'of debit paid', 'sm')
+        + debit_cell + mpp_cell + "</div>")
+    return "<div class='map'>" + row1 + row2 + row3 + "</div>"
+
+def _card_bps(r, sc, link=True):
+    g_color, g_text = guidance_bearput(r, sc)
+    co = _esc(r['company_name'] or '')
+    head = ("<div class='hrow'><span class='tk'>" + _esc(r['ticker']) + "</span><span class='co'>" + co + "</span><span class='spacer'></span>" + _comp_badge(sc) + "</div>")
+    body = _summary_facts_bps(r) + _render_map_bps(r, sc)
+    guide = "<div class='guide g-" + g_color + "'>" + _esc(g_text) + "</div>"
+    inner = head + body + guide
+    if link:
+        return "<a class='card' href='/health?ticker=" + _esc(r['ticker']) + "'>" + inner + "</a>"
+    return "<div class='card'>" + inner + "</div>"
+
+def _legend_bps():
+    SQ = {'green':('#6aa329','#3b6d11'),'amber':('#e0a64a','#ba7517'),'red':('#cf6b6b','#a32d2d'),'gray':('#b9b7ae','#7a776d')}
+    def chip(ck, word, thresh):
+        fill, tx = SQ[ck]
+        return ("<span class='tchip'><span class='sqr' style='background:" + fill + "'></span><span style='color:" + tx + "'><b>" + _esc(word) + "</b> " + _esc(thresh) + "</span></span>")
+    defs = [
+        ('B/E buffer','Weight 30%',False,'Distance from spot to break-even as % of spot. Negative = stock fell below break-even (profitable).','(spot - breakeven) / spot * 100.',[('green','green','<=0%'),('amber','amber','0-5%'),('red','red','>5%')]),
+        ('DTE','Weight 20%',False,'Days to expiration. Time decay works against debit spreads.','Calendar days to expiry.',[('green','green','>30d'),('amber','amber','7-21d'),('red','red','<=7d')]),
+        ('Spread value','Weight 20%',False,'Current spread value as % of max. Rises as stock moves through the strikes.','BS approx vs max spread value.',[('green','green','>=60%'),('amber','amber','20-60%'),('red','red','<20%')]),
+        ('Long put delta','Weight 15%',False,'Absolute delta of the long put. Rising = put gaining ITM probability.','Black-Scholes from spot, long strike, DTE, IV.',[('green','green','>=0.50'),('amber','amber','0.25-0.50'),('red','red','<0.25')]),
+        ('% max profit','Weight 10%',False,'P&L as % of max profit. At 80%+ consider closing.','pnl / max_profit * 100.',[('green','green','>=80%'),('amber','amber','20-80%'),('red','red','<0%')]),
+        ('1x stop','Weight 5%',False,'Loss as % of debit paid. Hard stop 50-60%.','max(0,-pnl) / debit_paid * 100.',[('green','green','0%'),('amber','amber','<40%'),('red','red','>=60%')]),
+        ('Net debit','Reference',True,'Premium paid to enter. This is your maximum possible loss.','abs(net_premium).',[]),
+        ('Max profit','Reference',True,'(spread_width - net_debit) * contracts * 100. Achieved if spot < short strike at expiry.','max_profit from position record.',[]),
+    ]
+    cards = []
+    for name, wlabel, is_ctx, desc, calc, chips in defs:
+        badge_cls = 'wbadge ctx' if is_ctx else 'wbadge'
+        ch = ''.join(chip(*c) for c in chips)
+        cards.append("<div class='vcard'><div class='vhead'><span class='vname'>" + _esc(name) + "</span><span class='" + badge_cls + "'>" + _esc(wlabel) + "</span></div>" + "<div class='vdesc'>" + _esc(desc) + "</div>" + "<div class='vcalc'>Calc: " + _esc(calc) + "</div>" + "<div class='vthresh'>" + ch + "</div></div>")
+    keyline = ("<div class='keyline'>"
+        + "<span class='keyitem'><span class='sqr' style='background:#6aa329'></span>70+ healthy</span>"
+        + "<span class='keyitem'><span class='sqr' style='background:#e0a64a'></span>40-69 watch</span>"
+        + "<span class='keyitem'><span class='sqr' style='background:#cf6b6b'></span>&lt;40 concern</span>"
+        + "<span class='keyitem'><span class='sqr' style='background:#b9b7ae'></span>no data</span>"
+        + "<span class='sep'>\u00b7</span><span class='keynote'>cell size = variable weight</span></div>")
+    return keyline + "<div class='vardefs-title'>Bear Put Spread \u2014 variable definitions &amp; scoring</div>" + "<div class='vgrid'>" + ''.join(cards) + "</div>"
+
