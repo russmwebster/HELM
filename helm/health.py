@@ -364,6 +364,8 @@ a { color: inherit; text-decoration: none; }
 .pill-g { background: #eaf3de; color: #27500a; } .pill-r { background: #fcebeb; color: #791f1f; }
 .badge-itm { font-size: 10.5px; font-weight: 700; letter-spacing: .05em; padding: 2px 7px;
              border-radius: 5px; background: #fdf0da; color: #854f0b; border: 1px solid #f0b050; }
+.pill-src { font-size: 10px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; padding: 2px 6px; border-radius: 5px; background: #efece4; color: #8a8576; border: 1px solid #ddd8cc; }
+.pill-src-est { background: #fdf0da; color: #854f0b; border: 1px solid #f0b050; }
 
 .map { display: grid; gap: 6px; }
 .maprow { display: grid; gap: 6px; }
@@ -1329,7 +1331,7 @@ def guidance_icondor(r, scored):
 
 def _summary_facts_ic(r):
     spot = r["spot_price"]
-    pnl  = r["pnl_unrealized"]
+    pnl  = r.get("pnl_display", r["pnl_unrealized"])
     sp_s = r["short_put_strike"]
     sc_s = r["short_call_strike"]
     spot_str = f"{spot:.2f}" if spot is not None else "\u2014"
@@ -1345,6 +1347,8 @@ def _summary_facts_ic(r):
         spot_cls = "spot-g"
     pill_cls = "pill-g" if (pnl is not None and pnl >= 0) else "pill-r"
     pill = f"<span class='pill {pill_cls} mono'>{_money(pnl)}</span>" if pnl is not None else ""
+    _ps = r.get("pnl_source")
+    src = (f"<span class='pill-src{' pill-src-est' if _ps in ('BS est','recorded','n/a') else ''}'>{_ps}</span>") if (pnl is not None and _ps) else ''
     zone_badge = "<span class='badge-itm'>IN ZONE</span>" if r.get("in_profit_zone") else ""
     rng = f"{sp_s:.0f}\u2013{sc_s:.0f}" if (sp_s and sc_s) else "\u2014"
     return (
@@ -1353,7 +1357,7 @@ def _summary_facts_ic(r):
         f"<span class='fact'><span class='lbl'>Zone</span><b class='mono'>{rng}</b></span>"
         f"<span class='fact'><span class='lbl'>DTE</span><b class='mono'>{r['dte_now']}</b></span>"
         + _earnings_chip(r.get('earnings_date'), r.get('expiration'))
-        + f"{pill}{zone_badge}"
+        + f"{pill}{src}{zone_badge}"
         + "</div>"
     )
 
@@ -1753,6 +1757,8 @@ def _summary_facts_bps(r):
     else: spot_cls = 'spot-r'
     pill_cls = 'pill-g' if (pnl is not None and pnl >= 0) else 'pill-r'
     pill = ("<span class='pill " + pill_cls + " mono'>" + _money(pnl) + "</span>") if pnl is not None else ''
+    _ps = r.get('pnl_source')
+    src = ("<span class='pill-src" + (" pill-src-est" if _ps in ('BS est','recorded','n/a') else "") + "'>" + _ps + "</span>") if (pnl is not None and _ps) else ''
     itm = "<span class='badge-itm'>PROFITABLE</span>" if r.get('in_profit_zone') else ''
     strikes = ('%.0f\u2013%.0f' % (ss, ls)) if (ls and ss) else '\u2014'
     return ("<div class='facts'>"
@@ -1760,7 +1766,7 @@ def _summary_facts_bps(r):
         + "<span class='fact'><span class='lbl'>Strikes</span><b class='mono'>" + strikes + "</b></span>"
         + "<span class='fact'><span class='lbl'>B/E</span><b class='mono'>" + be_str + "</b></span>"
         + "<span class='fact'><span class='lbl'>DTE</span><b class='mono'>" + str(r['dte_now']) + "</b></span>"
-        + pill + itm + "</div>")
+        + pill + src + itm + "</div>")
 
 def _render_map_bps(r, sc):
     s = sc['scores']
