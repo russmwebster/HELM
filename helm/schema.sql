@@ -576,7 +576,7 @@ SELECT
   p.realized_pnl, p.exit_reason,
   CASE p.strategy
     WHEN 'CSP' THEN (SELECT l.strike*100*l.contracts FROM legs l WHERE l.position_id=p.id AND l.leg_role='SHORT_PUT' LIMIT 1)
-    WHEN 'COVERED_CALL' THEN (SELECT s.shares*s.cost_basis FROM stock_positions s WHERE s.ticker=p.ticker AND s.account_id=p.account_id LIMIT 1)
+    WHEN 'COVERED_CALL' THEN (SELECT l.contracts*l.open_price FROM legs l WHERE l.position_id=p.id AND l.leg_role='LONG_STOCK' LIMIT 1)
     WHEN 'LONG_CALL' THEN ABS(p.net_premium)
     WHEN 'LONG_PUT' THEN ABS(p.net_premium)
     WHEN 'BEAR_PUT_SPREAD' THEN ABS(p.net_premium)
