@@ -1203,7 +1203,7 @@ def gather_icondor(conn, ticker=None):
         SELECT p.id, p.ticker, p.company_name, p.net_premium, p.total_contracts,
                p.max_loss, p.earnings_date,
                c.spot_price, c.delta, c.theta, c.dte_now,
-               c.pnl_unrealized, c.iv_current, c.iv_vs_entry, c.checked_at
+               c.pnl_unrealized, c.iv_current, c.iv_vs_entry, c.checked_at, c.greeks_source, c.data_quality
         FROM positions p
         LEFT JOIN checks c ON c.id = (
             SELECT id FROM checks WHERE position_id = p.id
@@ -1249,7 +1249,8 @@ def gather_icondor(conn, ticker=None):
         r["abs_put_delta"]  = abs(r["short_put_delta"])  if r["short_put_delta"]  is not None else None
         r["abs_call_delta"] = abs(r["short_call_delta"]) if r["short_call_delta"] is not None else None
         r["abs_net_delta"]  = abs(r["delta"]) if r["delta"] is not None else None
-        pnl = r["pnl_unrealized"]
+        pnl, r["pnl_source"] = _pnl_pick(r.get("greeks_source"), r["pnl_unrealized"], None, r["max_loss"], net_prem)
+        r["pnl_display"] = pnl
         r["max_profit_pct"] = (pnl / net_prem * 100) if (pnl is not None and net_prem) else None
         max_loss = r["max_loss"]
         r["stop_used_pct"] = (max(0.0, -pnl) / max_loss * 100) if (pnl is not None and max_loss and max_loss > 0) else None
@@ -1660,7 +1661,7 @@ def s_bps_max_profit(p):
     return 0
 
 def gather_bearput(conn, ticker=None):
-    sql = """SELECT p.id,p.ticker,p.company_name,p.net_premium,p.total_contracts,p.max_loss,p.max_profit,p.earnings_date,c.spot_price,c.delta,c.theta,c.dte_now,c.pnl_unrealized,c.iv_current,c.checked_at FROM positions p LEFT JOIN checks c ON c.id=(SELECT id FROM checks WHERE position_id=p.id ORDER BY checked_at DESC LIMIT 1) WHERE p.status='OPEN' AND p.strategy='BEAR_PUT_SPREAD'"""
+    sql = """SELECT p.id,p.ticker,p.company_name,p.net_premium,p.total_contracts,p.max_loss,p.max_profit,p.earnings_date,c.spot_price,c.delta,c.theta,c.dte_now,c.pnl_unrealized,c.iv_current,c.checked_at,c.greeks_source,c.data_quality FROM positions p LEFT JOIN checks c ON c.id=(SELECT id FROM checks WHERE position_id=p.id ORDER BY checked_at DESC LIMIT 1) WHERE p.status='OPEN' AND p.strategy='BEAR_PUT_SPREAD'"""
     args = []
     if ticker:
         sql += " AND p.ticker=?"
@@ -1695,10 +1696,10 @@ def gather_bearput(conn, ticker=None):
         r['spread_value_pct'] = (r['spread_current_value']/r['max_spread_value']*100) if (r['spread_current_value'] is not None and r['max_spread_value']) else None
         r['long_put_delta_raw'] = _bs_delta_ic(s, r['long_strike'], dte, iv, option_type='put') if iv else None
         r['abs_long_put_delta'] = abs(r['long_put_delta_raw']) if r['long_put_delta_raw'] is not None else None
-        pnl = r['pnl_calc'] if r['pnl_calc'] is not None else r['pnl_unrealized']
-        r['pnl_display'] = pnl
         mp = r['max_profit'] or ((r['max_spread_value'] - d) if r['max_spread_value'] else None)
         r['max_profit_display'] = mp
+        pnl, r['pnl_source'] = _pnl_pick(r.get('greeks_source'), r['pnl_unrealized'], r['pnl_calc'], d, mp)
+        r['pnl_display'] = pnl
         r['max_profit_pct'] = (pnl/mp*100) if (pnl is not None and mp and mp > 0) else None
         r['stop_used_pct'] = (max(0.0, -pnl)/d*100) if (pnl is not None and d > 0) else None
     return rows
@@ -1833,3 +1834,26 @@ def _legend_bps():
         + "<span class='sep'>\u00b7</span><span class='keynote'>cell size = variable weight</span></div>")
     return keyline + "<div class='vardefs-title'>Bear Put Spread \u2014 variable definitions &amp; scoring</div>" + "<div class='vgrid'>" + ''.join(cards) + "</div>"
 
+
+
+def _pnl_pick(greeks_source, recorded, bs, max_loss, max_profit):
+    gs = (greeks_source or "").lower()
+    lo = -(abs(max_loss) + 1.0) if max_loss is not None else None
+    hi = (abs(max_profit) + 1.0) if max_profit is not None else None
+    def ok(v):
+        if v is None:
+            return False
+        if lo is not None and v < lo:
+            return False
+        if hi is not None and v > hi:
+            return False
+        return True
+    if gs.startswith("ibkr") and ok(recorded):
+        return recorded, ("IBKR frozen" if "frozen" in gs else "IBKR")
+    if gs.startswith("yfinance") and ok(recorded):
+        return recorded, "yfinance"
+    if bs is not None:
+        return bs, "BS est"
+    if ok(recorded):
+        return recorded, "recorded"
+    return None, "n/a"
