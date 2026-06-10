@@ -346,6 +346,9 @@ def fetch_technicals(ticker: str, ivr_record=None) -> dict:
 
 # ── Main command ──────────────────────────────────────────────────────────────
 
+from helm.cli._decision_capture import persist_scan_signals
+
+
 def run():
     args = sys.argv[1:]
 
@@ -448,6 +451,11 @@ def run():
         valid = [r for r in valid if r.get("iv_current") and r["iv_current"] >= min_iv]
 
     # Sort by bias score (absolute value first, then bullish bias for CSP focus)
+    # decision-capture (policy v0): persist every scanned candidate
+    try:
+        persist_scan_signals(results)
+    except Exception:
+        pass
     valid.sort(key=lambda r: (-abs(r["bias_score"]), -r["bias_score"]))
 
     if top_n:
