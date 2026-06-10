@@ -613,3 +613,103 @@ FROM checks ck
 JOIN positions p ON p.id=ck.position_id
 LEFT JOIN entry_snapshots es ON es.id=(SELECT e2.id FROM entry_snapshots e2 WHERE e2.position_id=p.id ORDER BY e2.snapshot_at ASC LIMIT 1);
 
+-- ============================================================
+-- Decision-capture layer  (added 2026-06-09)
+--   Entry decisions : signals (revived) + russ_* / spec_* / helm_policy_version
+--   Exit decisions  : checks.policy_version + v_exit_decisions view
+--   Counterfactuals : shadow_positions / shadow_marks
+--   Market regime   : market_context
+-- ============================================================
+
+ALTER TABLE signals ADD COLUMN russ_intent TEXT CHECK(russ_intent IN ('OPEN','SKIP'));
+ALTER TABLE signals ADD COLUMN russ_intent_at TEXT;
+ALTER TABLE signals ADD COLUMN russ_action TEXT DEFAULT 'PENDING' CHECK(russ_action IN ('OPEN','SKIP','PENDING'));
+ALTER TABLE signals ADD COLUMN russ_action_at TEXT;
+ALTER TABLE signals ADD COLUMN spec_match TEXT CHECK(spec_match IN ('EXACT','MODIFIED','NA'));
+ALTER TABLE signals ADD COLUMN spec_delta TEXT;
+ALTER TABLE signals ADD COLUMN helm_policy_version TEXT;
+ALTER TABLE checks ADD COLUMN policy_version TEXT;
+
+CREATE TABLE market_context (
+    id TEXT PRIMARY KEY,
+    as_of_date TEXT NOT NULL,
+    vix REAL,
+    vix_regime TEXT,
+    spx_price REAL,
+    spx_vs_sma50 TEXT,
+    spx_vs_sma200 TEXT,
+    index_trend TEXT,
+    term_structure TEXT,
+    term_structure_value REAL,
+    breadth REAL,
+    notes TEXT,
+    data_source TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+ );
+
+CREATE TABLE shadow_positions (
+    id TEXT PRIMARY KEY,
+    signal_id TEXT REFERENCES signals(id) ON DELETE CASCADE,
+    ticker TEXT NOT NULL,
+    strategy TEXT NOT NULL,
+    opt_type TEXT,
+    direction TEXT,
+    strike REAL,
+    expiration TEXT,
+    contracts INTEGER DEFAULT 1,
+    entry_price REAL,
+    entry_spot REAL,
+    entry_iv REAL,
+    opened_at TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'OPEN' CHECK(status IN ('OPEN','CLOSED','EXPIRED')),
+    closed_at TEXT,
+    exit_price REAL,
+    realized_pnl REAL,
+    exit_reason TEXT,
+    spec TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+ );
+
+CREATE TABLE shadow_marks (
+    id TEXT PRIMARY KEY,
+    shadow_position_id TEXT NOT NULL REFERENCES shadow_positions(id) ON DELETE CASCADE,
+    marked_at TEXT NOT NULL,
+    spot_price REAL,
+    option_price REAL,
+    dte_now INTEGER,
+    delta REAL,
+    iv_current REAL,
+    pnl_unrealized REAL,
+    pnl_pct REAL,
+    max_profit_pct REAL,
+    health_flag TEXT,
+    action_signal TEXT,
+    data_source TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+ );
+
+DROP VIEW IF EXISTS v_exit_decisions;
+CREATE VIEW v_exit_decisions AS
+ SELECT
+    ch.id             AS check_id,
+    ch.position_id    AS position_id,
+    p.ticker          AS ticker,
+    p.strategy        AS strategy,
+    ch.checked_at     AS decided_at,
+    ch.action_signal  AS helm_exit_call,
+    ch.health_flag    AS helm_health_flag,
+    ch.narrative      AS helm_reasons,
+    ch.policy_version AS helm_policy_version,
+    ch.dte_now        AS dte_now,
+    ch.days_open      AS days_open,
+    ch.pnl_unrealized AS pnl_at_check,
+    ch.pnl_pct        AS pnl_pct_at_check,
+    p.status          AS position_status,
+    p.closed_at       AS position_closed_at,
+    p.realized_pnl    AS position_realized_pnl,
+    p.exit_reason     AS position_exit_reason,
+    CASE WHEN p.closed_at IS NOT NULL AND p.closed_at >= ch.checked_at THEN 1 ELSE 0 END AS closed_after_check
+ FROM checks ch
+ JOIN positions p ON p.id = ch.position_id;
+
