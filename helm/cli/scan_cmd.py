@@ -204,6 +204,7 @@ def fetch_technicals(ticker: str, ivr_record=None) -> dict:
 
         # Get 1 year of daily data for indicators
         hist = tk.history(period="1y", interval="1d")
+        hist = hist.dropna(subset=["Open", "High", "Low", "Close"])
         if hist.empty or len(hist) < 50:
             result["error"] = "Insufficient price history"
             return result
@@ -359,6 +360,7 @@ def run():
         console.print("[dim]  --min-iv N        Minimum IV% threshold[/dim]")
         console.print("[dim]  --top N           Show top N candidates[/dim]")
         console.print("[dim]  --workers N       Concurrent workers (default: 5)[/dim]")
+        console.print("[dim]  --blind           Capture only; suppress HELM read (for russ-scan)[/dim]")
         console.print()
         return
 
@@ -371,6 +373,7 @@ def run():
     min_iv = None
     top_n = None
     workers = 5
+    blind = False
     ticker_args = []
 
     i = 0
@@ -379,6 +382,7 @@ def run():
         elif args[i] == "--min-iv" and i+1 < len(args): min_iv = float(args[i+1]); i += 2
         elif args[i] == "--top" and i+1 < len(args):    top_n = int(args[i+1]); i += 2
         elif args[i] == "--workers" and i+1 < len(args): workers = int(args[i+1]); i += 2
+        elif args[i] == "--blind": blind = True; i += 1
         else: ticker_args.append(args[i]); i += 1
 
     # Determine tickers
@@ -456,6 +460,11 @@ def run():
         persist_scan_signals(results)
     except Exception:
         pass
+    if blind:
+        console.print(f"[green]Scan complete.[/green] [bold]{len(results)}[/bold] candidates captured to signals (HELM read suppressed).")
+        console.print("[dim]Open russ-scan for your independent picks: http://helm.local:8766/russ-scan[/dim]")
+        return
+
     valid.sort(key=lambda r: (-abs(r["bias_score"]), -r["bias_score"]))
 
     if top_n:
