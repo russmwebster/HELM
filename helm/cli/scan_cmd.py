@@ -99,7 +99,7 @@ def bias_to_strategy(score: int, iv_pct, rsi=None, ivr=None):
     """
     iv_high      = iv_pct is not None and float(iv_pct) >= 40
     iv_moderate  = iv_pct is not None and 25 <= float(iv_pct) < 40
-    iv_low       = iv_pct is not None and float(iv_pct) < 30
+    iv_low       = iv_pct is not None and float(iv_pct) < 25
     ivr_val      = float(ivr) if ivr is not None else None
     ivr_rich     = ivr_val is not None and ivr_val >= 35   # sell premium (lowered from 50)
     ivr_moderate = ivr_val is not None and 15 <= ivr_val < 35
