@@ -306,22 +306,21 @@ def fetch_technicals(ticker: str, ivr_record=None) -> dict:
             elif pct_52 >= 75:
                 factors.append(f"Near 52wk high ({pct_52:.0f}% of range) — momentum")  # neutral, not bearish
 
-        # IV context
+        # IV context (informational only — premium buy/sell is decided in
+        # bias_to_strategy via IVR, not the directional score)
         iv = result["iv_current"]
         if iv is not None:
             if iv >= 50:
-                score += 1; factors.append(f"IV {iv:.0f}% — very elevated, premium selling favored")
+                factors.append(f"IV {iv:.0f}% — very elevated, premium selling favored")
             elif iv >= 35:
                 factors.append(f"IV {iv:.0f}% — elevated")
-            elif iv < 20:
-                if iv and iv > 1.0:  # only penalize if IV is real data (>1%)
-                    score -= 1; factors.append(f"IV {iv:.0f}% — low, premium selling less attractive")
-                # else: iv=0 is missing yfinance data, skip scoring
+            elif iv < 20 and iv > 1.0:
+                factors.append(f"IV {iv:.0f}% — low, premium selling less attractive")
 
         result["bias_score"] = max(-3, min(3, score))
         result["bias_factors"] = factors
 
-        strategy, rationale = bias_to_strategy(result["bias_score"], None, rsi=result.get("rsi"), ivr=result.get("iv_rank"))
+        strategy, rationale = bias_to_strategy(result["bias_score"], None, rsi=result.get("rsi_14"), ivr=result.get("iv_rank"))
         conviction = compute_conviction(result["bias_score"], result.get("iv_rank"))
         result["conviction"] = conviction
         result["strategy"] = strategy
