@@ -113,15 +113,15 @@ class WatchlistItem:
                     last_screened_at, willing_to_own, thesis,
                     market_cap, avg_daily_volume, week_52_high, week_52_low,
                     beta, dividend_yield, next_earnings, last_fundamentals_at,
-                    added_at, notes
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    added_at, notes, active
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ''', (
                 self.id, self.ticker, self.company_name, self.sector,
                 self.is_optionable, self.last_screened_at, self.willing_to_own,
                 self.thesis, self.market_cap, self.avg_daily_volume,
                 self.week_52_high, self.week_52_low, self.beta,
                 self.dividend_yield, self.next_earnings,
-                self.last_fundamentals_at, self.added_at, self.notes
+                self.last_fundamentals_at, self.added_at, self.notes, self.active
             ))
         return self
 
