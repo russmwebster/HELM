@@ -247,8 +247,8 @@ def fetch_technicals(ticker: str, ivr_record=None) -> dict:
         }
 
         # ── 52-week range ─────────────────────────────────────────────────────
-        high_52 = float(close.rolling(252).max().iloc[-1])
-        low_52  = float(close.rolling(252).min().iloc[-1])
+        high_52 = float(close.max())
+        low_52  = float(close.min())
         result["week_52_high"] = round(high_52, 2)
         result["week_52_low"]  = round(low_52, 2)
         if high_52 > low_52:

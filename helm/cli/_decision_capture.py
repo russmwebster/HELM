@@ -13,7 +13,7 @@ from datetime import datetime
 from helm.models.signal import Signal
 
 _PASSTHROUGH = ("iv_current", "iv_rank", "ema_20", "sma_50", "sma_200",
-                "rsi_14", "atr_14")
+                "rsi_14", "atr_14", "price_vs_52wk_pct")
 
 
 def _bias_dir(score):

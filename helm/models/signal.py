@@ -48,6 +48,7 @@ class Signal:
     price_vs_ema20:      Optional[str]   = None
     price_vs_sma50:      Optional[str]   = None
     price_vs_sma200:     Optional[str]   = None
+    price_vs_52wk_pct:   Optional[float]  = None
     rsi_condition:       Optional[str]   = None
     macd_condition:      Optional[str]   = None
     trend_strength:      Optional[str]   = None
