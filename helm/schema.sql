@@ -85,6 +85,7 @@ CREATE TABLE IF NOT EXISTS signals (
     price_vs_ema20      TEXT,             -- ABOVE | BELOW | AT
     price_vs_sma50      TEXT,             -- ABOVE | BELOW | AT
     price_vs_sma200     TEXT,             -- ABOVE | BELOW | AT
+    price_vs_52wk_pct   REAL,             -- 0=52wk low, 100=52wk high
     rsi_condition       TEXT,             -- OVERBOUGHT | OVERSOLD | NEUTRAL
     macd_condition      TEXT,             -- BULLISH | BEARISH | NEUTRAL
     trend_strength      TEXT,             -- STRONG | MODERATE | WEAK | NONE
