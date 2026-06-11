@@ -198,6 +198,7 @@ def fetch_technicals(ticker: str, ivr_record=None) -> dict:
     if ivr_record is not None:
         result["iv_rank"] = ivr_record.iv_rank
         result["iv_pct"]  = ivr_record.iv_percentile
+        result["iv_current"] = ivr_record.iv_current
 
     try:
         tk = yf.Ticker(ticker)
@@ -266,7 +267,7 @@ def fetch_technicals(ticker: str, ivr_record=None) -> dict:
                     puts["dist"] = (puts["strike"] - price).abs()
                     row = puts.nsmallest(1, "dist").iloc[0]
                     iv = row.get("impliedVolatility")
-                    if iv and float(iv) > 0:
+                    if iv and float(iv) > 0 and result["iv_current"] is None:
                         result["iv_current"] = round(float(iv) * 100, 1)
                     break
         except Exception:
@@ -390,10 +391,10 @@ def run():
         tickers = [t.strip().upper() for raw in ticker_args
                    for t in raw.replace(",", " ").split() if t.strip()]
     else:
-        items = WatchlistItem.optionable()
+        items = WatchlistItem.active()
         if not items:
-            console.print("[yellow]No optionable tickers found.[/yellow]")
-            console.print("[dim]Run [bold]helm screen[/bold] first to mark tickers as optionable.[/dim]")
+            console.print("[yellow]No active tickers found.[/yellow]")
+            console.print("[dim]Set active tickers via the master cull (active flag).[/dim]")
             return
         tickers = [item.ticker for item in items]
 

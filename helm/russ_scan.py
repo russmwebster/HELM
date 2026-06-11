@@ -9,7 +9,7 @@ import json
 import datetime
 
 RAW_COLS = ["ticker", "spot_price", "ema_20", "sma_50", "sma_200",
-            "rsi_14", "atr_14", "iv_rank", "iv_percentile"]
+            "rsi_14", "atr_14", "iv_current", "iv_rank", "iv_percentile"]
 
 
 def _latest(conn):
@@ -108,7 +108,7 @@ function fmt(v,d){ if(v===null||v===undefined||v!==v) return '<span class=muted>
 function pct(p,base){ if(p===null||base===null||p!==p||base!==base||!base) return '<span class=muted>--</span>'; var x=(p/base-1)*100; var c=x>=0?'#22c55e':'#ef4444'; return '<span style=color:'+c+'>'+(x>=0?'+':'')+x.toFixed(1)+'%</span>'; }
 function rsiCell(v){ if(v===null||v!==v) return '<span class=muted>--</span>'; var c='#e6e6e6'; if(v<=30)c='#22c55e'; else if(v>=70)c='#ef4444'; return '<span style=color:'+c+'>'+v.toFixed(0)+'</span>'; }
 function head(){
-  var h='<tr><th class=l>Ticker</th><th>Price</th><th>vs20</th><th>vs50</th><th>vs200</th><th>RSI</th><th>ATR</th><th>IVR</th><th>IVP</th><th class=l>Your read</th><th class="l reveal-col">HELM</th></tr>';
+  var h='<tr><th class=l>Ticker</th><th>Price</th><th>vs20</th><th>vs50</th><th>vs200</th><th>RSI</th><th>ATR</th><th>IV</th><th>IVR</th><th>IVP</th><th class=l>Your read</th><th class="l reveal-col">HELM</th></tr>';
   document.querySelector('#grid thead').innerHTML=h;
 }
 function rowHtml(r){
@@ -120,7 +120,7 @@ function rowHtml(r){
     '<td>'+pct(r.spot_price,r.sma_50)+'</td>'+
     '<td>'+pct(r.spot_price,r.sma_200)+'</td>'+
     '<td>'+rsiCell(r.rsi_14)+'</td>'+
-    '<td>'+fmt(r.atr_14,2)+'</td>'+
+    '<td>'+fmt(r.atr_14,2)+'</td>'+ '<td>'+fmt(r.iv_current,0)+'</td>'+
     
     '<td>'+fmt(r.iv_rank,0)+'</td>'+
     '<td>'+fmt(r.iv_percentile,0)+'</td>'+

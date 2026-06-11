@@ -13,6 +13,7 @@ class WatchlistItem:
     ticker:           str
     is_optionable:    int = 0
     willing_to_own:   int = 1
+    active:           int = 0
     company_name:     Optional[str] = None
     sector:           Optional[str] = None
     last_screened_at: Optional[str] = None
@@ -44,6 +45,7 @@ class WatchlistItem:
         d = dict(row)
         d['is_optionable'] = int(d.get('is_optionable', 0))
         d['willing_to_own'] = int(d.get('willing_to_own', 1))
+        d['active'] = int(d.get('active', 0) or 0)
         return cls(**d)
 
     @classmethod
@@ -78,6 +80,15 @@ class WatchlistItem:
         conn = get_conn()
         try:
             rows = conn.execute('SELECT * FROM watchlist WHERE willing_to_own = 1 AND is_optionable = 1 ORDER BY ticker').fetchall()
+            return [cls.from_row(r) for r in rows]
+        finally:
+            conn.close()
+
+    @classmethod
+    def active(cls) -> list[WatchlistItem]:
+        conn = get_conn()
+        try:
+            rows = conn.execute('SELECT * FROM watchlist WHERE active = 1 AND is_optionable = 1 ORDER BY ticker').fetchall()
             return [cls.from_row(r) for r in rows]
         finally:
             conn.close()

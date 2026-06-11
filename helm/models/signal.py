@@ -90,6 +90,15 @@ class Signal:
     data_quality:        str             = 'GOOD'
     created_at:          str             = field(default_factory=lambda: datetime.now().isoformat())
 
+    # -- Decision capture (policy v0) --
+    russ_intent:         Optional[str] = None
+    russ_intent_at:      Optional[str] = None
+    russ_action:         Optional[str] = 'PENDING'
+    russ_action_at:      Optional[str] = None
+    spec_match:          Optional[str] = None
+    spec_delta:          Optional[str] = None
+    helm_policy_version: Optional[str] = None
+
     # ── Factories ────────────────────────────────────────────────────────────
 
     @classmethod
@@ -223,45 +232,16 @@ class Signal:
     # ── Persistence ──────────────────────────────────────────────────────────
 
     def save(self) -> Signal:
-        # Signals are never deleted but can be updated (e.g. outcome fields)
+        # Column list derived from the dataclass so it cannot drift from the table.
+        from dataclasses import fields as _fields
+        cols = [f.name for f in _fields(self)]
+        placeholders = ','.join('?' for _ in cols)
+        values = tuple(getattr(self, c) for c in cols)
         with transaction() as conn:
-            conn.execute("""
-                INSERT OR REPLACE INTO signals (
-                    id, ticker, generated_at, iv_current, iv_rank, iv_percentile,
-                    iv_regime, spot_price, ema_20, sma_50, sma_200, rsi_14,
-                    macd_line, macd_signal, macd_histogram, atr_14,
-                    bb_width, bb_upper, bb_lower, bb_squeeze,
-                    price_vs_ema20, price_vs_sma50, price_vs_sma200,
-                    rsi_condition, macd_condition, trend_strength,
-                    auto_bias_score, auto_bias, auto_bias_reasoning,
-                    user_bias_override, confirmed_bias, recommendations,
-                    top_strategy, top_fit, atr_1x_price, atr_2x_price,
-                    suggested_contracts, earnings_date, days_to_earnings,
-                    earnings_warning, willing_to_own, is_optionable,
-                    position_opened, position_id, outcome_pnl,
-                    outcome_result, outcome_notes, data_source,
-                    data_quality, created_at
-                ) VALUES (
-                    ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,
-                    ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?
-                )
-            """, (
-                self.id, self.ticker, self.generated_at,
-                self.iv_current, self.iv_rank, self.iv_percentile, self.iv_regime,
-                self.spot_price, self.ema_20, self.sma_50, self.sma_200, self.rsi_14,
-                self.macd_line, self.macd_signal, self.macd_histogram, self.atr_14,
-                self.bb_width, self.bb_upper, self.bb_lower, self.bb_squeeze,
-                self.price_vs_ema20, self.price_vs_sma50, self.price_vs_sma200,
-                self.rsi_condition, self.macd_condition, self.trend_strength,
-                self.auto_bias_score, self.auto_bias, self.auto_bias_reasoning,
-                self.user_bias_override, self.confirmed_bias, self.recommendations,
-                self.top_strategy, self.top_fit, self.atr_1x_price, self.atr_2x_price,
-                self.suggested_contracts, self.earnings_date, self.days_to_earnings,
-                self.earnings_warning, self.willing_to_own, self.is_optionable,
-                self.position_opened, self.position_id, self.outcome_pnl,
-                self.outcome_result, self.outcome_notes, self.data_source,
-                self.data_quality, self.created_at
-            ))
+            conn.execute(
+                'INSERT OR REPLACE INTO signals (' + ', '.join(cols) + ') VALUES (' + placeholders + ')',
+                values,
+            )
         return self
 
     def __str__(self) -> str:
