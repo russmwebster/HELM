@@ -8,6 +8,7 @@ import uuid
 from helm.db import get_conn, transaction, row_to_dict
 
 STRATEGIES = [
+    'BEAR_PUT_SPREAD',   # in ledger; whitelist synced to reality
     'CSP','COVERED_CALL','LONG_CALL','PERM',
     'BULL_PUT_SPREAD','BEAR_CALL_SPREAD','IRON_CONDOR',
     'DIAGONAL','PMCC','SHORT_STRANGLE','JADE_LIZARD'
@@ -68,7 +69,11 @@ class Position:
 
     @classmethod
     def from_row(cls, row) -> Position:
-        return cls(**dict(row))
+        # filter to known dataclass fields so additive schema columns
+        # (e.g. exit_reason, book) don't break reads
+        from dataclasses import fields
+        known = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in dict(row).items() if k in known})
 
     @classmethod
     def get(cls, position_id: str) -> Optional[Position]:
