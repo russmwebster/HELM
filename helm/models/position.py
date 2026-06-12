@@ -7,10 +7,12 @@ import uuid
 
 from helm.db import get_conn, transaction, row_to_dict
 
+# Source of truth is the positions table CHECK constraint; keep this >= that
+# set so __post_init__ / from_row never reject a real ledger row.
 STRATEGIES = [
-    'BEAR_PUT_SPREAD',   # in ledger; whitelist synced to reality
     'CSP','COVERED_CALL','LONG_CALL','PERM',
     'BULL_PUT_SPREAD','BEAR_CALL_SPREAD','IRON_CONDOR',
+    'BEAR_PUT_SPREAD','LONG_CONDOR',
     'DIAGONAL','PMCC','SHORT_STRANGLE','JADE_LIZARD'
 ]
 STATUSES = ['PENDING','OPEN','CLOSED','EXPIRED','ASSIGNED','ROLLED_OUT']
@@ -43,6 +45,7 @@ class Position:
     tags:                 Optional[str] = None
     created_at:           str = field(default_factory=lambda: datetime.now().isoformat())
     updated_at:           str = field(default_factory=lambda: datetime.now().isoformat())
+    exit_reason:          Optional[str] = None
 
     def __post_init__(self):
         if self.strategy not in STRATEGIES:
@@ -134,49 +137,34 @@ class Position:
             conn.close()
 
     def save(self) -> Position:
+        # Schema-derived column list (mirrors Signal.save) so save() can never
+        # drift from the positions table again.
+        #
+        # CRITICAL: positions uses INSERT OR IGNORE + UPDATE, never INSERT OR
+        # REPLACE. REPLACE deletes the row first, cascading to delete its legs
+        # via ON DELETE CASCADE. Do not collapse this to REPLACE.
+        from dataclasses import fields as _fields
         self.updated_at = datetime.now().isoformat()
+
+        cols = [f.name for f in _fields(self)]
+        insert_ph = ', '.join('?' for _ in cols)
+        insert_vals = tuple(getattr(self, c) for c in cols)
+
+        # id is the key; created_at is immutable -- never rewrite on UPDATE.
+        immutable = ('id', 'created_at')
+        upd_cols = [c for c in cols if c not in immutable]
+        set_clause = ', '.join(f'{c}=?' for c in upd_cols)
+        update_vals = tuple(getattr(self, c) for c in upd_cols) + (self.id,)
+
         with transaction() as conn:
-            # INSERT OR IGNORE to create if not exists, then UPDATE to modify
-            # Using INSERT OR IGNORE + UPDATE avoids INSERT OR REPLACE which would
-            # DELETE the row first, cascading to delete all legs via ON DELETE CASCADE
-            conn.execute("""
-                INSERT OR IGNORE INTO positions (
-                    id, account_id, signal_id, strategy, ticker, company_name,
-                    status, opened_at, closed_at, earnings_date, total_contracts,
-                    net_premium, realized_pnl, max_profit, max_loss,
-                    breakeven_low, breakeven_high, spread_width,
-                    credit_to_width_ratio, credit_exceeds_width, willing_to_own,
-                    parent_position_id, notes, tags, created_at, updated_at
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-            """, (
-                self.id, self.account_id, self.signal_id, self.strategy,
-                self.ticker, self.company_name, self.status, self.opened_at,
-                self.closed_at, self.earnings_date, self.total_contracts,
-                self.net_premium, self.realized_pnl, self.max_profit, self.max_loss,
-                self.breakeven_low, self.breakeven_high, self.spread_width,
-                self.credit_to_width_ratio, self.credit_exceeds_width,
-                self.willing_to_own, self.parent_position_id,
-                self.notes, self.tags, self.created_at, self.updated_at
-            ))
-            conn.execute("""
-                UPDATE positions SET
-                    account_id=?, signal_id=?, strategy=?, ticker=?, company_name=?,
-                    status=?, opened_at=?, closed_at=?, earnings_date=?, total_contracts=?,
-                    net_premium=?, realized_pnl=?, max_profit=?, max_loss=?,
-                    breakeven_low=?, breakeven_high=?, spread_width=?,
-                    credit_to_width_ratio=?, credit_exceeds_width=?, willing_to_own=?,
-                    parent_position_id=?, notes=?, tags=?, updated_at=?
-                WHERE id=?
-            """, (
-                self.account_id, self.signal_id, self.strategy,
-                self.ticker, self.company_name, self.status, self.opened_at,
-                self.closed_at, self.earnings_date, self.total_contracts,
-                self.net_premium, self.realized_pnl, self.max_profit, self.max_loss,
-                self.breakeven_low, self.breakeven_high, self.spread_width,
-                self.credit_to_width_ratio, self.credit_exceeds_width,
-                self.willing_to_own, self.parent_position_id,
-                self.notes, self.tags, self.updated_at, self.id
-            ))
+            conn.execute(
+                'INSERT OR IGNORE INTO positions (' + ', '.join(cols) + ') VALUES (' + insert_ph + ')',
+                insert_vals,
+            )
+            conn.execute(
+                'UPDATE positions SET ' + set_clause + ' WHERE id=?',
+                update_vals,
+            )
         return self
 
     def close(self, realized_pnl: float, closed_at: Optional[str] = None) -> Position:
