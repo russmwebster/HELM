@@ -361,6 +361,7 @@ def run():
         console.print("[dim]  --top N           Show top N candidates[/dim]")
         console.print("[dim]  --workers N       Concurrent workers (default: 5)[/dim]")
         console.print("[dim]  --blind           Capture only; suppress HELM read (for russ-scan)[/dim]")
+        console.print("[dim]  --build TAG       Scan a build set (e.g. sector_v1) vs the active universe[/dim]")
         console.print()
         return
 
@@ -374,6 +375,7 @@ def run():
     top_n = None
     workers = 5
     blind = False
+    build_tag = None
     ticker_args = []
 
     i = 0
@@ -383,6 +385,7 @@ def run():
         elif args[i] == "--top" and i+1 < len(args):    top_n = int(args[i+1]); i += 2
         elif args[i] == "--workers" and i+1 < len(args): workers = int(args[i+1]); i += 2
         elif args[i] == "--blind": blind = True; i += 1
+        elif args[i] == "--build" and i+1 < len(args): build_tag = args[i+1]; i += 2
         else: ticker_args.append(args[i]); i += 1
 
     # Determine tickers
@@ -390,11 +393,17 @@ def run():
         tickers = [t.strip().upper() for raw in ticker_args
                    for t in raw.replace(",", " ").split() if t.strip()]
     else:
-        items = WatchlistItem.active()
-        if not items:
-            console.print("[yellow]No active tickers found.[/yellow]")
-            console.print("[dim]Set active tickers via the master cull (active flag).[/dim]")
-            return
+        if build_tag:
+            items = WatchlistItem.for_build(build_tag)
+            if not items:
+                console.print(f"[yellow]No optionable tickers in build '{build_tag}'.[/yellow]")
+                return
+        else:
+            items = WatchlistItem.active()
+            if not items:
+                console.print("[yellow]No active tickers found.[/yellow]")
+                console.print("[dim]Set active tickers via the master cull (active flag).[/dim]")
+                return
         tickers = [item.ticker for item in items]
 
     console.print()

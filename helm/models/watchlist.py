@@ -95,6 +95,15 @@ class WatchlistItem:
         finally:
             conn.close()
 
+    @classmethod
+    def for_build(cls, build: str) -> list[WatchlistItem]:
+        conn = get_conn()
+        try:
+            rows = conn.execute('SELECT * FROM watchlist WHERE build = ? AND is_optionable = 1 ORDER BY ticker', (build,)).fetchall()
+            return [cls.from_row(r) for r in rows]
+        finally:
+            conn.close()
+
     def mark_screened(self, is_optionable: bool) -> WatchlistItem:
         self.is_optionable = 1 if is_optionable else 0
         self.last_screened_at = datetime.now().isoformat()
