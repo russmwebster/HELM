@@ -117,7 +117,7 @@ def get_helm_positions(account_id: str) -> list:
     conn = get_conn()
     try:
         positions = conn.execute(
-            "SELECT * FROM positions WHERE account_id=? AND status IN ('OPEN','PENDING') ORDER BY ticker",
+            "SELECT * FROM positions WHERE account_id=? AND status IN ('OPEN','PENDING') AND book='REAL' ORDER BY ticker",
             (account_id,)
         ).fetchall()
 
@@ -211,7 +211,7 @@ def parse_fidelity_cash(filepath):
 
 def get_csp_collateral():
     from helm.db import get_conn
-    rows = get_conn().execute("SELECT l.strike, l.contracts FROM legs l JOIN positions p ON l.position_id=p.id WHERE p.status='OPEN' AND p.strategy IN ('CSP','COVERED_CALL') AND l.direction='SHORT' AND l.option_type='PUT'").fetchall()
+    rows = get_conn().execute("SELECT l.strike, l.contracts FROM legs l JOIN positions p ON l.position_id=p.id WHERE p.status='OPEN' AND p.book='REAL' AND p.strategy IN ('CSP','COVERED_CALL') AND l.direction='SHORT' AND l.option_type='PUT'").fetchall()
     return sum(r['strike']*r['contracts']*100 for r in rows)
 
 

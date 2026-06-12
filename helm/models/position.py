@@ -16,6 +16,7 @@ STRATEGIES = [
     'DIAGONAL','PMCC','SHORT_STRANGLE','JADE_LIZARD'
 ]
 STATUSES = ['PENDING','OPEN','CLOSED','EXPIRED','ASSIGNED','ROLLED_OUT']
+BOOKS = ['REAL','PAPER','SHADOW']
 
 @dataclass
 class Position:
@@ -46,12 +47,15 @@ class Position:
     created_at:           str = field(default_factory=lambda: datetime.now().isoformat())
     updated_at:           str = field(default_factory=lambda: datetime.now().isoformat())
     exit_reason:          Optional[str] = None
+    book:                 str = 'REAL'
 
     def __post_init__(self):
         if self.strategy not in STRATEGIES:
             raise ValueError(f'Unknown strategy: {self.strategy}')
         if self.status not in STATUSES:
             raise ValueError(f'Unknown status: {self.status}')
+        if self.book not in BOOKS:
+            raise ValueError(f'Unknown book: {self.book}')
 
     @classmethod
     def new_id(cls, ticker: str, strategy: str) -> str:
@@ -89,7 +93,8 @@ class Position:
 
     @classmethod
     def open_positions(cls, account_id: Optional[str] = None,
-                       strategy: Optional[str] = None) -> list[Position]:
+                       strategy: Optional[str] = None,
+                       book: Optional[str] = 'REAL') -> list[Position]:
         conn = get_conn()
         try:
             sql = 'SELECT * FROM positions WHERE status = ?'
@@ -100,6 +105,9 @@ class Position:
             if strategy:
                 sql += ' AND strategy = ?'
                 params.append(strategy)
+            if book is not None:
+                sql += ' AND book = ?'
+                params.append(book)
             sql += ' ORDER BY opened_at DESC'
             rows = conn.execute(sql, params).fetchall()
             return [cls.from_row(r) for r in rows]
