@@ -52,41 +52,61 @@ console = Console()
 # ── Strategy mapping ──────────────────────────────────────────────────────────
 
 
-def compute_conviction(score: int, ivr=None) -> str:
+def compute_conviction(score: int, ivr=None, strategy=None) -> float:
     """
-    Compute conviction level for a strategy recommendation.
-
-    Conviction emerges from two axes:
-      - Score magnitude: how strong is the directional signal
-      - IVR distance from 50: how clearly is IV in buy or sell territory
-
-    High:     strong direction (abs >= 2) + IV clearly actionable (distance >= 15)
-    Moderate: either moderate direction (abs=1) + clear IV, or strong direction + mild IV
-    Low:      no direction (score=0), or both signal dimensions weak
-
-    Returns: 'High', 'Moderate', or 'Low'
+    Strategy-aware conviction, 0-100. Higher = stronger setup FOR THIS strategy.
+    IVR is used directionally (sellers want it high, buyers low), not as |IVR-50|.
     """
-    if score == 0:
-        return 'Low'
+    abs_score   = abs(int(score)) if score is not None else 0
+    directional = min(abs_score / 2.0, 1.0)
+    range_conf  = 1.0 - directional
 
-    abs_score = abs(score)
     ivr_val = float(ivr) if ivr is not None else None
-    ivr_distance = abs(ivr_val - 50) if ivr_val is not None else None
+    if ivr_val is not None:
+        richness  = max(0.0, min(1.0, (ivr_val - 35.0) / 50.0))
+        cheapness = max(0.0, min(1.0, (60.0 - ivr_val) / 45.0))
+    else:
+        richness = cheapness = None
 
-    if abs_score >= 2:
-        if ivr_distance is None:
-            return 'Moderate'   # strong score, unknown IV
-        if ivr_distance >= 15:
-            return 'High'       # strong score + clearly actionable IV
-        return 'Moderate'       # strong score + mild IV advantage
+    fam = _strategy_family(strategy)
 
-    elif abs_score == 1:
-        if ivr_distance is None:
-            return 'Low'
-        if ivr_distance >= 20:
-            return 'Moderate'   # mild score but clear IV environment
-        return 'Low'            # mild score + weak IV edge
+    if fam == 'range':
+        if richness is None:
+            return round(100.0 * 0.35 * range_conf, 1)
+        return round(100.0 * (0.65 * richness + 0.35 * range_conf), 1)
 
+    if fam == 'buy':
+        if cheapness is None:
+            return round(100.0 * 0.60 * directional, 1)
+        return round(100.0 * (0.60 * directional + 0.40 * cheapness), 1)
+
+    if richness is None:
+        return round(100.0 * 0.55 * directional, 1)
+    return round(100.0 * (0.55 * directional + 0.45 * richness), 1)
+
+
+_FAMILY = {
+    'buy':   {'LONG_CALL', 'LONG_PUT', 'DIAGONAL', 'PMCC'},
+    'range': {'IRON_CONDOR'},
+}
+
+def _strategy_family(strategy) -> str:
+    if not strategy:
+        return 'sell'
+    s = str(strategy).upper()
+    for fam, names in _FAMILY.items():
+        if any(n in s for n in names):
+            return fam
+    return 'sell'
+
+
+def conviction_label(score: float) -> str:
+    if score is None:
+        return 'Low'
+    if score >= 65:
+        return 'High'
+    if score >= 40:
+        return 'Moderate'
     return 'Low'
 
 
@@ -190,6 +210,7 @@ def fetch_technicals(ticker: str, ivr_record=None) -> dict:
         "strategy": None,
         "strategy_rationale": None,
         "conviction": None,
+        "conviction_score": None,
         "atr_strikes": None,  # suggested strike range based on ATR
         "error": None,
     }
@@ -321,8 +342,9 @@ def fetch_technicals(ticker: str, ivr_record=None) -> dict:
         result["bias_factors"] = factors
 
         strategy, rationale = bias_to_strategy(result["bias_score"], None, rsi=result.get("rsi_14"), ivr=result.get("iv_rank"))
-        conviction = compute_conviction(result["bias_score"], result.get("iv_rank"))
-        result["conviction"] = conviction
+        conv_score = compute_conviction(result["bias_score"], result.get("iv_rank"), strategy)
+        result["conviction_score"] = conv_score
+        result["conviction"] = conviction_label(conv_score)
         result["strategy"] = strategy
         result["strategy_rationale"] = rationale
 
