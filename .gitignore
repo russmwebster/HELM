@@ -13,3 +13,25 @@ _pm_*
 .env
 debit_spread_*.py
 straddle_*.py
+
+# editor/transfer backups
+*.pre_*
+*_bak
+
+# sqlite wal/shm sidecars
+*.db-shm
+*.db-wal
+
+# stray empty root db stub (real db is data/helm.db)
+/helm.db
+
+# editor/transfer backups
+*.pre_*
+*_bak
+
+# sqlite wal/shm sidecars
+*.db-shm
+*.db-wal
+
+# stray empty root db stub (real db is data/helm.db)
+/helm.db
