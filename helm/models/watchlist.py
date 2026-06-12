@@ -1,6 +1,6 @@
 # helm/models/watchlist.py
 from __future__ import annotations
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from datetime import datetime
 from typing import Optional
 import uuid
@@ -29,6 +29,7 @@ class WatchlistItem:
     last_fundamentals_at: Optional[str] = None
     added_at:         str = field(default_factory=lambda: datetime.now().isoformat())
     notes:            Optional[str] = None
+    build:            Optional[str] = None
 
     @classmethod
     def add(cls, ticker: str, **kwargs) -> WatchlistItem:
@@ -46,7 +47,8 @@ class WatchlistItem:
         d['is_optionable'] = int(d.get('is_optionable', 0))
         d['willing_to_own'] = int(d.get('willing_to_own', 1))
         d['active'] = int(d.get('active', 0) or 0)
-        return cls(**d)
+        _valid = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in d.items() if k in _valid})
 
     @classmethod
     def get(cls, ticker: str) -> Optional[WatchlistItem]:
@@ -113,15 +115,15 @@ class WatchlistItem:
                     last_screened_at, willing_to_own, thesis,
                     market_cap, avg_daily_volume, week_52_high, week_52_low,
                     beta, dividend_yield, next_earnings, last_fundamentals_at,
-                    added_at, notes, active
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    added_at, notes, active, build
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ''', (
                 self.id, self.ticker, self.company_name, self.sector,
                 self.is_optionable, self.last_screened_at, self.willing_to_own,
                 self.thesis, self.market_cap, self.avg_daily_volume,
                 self.week_52_high, self.week_52_low, self.beta,
                 self.dividend_yield, self.next_earnings,
-                self.last_fundamentals_at, self.added_at, self.notes, self.active
+                self.last_fundamentals_at, self.added_at, self.notes, self.active, self.build
             ))
         return self
 

@@ -447,7 +447,11 @@ CREATE TABLE IF NOT EXISTS watchlist (
     last_fundamentals_at TEXT,        -- when fundamentals were last fetched
 
     added_at        TEXT NOT NULL DEFAULT (datetime('now')),
-    notes           TEXT
+    notes           TEXT,
+
+    -- Build isolation / lifecycle (ALTER-appended in live DB)
+    active          INTEGER DEFAULT 0,   -- legacy active-universe flag
+    build           TEXT                 -- build tag, e.g. 'sector_v1'
 );
 
 -- INDEXES
