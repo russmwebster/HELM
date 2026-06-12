@@ -35,3 +35,13 @@ straddle_*.py
 
 # stray empty root db stub (real db is data/helm.db)
 /helm.db
+
+# base64 transfer crumbs
+_bps_*
+
+# regenerated grid render output
+/master.html
+/master_data.json
+
+# local scratch / data archive (not tracked)
+archive/
