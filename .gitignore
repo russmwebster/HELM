@@ -45,3 +45,4 @@ _bps_*
 
 # local scratch / data archive (not tracked)
 archive/
+/data/master.csv
