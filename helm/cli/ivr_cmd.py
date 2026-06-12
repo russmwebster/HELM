@@ -38,8 +38,9 @@ def _fetch_iv_history(ib, ticker: str):
     """
     import pandas as pd
     from ib_insync import Stock, util
+    from helm.ibkr import to_ibkr_symbol
 
-    contract = Stock(ticker, 'SMART', 'USD')
+    contract = Stock(to_ibkr_symbol(ticker), 'SMART', 'USD')
     try:
         bars = ib.reqHistoricalData(
             contract,
@@ -80,10 +81,11 @@ def _fetch_iv_batch_async(ib, tickers: list) -> dict:
     """
     import pandas as pd
     from ib_insync import Stock, util as ib_util
+    from helm.ibkr import to_ibkr_symbol
 
     async def _fetch_all():
         async def _one(ticker):
-            contract = Stock(ticker, 'SMART', 'USD')
+            contract = Stock(to_ibkr_symbol(ticker), 'SMART', 'USD')
             try:
                 bars = await ib.reqHistoricalDataAsync(
                     contract,

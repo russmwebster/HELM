@@ -29,6 +29,17 @@ IBKR_TIMEOUT   = 10     # seconds
 _ib = None
 
 
+def to_ibkr_symbol(ticker: str) -> str:
+    """Translate a canonical ticker to IBKR's symbol convention.
+
+    HELM stores tickers in yfinance/watchlist form (e.g. 'BRK-B'); IBKR expects
+    class shares with a space ('BRK B'). Affects only the IBKR contract — storage
+    keys, DB lookups, and display stay canonical. No-op for ordinary tickers
+    (no dash). US class-share convention only.
+    """
+    return ticker.strip().upper().replace('-', ' ')
+
+
 def get_ib(host: str = IBKR_HOST,
            port: int = IBKR_PORT,
            client_id: int = IBKR_CLIENT_ID,
