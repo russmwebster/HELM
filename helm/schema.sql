@@ -192,10 +192,11 @@ CREATE TABLE IF NOT EXISTS positions (
 
     created_at            TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at            TEXT NOT NULL DEFAULT (datetime('now')),
+    book                  TEXT NOT NULL DEFAULT 'REAL',  -- REAL | PAPER | SHADOW
 
     CHECK (strategy IN (
         'CSP','COVERED_CALL','LONG_CALL','PERM',
-        'BULL_PUT_SPREAD','BEAR_CALL_SPREAD','IRON_CONDOR',
+        'BULL_PUT_SPREAD','BEAR_CALL_SPREAD','IRON_CONDOR','BEAR_PUT_SPREAD','LONG_CONDOR',
         'DIAGONAL','PMCC','SHORT_STRANGLE','JADE_LIZARD'
     )),
     CHECK (status IN ('PENDING','OPEN','CLOSED','EXPIRED','ASSIGNED','ROLLED_OUT'))
@@ -224,6 +225,7 @@ CREATE TABLE IF NOT EXISTS legs (
     status          TEXT NOT NULL DEFAULT 'OPEN',
     notes           TEXT,
     created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    entry_delta     REAL,
 
     CHECK (leg_role IN (
         'SHORT_PUT','LONG_PUT','SHORT_CALL','LONG_CALL',
