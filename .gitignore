@@ -9,6 +9,9 @@ _ic_*
 _p*_*
 _plc_*
 _pm_*
+
+# paper-book source modules are tracked source, not scratch
+!_paper_*.py
 *.log
 .env
 debit_spread_*.py
