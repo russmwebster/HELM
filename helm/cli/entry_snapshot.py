@@ -99,6 +99,7 @@ def open_position_with_snapshot(
     fill_price: float,
     contracts: int,
     scan_data: Optional[dict] = None,
+    book: str = 'REAL',
 ) -> tuple[str, str, str]:
     """
     Create position, leg, and entry snapshot in one atomic operation.
@@ -132,6 +133,7 @@ def open_position_with_snapshot(
         opened_at=now,
         total_contracts=contracts,
         net_premium=net_premium,
+        book=book,
         notes=f"Pending execution — opened via HELM on {today}",
     )
 
@@ -192,10 +194,11 @@ def open_position_with_snapshot(
     # Close the decision->position link on the originating scan signal, if one
     # exists (latest unlinked russ_intent='OPEN' for this ticker). Best-effort:
     # a real position must never fail to open because of this stamp.
-    try:
-        from helm.models.signal import Signal
-        Signal.link_position_opened(ticker, pos.id)
-    except Exception:
-        pass
+    if book == 'REAL':
+        try:
+            from helm.models.signal import Signal
+            Signal.link_position_opened(ticker, pos.id)
+        except Exception:
+            pass
 
     return pos.id, leg.id, snap_id
