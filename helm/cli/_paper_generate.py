@@ -4,14 +4,15 @@ Runs the latest scan run's passed-on candidates through HELM's own paper-open
 unit, booking one PAPER position per eligible (ticker, strategy). HELM acts on
 its own top-ranked contract here; on the live book it only advises.
 
-Scope (v1): SINGLE-LEG strategies only, via an EXPLICIT fail-closed allowlist
-(CSP, COVERED_CALL, LONG_CALL, LONG_PUT) -- the strategies paper_open_one can
-faithfully book as a single contract at a single bid/ask fill. Anything not on
-the list -- Iron Condor, diagonals (DIAGONAL/DIAGONAL_PUT/PMCC), the credit and
-debit spreads, straddle, PERM, and ANY future or unknown strategy -- is skipped
-with an explicit reason and counted, never silently dropped, until a multi-leg
-paper-open unit exists. Fail-closed is deliberate: an unrecognised strategy is
-excluded, not accidentally booked as a broken single leg.
+Scope: strategies that have a paper-open unit, via an EXPLICIT fail-closed
+dispatch map (_PAPER_BOOKERS). Single-leg (CSP, COVERED_CALL, LONG_CALL,
+LONG_PUT) book via paper_open_one as one contract at a single bid/ask fill;
+credit verticals (BULL_PUT_SPREAD, BEAR_CALL_SPREAD) book via
+paper_open_spread_one as two legs with conservative short->bid / long->ask
+fills. Anything absent from the map -- Iron Condor, diagonals, PMCC, debit
+spreads, straddle, PERM, and ANY future or unknown strategy -- is skipped with
+an explicit reason and counted, never silently dropped, until its booker exists.
+Fail-closed is deliberate: an unrecognised strategy is excluded, not booked.
 
 Guards:
   - RTH: the whole run is gated on is_market_open(). Market closed -> book
@@ -43,21 +44,31 @@ from rich.console import Console
 from helm.db import get_conn
 from helm.cli.check_cmd import is_market_open
 from helm.cli.open_cmd import STRATEGY_CONFIG
-from helm.cli._paper_open import paper_open_one
+from helm.cli._paper_open import paper_open_one, paper_open_spread_one
 from helm.models.position import Position
 
-# Explicit, fail-closed: only these single-option strategies are paperable in
-# v1. NOT derived from config flags -- multi-leg strategies (IRON_CONDOR,
-# DIAGONAL, DIAGONAL_PUT, PMCC, PERM, spreads, straddle) live in STRATEGY_CONFIG
-# too and must never slip through.
-_SINGLE_LEG_ALLOWLIST = ("CSP", "COVERED_CALL", "LONG_CALL", "LONG_PUT")
+# Explicit, fail-closed dispatch: strategy -> the paper-open unit that books it.
+# Single-leg strategies route to paper_open_one (one contract, one bid/ask fill);
+# credit verticals route to paper_open_spread_one (two legs, conservative
+# short->bid / long->ask, via open_multileg_with_snapshot). NOT derived from
+# config flags -- strategies still without a booker (IRON_CONDOR, DIAGONAL,
+# DIAGONAL_PUT, PMCC, PERM, debit spreads, straddle) live in STRATEGY_CONFIG too
+# and must never slip through: anything absent from this map is skipped.
+_PAPER_BOOKERS = {
+    "CSP": paper_open_one,
+    "COVERED_CALL": paper_open_one,
+    "LONG_CALL": paper_open_one,
+    "LONG_PUT": paper_open_one,
+    "BULL_PUT_SPREAD": paper_open_spread_one,
+    "BEAR_CALL_SPREAD": paper_open_spread_one,
+}
 
 
-def single_leg_strategies() -> set:
-    """The v1 paperable set: the explicit allowlist, intersected with
-    STRATEGY_CONFIG so paper_open_one's STRATEGY_CONFIG[strategy] cannot
+def paperable_strategies() -> set:
+    """The paperable set: the explicit dispatch keys, intersected with
+    STRATEGY_CONFIG so a booker's STRATEGY_CONFIG[strategy] lookup cannot
     KeyError on a misconfigured name."""
-    return {s for s in _SINGLE_LEG_ALLOWLIST if s in STRATEGY_CONFIG}
+    return {s for s in _PAPER_BOOKERS if s in STRATEGY_CONFIG}
 
 
 def _latest_run_passed_on() -> list:
@@ -95,7 +106,7 @@ def paper_generate() -> dict:
         return {"status": "skipped_market_closed", "field": 0,
                 "booked": [], "skipped": []}
 
-    eligible = single_leg_strategies()
+    eligible = paperable_strategies()
     seen = _open_paper_keys()
     field = _latest_run_passed_on()
 
@@ -121,7 +132,7 @@ def paper_generate() -> dict:
             continue
 
         try:
-            pos_id = paper_open_one(ticker, strategy, spot)
+            pos_id = _PAPER_BOOKERS[strategy](ticker, strategy, spot)
         except Exception as exc:  # one bad ticker must not kill the batch
             skipped.append((ticker, strategy, f"error: {type(exc).__name__}: {exc}"))
             continue
