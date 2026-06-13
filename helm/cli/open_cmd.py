@@ -410,7 +410,7 @@ def fetch_chain_from_ibkr(ticker, opt_type, target_exps, spot, atr,
                            delta_min, delta_max, delta_sweet,
                            spread_threshold=0.25):
     # Fetch live/frozen options chain from IBKR.
-    # reqMarketDataType(1) = live, auto-serves frozen outside RTH.
+    # Live when market open; frozen (2) when closed (type 1 returns -1 quotes outside RTH).
     # Returns list of contract dicts. Empty list = fallback to yfinance.
     import math
     from ib_insync import IB, Option as IBOption
@@ -419,7 +419,8 @@ def fetch_chain_from_ibkr(ticker, opt_type, target_exps, spot, atr,
     ib = IB()
     try:
         ib.connect("127.0.0.1", 4002, clientId=15, readonly=True, timeout=15)
-        ib.reqMarketDataType(1)
+        from helm.cli.check_cmd import is_market_open
+        ib.reqMarketDataType(1 if is_market_open() else 2)
         import atexit; atexit.register(lambda: ib.disconnect() if ib.isConnected() else None)
 
         for exp, days in target_exps:
