@@ -16,8 +16,8 @@ from __future__ import annotations
 
 from typing import Optional
 
-from helm.cli.open_cmd import evaluate_contracts, STRATEGY_CONFIG
-from helm.cli.entry_snapshot import open_position_with_snapshot
+from helm.cli.open_cmd import evaluate_contracts, evaluate_spreads, STRATEGY_CONFIG
+from helm.cli.entry_snapshot import open_position_with_snapshot, open_multileg_with_snapshot
 
 
 def paper_open_one(ticker: str, strategy: str, spot: Optional[float],
@@ -46,5 +46,74 @@ def paper_open_one(ticker: str, strategy: str, spot: Optional[float],
         contracts=contracts,
         scan_data=None,
         book="PAPER",
+    )
+    return pos_id
+
+
+def paper_open_spread_one(ticker: str, strategy: str, spot: Optional[float],
+                          dte_target: Optional[int] = None, top_n: int = 6,
+                          contracts: int = 1) -> Optional[str]:
+    """Open HELM's top-ranked vertical credit spread (BULL_PUT or BEAR_CALL)
+    for (ticker, strategy) as a PAPER position. Mirrors paper_open_one but for
+    two legs: fills conservatively (short -> bid, long -> ask) and books both
+    legs under one position via open_multileg_with_snapshot.
+
+    Returns the new position id, or None if nothing tradable (no spot, no
+    ranked spread, or the conservative net credit is <= 0)."""
+    if spot is None:
+        return None
+    config = STRATEGY_CONFIG[strategy]
+    ranked = evaluate_spreads(ticker, strategy, config, dte_target, top_n)
+    if not ranked:
+        return None
+    top = dict(ranked[0])
+
+    opt_type = top["opt_type"]
+    short_fill = top["short_bid"]
+    long_fill = top["long_ask"]
+    if not short_fill or not long_fill:
+        return None
+
+    net_credit = round(short_fill - long_fill, 2)
+    if net_credit <= 0:
+        return None
+
+    width = top["width"]
+    legs = [
+        {
+            "direction": "SHORT", "opt_type": opt_type,
+            "strike": top["short_strike"], "expiration": top["expiration"],
+            "fill_price": short_fill, "delta": top.get("delta"),
+            "iv": top.get("iv"), "dte": top.get("dte"), "spot": spot,
+        },
+        {
+            "direction": "LONG", "opt_type": opt_type,
+            "strike": top["long_strike"], "expiration": top["expiration"],
+            "fill_price": long_fill, "delta": None,
+            "iv": top.get("iv"), "dte": top.get("dte"), "spot": spot,
+        },
+    ]
+
+    position_fields = {
+        "spread_width": width,
+        "max_profit": round(net_credit * 100 * contracts, 2),
+        "max_loss": round((width - net_credit) * 100 * contracts, 2),
+        "credit_to_width_ratio": round(net_credit / width, 4) if width else None,
+    }
+    if opt_type == "PUT":
+        position_fields["breakeven_low"] = round(top["short_strike"] - net_credit, 2)
+    else:
+        position_fields["breakeven_high"] = round(top["short_strike"] + net_credit, 2)
+
+    pos_id, _leg_ids, _snap_ids = open_multileg_with_snapshot(
+        ticker=ticker,
+        strategy=strategy,
+        legs=legs,
+        contracts=contracts,
+        spot=spot,
+        scan_data=None,
+        book="PAPER",
+        position_fields=position_fields,
+        pricing_source="yfinance",
     )
     return pos_id

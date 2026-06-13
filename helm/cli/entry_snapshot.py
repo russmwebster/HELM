@@ -202,3 +202,144 @@ def open_position_with_snapshot(
             pass
 
     return pos.id, leg.id, snap_id
+
+
+def open_multileg_with_snapshot(
+    ticker: str,
+    strategy: str,
+    legs: list,
+    contracts: int,
+    spot: Optional[float] = None,
+    scan_data: Optional[dict] = None,
+    book: str = 'REAL',
+    position_fields: Optional[dict] = None,
+    pricing_source: Optional[str] = None,
+) -> tuple:
+    """
+    Open a multi-leg position: one Position, N legs, ONE entry snapshot
+    (entry_snapshots is UNIQUE per position; the snapshot anchors to the short
+    leg, whose greeks define the position), and one OPENED lifecycle event.
+    Sibling to open_position_with_snapshot; the single-leg live path is untouched.
+
+    legs: list of dicts, each with keys:
+        direction ('SHORT'|'LONG'), opt_type ('PUT'|'CALL'), strike,
+        expiration, fill_price, and optionally delta/theta/gamma/vega/iv/dte/spot.
+    net_premium is derived from the legs: SHORT adds (credit), LONG subtracts
+    (debit), x100 x contracts -- a credit spread nets positive.
+    position_fields supplies strategy-level Position columns (spread_width,
+    breakeven_low/high, max_profit, max_loss, credit_to_width_ratio, ...).
+    pricing_source ('ibkr'|'yfinance') is recorded in notes for source-bias
+    auditing. Returns (position_id, [leg_ids], [snapshot_id]).
+    """
+    if not legs:
+        return None, [], []
+
+    account_id = get_active_account()
+    now = datetime.now().isoformat()
+    today = date.today().isoformat()
+
+    try:
+        import yfinance as _yf
+        company_name = (_yf.Ticker(ticker).fast_info.display_name or "")
+    except Exception:
+        company_name = ""
+
+    # Net premium from the legs: + for SHORT (collected), - for LONG (paid).
+    net_premium = 0.0
+    for lg in legs:
+        sign = 1 if lg["direction"] == "SHORT" else -1
+        net_premium += sign * float(lg["fill_price"]) * 100 * contracts
+    net_premium = round(net_premium, 2)
+
+    note = f"Pending execution - opened via HELM on {today}"
+    if pricing_source:
+        note += f" | priced: {pricing_source}"
+
+    pf = dict(position_fields or {})
+    pos = Position.create(
+        account_id=account_id,
+        strategy=strategy,
+        ticker=ticker,
+        company_name=company_name,
+        status='OPEN',
+        opened_at=now,
+        total_contracts=contracts,
+        net_premium=net_premium,
+        book=book,
+        notes=note,
+        **pf,
+    )
+
+    # Portfolio value for the entry snapshot.
+    account_conn = get_conn()
+    acct = account_conn.execute(
+        "SELECT portfolio_value FROM accounts WHERE id = ?", (account_id,)
+    ).fetchone()
+    portfolio_value = acct["portfolio_value"] if acct else None
+    account_conn.close()
+
+    leg_ids = []
+    role_parts = []
+    leg_pairs = []  # (lg_dict, leg_id)
+    for lg in legs:
+        direction = lg["direction"]
+        opt_type = lg["opt_type"]
+        leg_role = ("SHORT_" if direction == "SHORT" else "LONG_") + opt_type
+        leg = Leg.create(
+            position_id=pos.id,
+            leg_role=leg_role,
+            direction=direction,
+            open_price=lg["fill_price"],
+            open_date=today,
+            option_type=opt_type,
+            strike=lg["strike"],
+            expiration=lg["expiration"],
+            contracts=contracts,
+            entry_delta=lg.get("delta"),
+        )
+        leg_ids.append(leg.id)
+        leg_pairs.append((lg, leg.id))
+        role_parts.append(f"{leg_role} ${lg['strike']} @ ${float(lg['fill_price']):.2f}")
+
+    # entry_snapshots is UNIQUE per position -> one snapshot, anchored to the
+    # SHORT leg (its greeks define the position); fall back to the first leg.
+    p_lg, p_leg_id = next(
+        ((lg, lid) for (lg, lid) in leg_pairs if lg["direction"] == "SHORT"),
+        leg_pairs[0],
+    )
+    snap_id = capture_entry_snapshot(
+        position_id=pos.id,
+        leg_id=p_leg_id,
+        spot_price=(p_lg["spot"] if p_lg.get("spot") is not None else spot),
+        delta=p_lg.get("delta"),
+        theta=p_lg.get("theta"),
+        gamma=p_lg.get("gamma"),
+        vega=p_lg.get("vega"),
+        iv_current=p_lg.get("iv"),
+        dte=p_lg.get("dte"),
+        premium_collected=abs(net_premium),
+        atr_14=scan_data.get("atr_14") if scan_data else None,
+        rsi_14=scan_data.get("rsi_14") if scan_data else None,
+        ema_20=scan_data.get("ema_20") if scan_data else None,
+        sma_50=scan_data.get("sma_50") if scan_data else None,
+        bias_score=scan_data.get("bias_score") if scan_data else None,
+        bias_factors=scan_data.get("bias_factors") if scan_data else None,
+        price_vs_52wk_pct=scan_data.get("price_vs_52wk_pct") if scan_data else None,
+        week_52_high=scan_data.get("week_52_high") if scan_data else None,
+        week_52_low=scan_data.get("week_52_low") if scan_data else None,
+        portfolio_value=portfolio_value,
+    )
+    snap_ids = [snap_id]
+
+    LifecycleEvent.record(
+        position_id=pos.id,
+        event_type="OPENED",
+        narrative=(
+            f"Trade decision: {contracts}x {strategy} "
+            f"[{' / '.join(role_parts)}] "
+            f"-- net {'credit' if net_premium >= 0 else 'debit'} ${abs(net_premium):.2f} "
+            f"-- pending execution in Fidelity"
+        ),
+    )
+
+    return pos.id, leg_ids, snap_ids
