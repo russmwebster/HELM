@@ -8,6 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 COMMANDS = {
+    'paper':     ('helm.cli.paper_cmd',   'run',  'Paper book - paper-trade candidates you passed on'),
     'setup':     ('helm.cli.setup',     'run',  'Initialize HELM and create your account'),
     'watchlist': ('helm.cli.watchlist', 'run',  'Manage your ticker watchlist'),
     'scan':      ('helm.cli.scan',      'run',  'Scan watchlist for opportunities'),
