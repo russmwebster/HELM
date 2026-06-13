@@ -217,6 +217,41 @@ class Signal:
             )
         return self
 
+    @classmethod
+    def link_position_opened(cls, ticker: str, position_id: str) -> Optional[Signal]:
+        """Stamp the originating scan signal when a real position is opened.
+
+        Resolves the most recent *unlinked* signal for `ticker` that Russ
+        marked russ_intent='OPEN', links the new position, and records the
+        action as actually opened. Returns the updated Signal, or None when
+        there is no OPEN-intent candidate (ad-hoc open with no first-cut mark,
+        or the candidate was already linked to an earlier open).
+        """
+        conn = get_conn()
+        try:
+            row = conn.execute(
+                "SELECT * FROM signals WHERE ticker = ? AND russ_intent = 'OPEN' "
+                "AND position_id IS NULL ORDER BY generated_at DESC LIMIT 1",
+                (ticker.upper(),)
+            ).fetchone()
+        finally:
+            conn.close()
+        if row is None:
+            return None
+        sig = cls.from_row(row)
+        now = datetime.now().isoformat()
+        sig.position_opened = 1
+        sig.position_id = position_id
+        sig.russ_action = 'OPEN'
+        sig.russ_action_at = now
+        with transaction() as conn:
+            conn.execute(
+                "UPDATE signals SET position_opened = 1, position_id = ?, "
+                "russ_action = 'OPEN', russ_action_at = ? WHERE id = ?",
+                (position_id, now, sig.id)
+            )
+        return sig
+
     def record_outcome(self, pnl: float, result: str, notes: Optional[str] = None) -> Signal:
         if result not in OUTCOMES:
             raise ValueError(f'Invalid outcome: {result}')

@@ -189,4 +189,13 @@ def open_position_with_snapshot(
         portfolio_value=portfolio_value,
     )
 
+    # Close the decision->position link on the originating scan signal, if one
+    # exists (latest unlinked russ_intent='OPEN' for this ticker). Best-effort:
+    # a real position must never fail to open because of this stamp.
+    try:
+        from helm.models.signal import Signal
+        Signal.link_position_opened(ticker, pos.id)
+    except Exception:
+        pass
+
     return pos.id, leg.id, snap_id
