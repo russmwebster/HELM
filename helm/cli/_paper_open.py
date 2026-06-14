@@ -122,7 +122,7 @@ def paper_open_spread_one(ticker: str, strategy: str, spot: Optional[float],
 def paper_open_diagonal_one(ticker: str, strategy: str, spot: Optional[float],
                             dte_target: Optional[int] = None, top_n: int = 6,
                             contracts: int = 1) -> Optional[str]:
-    """Open HELM's top-ranked CALL diagonal (DIAGONAL or PMCC) as a PAPER
+    """Open HELM's top-ranked diagonal (CALL: DIAGONAL/PMCC, PUT: DIAGONAL_PUT) as a PAPER
     position. Two legs at DIFFERENT expiries: long deeper-ITM back-month call
     (fill -> ask), short nearer-term higher-strike call (fill -> bid), so
     net_premium comes out a worst-case debit. max_loss = net debit; max_profit
@@ -131,7 +131,8 @@ def paper_open_diagonal_one(ticker: str, strategy: str, spot: Optional[float],
     if spot is None:
         return None
     config = STRATEGY_CONFIG[strategy]
-    ranked = evaluate_diagonals(ticker, strategy, config, dte_target, top_n)
+    side = str(config.get("option_type", "CALL")).upper()
+    ranked = evaluate_diagonals(ticker, strategy, config, dte_target, top_n, side=side)
     if not ranked:
         return None
     top = dict(ranked[0])
@@ -145,20 +146,22 @@ def paper_open_diagonal_one(ticker: str, strategy: str, spot: Optional[float],
         return None
 
     legs = [
-        {"direction": "LONG", "opt_type": "CALL",
+        {"direction": "LONG", "opt_type": side,
          "strike": top["long_strike"], "expiration": top["long_exp"],
          "fill_price": long_fill, "delta": top.get("long_delta"),
          "iv": top.get("long_iv"), "dte": top.get("long_dte"), "spot": spot},
-        {"direction": "SHORT", "opt_type": "CALL",
+        {"direction": "SHORT", "opt_type": side,
          "strike": top["short_strike"], "expiration": top["short_exp"],
          "fill_price": short_fill, "delta": top.get("short_delta"),
          "iv": top.get("short_iv"), "dte": top.get("short_dte"), "spot": spot},
     ]
 
+    be_key = "breakeven_low" if side == "PUT" else "breakeven_high"
+    be_val = round(top["short_strike"] + (-net_debit if side == "PUT" else net_debit), 2)
     position_fields = {
         "spread_width": top["width"],
         "max_loss": round(net_debit * 100 * contracts, 2),
-        "breakeven_high": round(top["short_strike"] + net_debit, 2),
+        be_key: be_val,
     }
 
     pos_id, _leg_ids, _snap_ids = open_multileg_with_snapshot(

@@ -1907,7 +1907,8 @@ def display_straddles(ticker, strategy, config, straddles, spot, atr, account_id
 
 
 def evaluate_diagonals(ticker: str, strategy: str, config: dict,
-                       dte_target: int = None, top_n: int = 6) -> list:
+                       dte_target: int = None, top_n: int = 6,
+                       side: str = "CALL") -> list:
     """
     Evaluate CALL diagonals (DIAGONAL, PMCC): long deeper-ITM back-month call +
     short nearer-term higher-strike call, legs at DIFFERENT expiries. Delta-
@@ -1927,6 +1928,7 @@ def evaluate_diagonals(ticker: str, strategy: str, config: dict,
     l_dte_min, l_dte_max, l_dte_sweet = config["long_dte_min"], config["long_dte_max"], config["long_dte_sweet"]
     l_dmin, l_dmax, l_dsweet = config["long_delta_min"], config["long_delta_max"], config["long_delta_sweet"]
     max_debit_pct = config.get("max_debit_pct", 0.75)
+    is_put = (str(side).upper() == "PUT")
 
     tk = yf.Ticker(ticker)
     spot = getattr(tk.fast_info, "last_price", None)
@@ -1936,14 +1938,15 @@ def evaluate_diagonals(ticker: str, strategy: str, config: dict,
     if not spot:
         return []
 
-    def bs_call_delta(strike, iv_pct, dte_days):
+    def bs_delta(strike, iv_pct, dte_days):
         try:
             iv = (iv_pct or 0) / 100.0
             if iv <= 0 or dte_days <= 0 or strike <= 0:
                 return None
             T = dte_days / 365.0
             d1 = (math.log(spot / strike) + (0.045 + 0.5 * iv**2) * T) / (iv * math.sqrt(T))
-            return float(norm.cdf(d1))
+            # delta MAGNITUDE in [0,1]: call N(d1); put 1-N(d1)=N(-d1)
+            return float(norm.cdf(-d1) if is_put else norm.cdf(d1))
         except Exception:
             return None
 
@@ -1966,9 +1969,9 @@ def evaluate_diagonals(ticker: str, strategy: str, config: dict,
     short_exps.sort(key=lambda x: abs(x[0] - s_dte_sweet))
     long_exps.sort(key=lambda x: abs(x[0] - l_dte_sweet))
 
-    def call_rows(exp):
+    def opt_rows(exp):
         try:
-            df = tk.option_chain(exp).calls
+            df = tk.option_chain(exp).puts if is_put else tk.option_chain(exp).calls
         except Exception:
             return []
         out = []
@@ -1985,10 +1988,10 @@ def evaluate_diagonals(ticker: str, strategy: str, config: dict,
 
     short_cands = []
     for dte, exp in short_exps[:3]:
-        for c in call_rows(exp):
+        for c in opt_rows(exp):
             if c["oi"] < 100:
                 continue
-            delta = bs_call_delta(c["strike"], c["iv"], dte)
+            delta = bs_delta(c["strike"], c["iv"], dte)
             if delta is None or not (s_dmin <= delta <= s_dmax):
                 continue
             short_cands.append({**c, "exp": exp, "dte": dte, "delta": round(delta, 3)})
@@ -2000,10 +2003,11 @@ def evaluate_diagonals(ticker: str, strategy: str, config: dict,
     for short in short_cands[:4]:
         best = None
         for dte, exp in long_exps[:3]:
-            for c in call_rows(exp):
-                if c["oi"] < 100 or c["strike"] > short["strike"]:
+            for c in opt_rows(exp):
+                bad_strike = (c["strike"] < short["strike"]) if is_put else (c["strike"] > short["strike"])
+                if c["oi"] < 100 or bad_strike:
                     continue
-                delta = bs_call_delta(c["strike"], c["iv"], dte)
+                delta = bs_delta(c["strike"], c["iv"], dte)
                 if delta is None or not (l_dmin <= delta <= l_dmax):
                     continue
                 prox = -abs(delta - sweet_mid(l_dsweet))
@@ -2016,10 +2020,10 @@ def evaluate_diagonals(ticker: str, strategy: str, config: dict,
         net_debit = round(long["mid"] - short["mid"], 2)
         if net_debit <= 0:
             continue
-        width = round(short["strike"] - long["strike"], 2)
+        width = round(abs(short["strike"] - long["strike"]), 2)
         if width > 0 and (net_debit / width) > max_debit_pct:
             continue
-        breakeven = round(short["strike"] + net_debit, 2)
+        breakeven = round(short["strike"] + (-net_debit if is_put else net_debit), 2)
 
         score = 0.0
         if s_dsweet[0] <= short["delta"] <= s_dsweet[1]: score += 20
