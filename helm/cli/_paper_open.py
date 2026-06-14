@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from helm.cli.open_cmd import evaluate_contracts, evaluate_spreads, evaluate_debit_spreads, STRATEGY_CONFIG
+from helm.cli.open_cmd import evaluate_contracts, evaluate_spreads, evaluate_debit_spreads, evaluate_condors, STRATEGY_CONFIG
 from helm.cli.entry_snapshot import open_position_with_snapshot, open_multileg_with_snapshot
 
 
@@ -176,6 +176,97 @@ def paper_open_debit_spread_one(ticker: str, strategy: str, spot: Optional[float
         position_fields["breakeven_low"] = round(top["long_strike"] - net_debit, 2)
     else:
         position_fields["breakeven_high"] = round(top["long_strike"] + net_debit, 2)
+
+    pos_id, _leg_ids, _snap_ids = open_multileg_with_snapshot(
+        ticker=ticker,
+        strategy=strategy,
+        legs=legs,
+        contracts=contracts,
+        spot=spot,
+        scan_data=None,
+        book="PAPER",
+        position_fields=position_fields,
+        pricing_source="yfinance",
+    )
+    return pos_id
+
+
+def paper_open_condor_one(ticker: str, strategy: str, spot: Optional[float],
+                          dte_target: Optional[int] = None, top_n: int = 6,
+                          contracts: int = 1) -> Optional[str]:
+    """Open HELM's top-ranked IRON_CONDOR for (ticker, strategy) as a PAPER
+    position. Four legs (short put / long put / short call / long call) booked
+    under one position via open_multileg_with_snapshot. Fills conservatively
+    (each short -> its bid, each long -> its ask); net_premium is the resulting
+    credit.
+
+    Returns the new position id, or None if nothing tradable (no spot, no ranked
+    condor, either wing's conservative credit <= 0, or max loss <= 0)."""
+    if spot is None:
+        return None
+    config = STRATEGY_CONFIG[strategy]
+    ranked = evaluate_condors(ticker, strategy, config, dte_target, top_n)
+    if not ranked:
+        return None
+    top = dict(ranked[0])
+
+    sp_fill = top.get("short_put_bid")
+    lp_fill = top.get("long_put_ask")
+    sc_fill = top.get("short_call_bid")
+    lc_fill = top.get("long_call_ask")
+    if not sp_fill or not lp_fill or not sc_fill or not lc_fill:
+        return None
+
+    put_credit = round(sp_fill - lp_fill, 2)
+    call_credit = round(sc_fill - lc_fill, 2)
+    if put_credit <= 0 or call_credit <= 0:
+        return None
+    net_credit = round(put_credit + call_credit, 2)
+
+    put_width = round(top["short_put"] - top["long_put"], 2)
+    call_width = round(top["long_call"] - top["short_call"], 2)
+    width = max(put_width, call_width)
+    max_loss = round(width - net_credit, 2)
+    if max_loss <= 0:
+        return None
+
+    exp = top["expiration"]
+    dte = top.get("dte")
+    legs = [
+        {
+            "direction": "SHORT", "opt_type": "PUT",
+            "strike": top["short_put"], "expiration": exp,
+            "fill_price": sp_fill, "delta": top.get("put_delta"),
+            "iv": top.get("put_iv"), "dte": dte, "spot": spot,
+        },
+        {
+            "direction": "LONG", "opt_type": "PUT",
+            "strike": top["long_put"], "expiration": exp,
+            "fill_price": lp_fill, "delta": None,
+            "iv": None, "dte": dte, "spot": spot,
+        },
+        {
+            "direction": "SHORT", "opt_type": "CALL",
+            "strike": top["short_call"], "expiration": exp,
+            "fill_price": sc_fill, "delta": top.get("call_delta"),
+            "iv": top.get("call_iv"), "dte": dte, "spot": spot,
+        },
+        {
+            "direction": "LONG", "opt_type": "CALL",
+            "strike": top["long_call"], "expiration": exp,
+            "fill_price": lc_fill, "delta": None,
+            "iv": None, "dte": dte, "spot": spot,
+        },
+    ]
+
+    position_fields = {
+        "spread_width": width,
+        "max_profit": round(net_credit * 100 * contracts, 2),
+        "max_loss": round(max_loss * 100 * contracts, 2),
+        "credit_to_width_ratio": round(net_credit / width, 4) if width else None,
+        "breakeven_low": round(top["short_put"] - net_credit, 2),
+        "breakeven_high": round(top["short_call"] + net_credit, 2),
+    }
 
     pos_id, _leg_ids, _snap_ids = open_multileg_with_snapshot(
         ticker=ticker,

@@ -1191,6 +1191,11 @@ def evaluate_condors(ticker: str, strategy: str, config: dict,
                             "call_delta": cs["delta"],
                             "call_iv": cs["iv"],
                             "call_oi": cs["oi"],
+                            # Conservative per-leg fills (short -> bid, long -> ask)
+                            "short_put_bid": ps["bid"],
+                            "long_put_ask": lp["ask"],
+                            "short_call_bid": cs["bid"],
+                            "long_call_ask": lc["ask"],
                             # Combined
                             "total_credit": total_credit,
                             "max_loss": max_loss,
