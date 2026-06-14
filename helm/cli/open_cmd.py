@@ -1901,8 +1901,12 @@ def evaluate_debit_spreads(ticker, strategy, config, dte_target=None, top_n=5):
     from datetime import date, datetime
     is_bear = strategy == 'BEAR_PUT_SPREAD'
     tk = yf.Ticker(ticker)
-    spot = tk.fast_info.get('last_price') or tk.fast_info.get('previous_close', 0)
-    if not spot: return []
+    spot = getattr(tk.fast_info, 'last_price', None)
+    if not spot:
+        hist = tk.history(period='5d')
+        spot = float(hist['Close'].iloc[-1]) if not hist.empty else None
+    if not spot:
+        return []
     dte_min = config.get('dte_min', 30)
     dte_max = config.get('dte_max', 90)
     dte_sweet = config.get('dte_sweet', 60)
@@ -1961,7 +1965,10 @@ def evaluate_debit_spreads(ticker, strategy, config, dte_target=None, top_n=5):
                     'short_strike': short_strike, 'width': width, 'long_mid': long_mid,
                     'short_mid': short_mid, 'net_debit': net_debit, 'max_profit': max_profit,
                     'debit_to_width_pct': dtw, 'rr': rr,
-                    'long_oi': long_oi, 'short_oi': short_oi, 'score': round(score, 1)})
+                    'long_oi': long_oi, 'short_oi': short_oi,
+                    'long_bid': float(long_row['bid']), 'long_ask': float(long_row['ask']),
+                    'short_bid': float(short_row['bid']), 'short_ask': float(short_row['ask']),
+                    'score': round(score, 1)})
     return sorted(results, key=lambda x: -x['score'])[:top_n]
 
 def display_debit_spreads(ticker, strategy, config, spreads, spot, atr, account_id, args):

@@ -8,10 +8,11 @@ Scope: strategies that have a paper-open unit, via an EXPLICIT fail-closed
 dispatch map (_PAPER_BOOKERS). Single-leg (CSP, COVERED_CALL, LONG_CALL,
 LONG_PUT) book via paper_open_one as one contract at a single bid/ask fill;
 credit verticals (BULL_PUT_SPREAD, BEAR_CALL_SPREAD) book via
-paper_open_spread_one as two legs with conservative short->bid / long->ask
-fills. Anything absent from the map -- Iron Condor, diagonals, PMCC, debit
-spreads, straddle, PERM, and ANY future or unknown strategy -- is skipped with
-an explicit reason and counted, never silently dropped, until its booker exists.
+paper_open_spread_one, and the BEAR_PUT_SPREAD debit vertical books via
+paper_open_debit_spread_one, all as two conservatively-filled legs. Anything
+absent from the map -- Iron Condor, diagonals, PMCC, BULL_CALL_SPREAD, straddle,
+PERM, and ANY future or unknown strategy -- is skipped with an explicit reason
+and counted, never silently dropped, until its booker exists.
 Fail-closed is deliberate: an unrecognised strategy is excluded, not booked.
 
 Guards:
@@ -44,16 +45,17 @@ from rich.console import Console
 from helm.db import get_conn
 from helm.cli.check_cmd import is_market_open
 from helm.cli.open_cmd import STRATEGY_CONFIG
-from helm.cli._paper_open import paper_open_one, paper_open_spread_one
+from helm.cli._paper_open import paper_open_one, paper_open_spread_one, paper_open_debit_spread_one
 from helm.models.position import Position
 
 # Explicit, fail-closed dispatch: strategy -> the paper-open unit that books it.
 # Single-leg strategies route to paper_open_one (one contract, one bid/ask fill);
-# credit verticals route to paper_open_spread_one (two legs, conservative
-# short->bid / long->ask, via open_multileg_with_snapshot). NOT derived from
-# config flags -- strategies still without a booker (IRON_CONDOR, DIAGONAL,
-# DIAGONAL_PUT, PMCC, PERM, debit spreads, straddle) live in STRATEGY_CONFIG too
-# and must never slip through: anything absent from this map is skipped.
+# credit verticals route to paper_open_spread_one and the bear-put debit
+# vertical routes to paper_open_debit_spread_one (two legs, conservative fills,
+# via open_multileg_with_snapshot). NOT derived from config flags -- strategies
+# still without a booker (IRON_CONDOR, DIAGONAL, DIAGONAL_PUT, PMCC, PERM,
+# BULL_CALL_SPREAD, straddle) live in STRATEGY_CONFIG too and must never slip
+# through: anything absent from this map is skipped.
 _PAPER_BOOKERS = {
     "CSP": paper_open_one,
     "COVERED_CALL": paper_open_one,
@@ -61,6 +63,7 @@ _PAPER_BOOKERS = {
     "LONG_PUT": paper_open_one,
     "BULL_PUT_SPREAD": paper_open_spread_one,
     "BEAR_CALL_SPREAD": paper_open_spread_one,
+    "BEAR_PUT_SPREAD": paper_open_debit_spread_one,
 }
 
 

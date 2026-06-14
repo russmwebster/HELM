@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from helm.cli.open_cmd import evaluate_contracts, evaluate_spreads, STRATEGY_CONFIG
+from helm.cli.open_cmd import evaluate_contracts, evaluate_spreads, evaluate_debit_spreads, STRATEGY_CONFIG
 from helm.cli.entry_snapshot import open_position_with_snapshot, open_multileg_with_snapshot
 
 
@@ -104,6 +104,78 @@ def paper_open_spread_one(ticker: str, strategy: str, spot: Optional[float],
         position_fields["breakeven_low"] = round(top["short_strike"] - net_credit, 2)
     else:
         position_fields["breakeven_high"] = round(top["short_strike"] + net_credit, 2)
+
+    pos_id, _leg_ids, _snap_ids = open_multileg_with_snapshot(
+        ticker=ticker,
+        strategy=strategy,
+        legs=legs,
+        contracts=contracts,
+        spot=spot,
+        scan_data=None,
+        book="PAPER",
+        position_fields=position_fields,
+        pricing_source="yfinance",
+    )
+    return pos_id
+
+
+def paper_open_debit_spread_one(ticker: str, strategy: str, spot: Optional[float],
+                                dte_target: Optional[int] = None, top_n: int = 6,
+                                contracts: int = 1) -> Optional[str]:
+    """Open HELM's top-ranked vertical DEBIT spread (BEAR_PUT / BULL_CALL) for
+    (ticker, strategy) as a PAPER position. Mirrors paper_open_spread_one but
+    the position pays: fills conservatively (long -> ask, short -> bid) so the
+    net debit is the worst-case cost, books both legs under one position via
+    open_multileg_with_snapshot. net_premium comes out negative (a debit).
+
+    Returns the new position id, or None if nothing tradable (no spot, no
+    ranked spread, or the conservative net debit / max profit is <= 0)."""
+    if spot is None:
+        return None
+    config = STRATEGY_CONFIG[strategy]
+    ranked = evaluate_debit_spreads(ticker, strategy, config, dte_target, top_n)
+    if not ranked:
+        return None
+    top = dict(ranked[0])
+
+    opt_type = config["option_type"]
+    long_fill = top.get("long_ask")
+    short_fill = top.get("short_bid")
+    if not long_fill or short_fill is None:
+        return None
+
+    net_debit = round(long_fill - short_fill, 2)
+    if net_debit <= 0:
+        return None
+    width = top["width"]
+    max_profit = round(width - net_debit, 2)
+    if max_profit <= 0:
+        return None
+
+    legs = [
+        {
+            "direction": "LONG", "opt_type": opt_type,
+            "strike": top["long_strike"], "expiration": top["exp"],
+            "fill_price": long_fill, "delta": None,
+            "iv": None, "dte": top.get("dte"), "spot": spot,
+        },
+        {
+            "direction": "SHORT", "opt_type": opt_type,
+            "strike": top["short_strike"], "expiration": top["exp"],
+            "fill_price": short_fill, "delta": None,
+            "iv": None, "dte": top.get("dte"), "spot": spot,
+        },
+    ]
+
+    position_fields = {
+        "spread_width": width,
+        "max_profit": round(max_profit * 100 * contracts, 2),
+        "max_loss": round(net_debit * 100 * contracts, 2),
+    }
+    if opt_type == "PUT":
+        position_fields["breakeven_low"] = round(top["long_strike"] - net_debit, 2)
+    else:
+        position_fields["breakeven_high"] = round(top["long_strike"] + net_debit, 2)
 
     pos_id, _leg_ids, _snap_ids = open_multileg_with_snapshot(
         ticker=ticker,
