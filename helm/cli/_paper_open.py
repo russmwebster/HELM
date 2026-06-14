@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from helm.cli.open_cmd import evaluate_contracts, evaluate_spreads, evaluate_debit_spreads, evaluate_condors, STRATEGY_CONFIG
+from helm.cli.open_cmd import evaluate_contracts, evaluate_spreads, evaluate_debit_spreads, evaluate_condors, evaluate_diagonals, STRATEGY_CONFIG
 from helm.cli.entry_snapshot import open_position_with_snapshot, open_multileg_with_snapshot
 
 
@@ -115,6 +115,56 @@ def paper_open_spread_one(ticker: str, strategy: str, spot: Optional[float],
         book="PAPER",
         position_fields=position_fields,
         pricing_source="yfinance",
+    )
+    return pos_id
+
+
+def paper_open_diagonal_one(ticker: str, strategy: str, spot: Optional[float],
+                            dte_target: Optional[int] = None, top_n: int = 6,
+                            contracts: int = 1) -> Optional[str]:
+    """Open HELM's top-ranked CALL diagonal (DIAGONAL or PMCC) as a PAPER
+    position. Two legs at DIFFERENT expiries: long deeper-ITM back-month call
+    (fill -> ask), short nearer-term higher-strike call (fill -> bid), so
+    net_premium comes out a worst-case debit. max_loss = net debit; max_profit
+    is left NULL (path-dependent: the legs don't co-expire). Returns the new
+    position id, or None if nothing tradable."""
+    if spot is None:
+        return None
+    config = STRATEGY_CONFIG[strategy]
+    ranked = evaluate_diagonals(ticker, strategy, config, dte_target, top_n)
+    if not ranked:
+        return None
+    top = dict(ranked[0])
+
+    long_fill = top.get("long_ask")
+    short_fill = top.get("short_bid")
+    if not long_fill or short_fill is None:
+        return None
+    net_debit = round(long_fill - short_fill, 2)
+    if net_debit <= 0:
+        return None
+
+    legs = [
+        {"direction": "LONG", "opt_type": "CALL",
+         "strike": top["long_strike"], "expiration": top["long_exp"],
+         "fill_price": long_fill, "delta": top.get("long_delta"),
+         "iv": top.get("long_iv"), "dte": top.get("long_dte"), "spot": spot},
+        {"direction": "SHORT", "opt_type": "CALL",
+         "strike": top["short_strike"], "expiration": top["short_exp"],
+         "fill_price": short_fill, "delta": top.get("short_delta"),
+         "iv": top.get("short_iv"), "dte": top.get("short_dte"), "spot": spot},
+    ]
+
+    position_fields = {
+        "spread_width": top["width"],
+        "max_loss": round(net_debit * 100 * contracts, 2),
+        "breakeven_high": round(top["short_strike"] + net_debit, 2),
+    }
+
+    pos_id, _leg_ids, _snap_ids = open_multileg_with_snapshot(
+        ticker=ticker, strategy=strategy, legs=legs, contracts=contracts,
+        spot=spot, scan_data=None, book="PAPER",
+        position_fields=position_fields, pricing_source="yfinance",
     )
     return pos_id
 

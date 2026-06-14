@@ -175,6 +175,11 @@ STRATEGY_CONFIG = {
         "option_type": "CALL",
         "label": "Poor Man's Covered Call (PMCC)",
         "is_pmcc": True,
+        "short_dte_min": 21, "short_dte_max": 45, "short_dte_sweet": 30,
+        "short_delta_min": 0.20, "short_delta_max": 0.35, "short_delta_sweet": (0.25, 0.30),
+        "long_dte_min": 150, "long_dte_max": 730, "long_dte_sweet": 365,
+        "long_delta_min": 0.70, "long_delta_max": 0.90, "long_delta_sweet": (0.75, 0.85),
+        "max_debit_pct": 1.0,
         # Header display values (actual filters live in PMCC_CONFIG in diagonal.py)
         "delta_min": 0.20,   "delta_max": 0.90,
         "delta_sweet": (0.75, 0.85),
@@ -196,7 +201,7 @@ STRATEGY_CONFIG = {
         "short_delta_min": 0.30, "short_delta_max": 0.55, "short_delta_sweet": (0.38, 0.45),
         "long_dte_min": 60,   "long_dte_max": 120, "long_dte_sweet": 75,
         "long_delta_min": 0.55, "long_delta_max": 0.85, "long_delta_sweet": (0.65, 0.75),
-        "max_debit_pct": 0.75,
+        "max_debit_pct": 1.0,
     },
     "DIAGONAL_PUT": {
         "option_type": "PUT",
@@ -206,7 +211,7 @@ STRATEGY_CONFIG = {
         "short_delta_min": 0.30, "short_delta_max": 0.55, "short_delta_sweet": (0.38, 0.45),
         "long_dte_min": 60,   "long_dte_max": 120, "long_dte_sweet": 75,
         "long_delta_min": 0.55, "long_delta_max": 0.85, "long_delta_sweet": (0.65, 0.75),
-        "max_debit_pct": 0.75,
+        "max_debit_pct": 1.0,
     },
 }
 
@@ -1899,6 +1904,149 @@ def display_straddles(ticker, strategy, config, straddles, spot, atr, account_id
         title='Recommendation', border_style='green'))
     console.print()
 
+
+
+def evaluate_diagonals(ticker: str, strategy: str, config: dict,
+                       dte_target: int = None, top_n: int = 6) -> list:
+    """
+    Evaluate CALL diagonals (DIAGONAL, PMCC): long deeper-ITM back-month call +
+    short nearer-term higher-strike call, legs at DIFFERENT expiries. Delta-
+    selected via a Black-Scholes delta from yfinance IV (chains carry no greeks).
+    Silent (no console) for the paper-generate path; robust weekend-spot
+    fallback. Returns a ranked list of flat dicts; the booker consumes ranked[0].
+    max_profit is intentionally NOT computed -- a diagonal's upside is path-
+    dependent because the legs don't co-expire.
+    """
+    import yfinance as yf
+    import math
+    from datetime import date, datetime
+    from scipy.stats import norm
+
+    s_dte_min, s_dte_max, s_dte_sweet = config["short_dte_min"], config["short_dte_max"], config["short_dte_sweet"]
+    s_dmin, s_dmax, s_dsweet = config["short_delta_min"], config["short_delta_max"], config["short_delta_sweet"]
+    l_dte_min, l_dte_max, l_dte_sweet = config["long_dte_min"], config["long_dte_max"], config["long_dte_sweet"]
+    l_dmin, l_dmax, l_dsweet = config["long_delta_min"], config["long_delta_max"], config["long_delta_sweet"]
+    max_debit_pct = config.get("max_debit_pct", 0.75)
+
+    tk = yf.Ticker(ticker)
+    spot = getattr(tk.fast_info, "last_price", None)
+    if not spot:
+        hist = tk.history(period="5d")
+        spot = float(hist["Close"].iloc[-1]) if not hist.empty else None
+    if not spot:
+        return []
+
+    def bs_call_delta(strike, iv_pct, dte_days):
+        try:
+            iv = (iv_pct or 0) / 100.0
+            if iv <= 0 or dte_days <= 0 or strike <= 0:
+                return None
+            T = dte_days / 365.0
+            d1 = (math.log(spot / strike) + (0.045 + 0.5 * iv**2) * T) / (iv * math.sqrt(T))
+            return float(norm.cdf(d1))
+        except Exception:
+            return None
+
+    def sweet_mid(s):
+        return (s[0] + s[1]) / 2 if isinstance(s, (tuple, list)) else s
+
+    today = date.today()
+    short_exps, long_exps = [], []
+    for exp in tk.options:
+        try:
+            d = (datetime.strptime(exp, "%Y-%m-%d").date() - today).days
+        except Exception:
+            continue
+        if s_dte_min <= d <= s_dte_max:
+            short_exps.append((d, exp))
+        elif l_dte_min <= d <= l_dte_max:
+            long_exps.append((d, exp))
+    if not short_exps or not long_exps:
+        return []
+    short_exps.sort(key=lambda x: abs(x[0] - s_dte_sweet))
+    long_exps.sort(key=lambda x: abs(x[0] - l_dte_sweet))
+
+    def call_rows(exp):
+        try:
+            df = tk.option_chain(exp).calls
+        except Exception:
+            return []
+        out = []
+        for _, r in df.iterrows():
+            bid = float(r.get("bid", 0) or 0); ask = float(r.get("ask", 0) or 0)
+            if bid <= 0 or ask <= 0:
+                continue
+            mid = round((bid + ask) / 2, 2)
+            out.append({"strike": float(r["strike"]), "bid": round(bid, 2), "ask": round(ask, 2),
+                        "mid": mid, "iv": round(float(r.get("impliedVolatility", 0) or 0) * 100, 1),
+                        "oi": int(r.get("openInterest", 0) or 0),
+                        "spread_pct": round((ask - bid) / mid, 3) if mid > 0 else 9.0})
+        return out
+
+    short_cands = []
+    for dte, exp in short_exps[:3]:
+        for c in call_rows(exp):
+            if c["oi"] < 100:
+                continue
+            delta = bs_call_delta(c["strike"], c["iv"], dte)
+            if delta is None or not (s_dmin <= delta <= s_dmax):
+                continue
+            short_cands.append({**c, "exp": exp, "dte": dte, "delta": round(delta, 3)})
+    if not short_cands:
+        return []
+    short_cands.sort(key=lambda x: abs(x["delta"] - sweet_mid(s_dsweet)))
+
+    results = []
+    for short in short_cands[:4]:
+        best = None
+        for dte, exp in long_exps[:3]:
+            for c in call_rows(exp):
+                if c["oi"] < 100 or c["strike"] > short["strike"]:
+                    continue
+                delta = bs_call_delta(c["strike"], c["iv"], dte)
+                if delta is None or not (l_dmin <= delta <= l_dmax):
+                    continue
+                prox = -abs(delta - sweet_mid(l_dsweet))
+                if best is None or prox > best[0]:
+                    best = (prox, {**c, "exp": exp, "dte": dte, "delta": round(delta, 3)})
+        if best is None:
+            continue
+        long = best[1]
+
+        net_debit = round(long["mid"] - short["mid"], 2)
+        if net_debit <= 0:
+            continue
+        width = round(short["strike"] - long["strike"], 2)
+        if width > 0 and (net_debit / width) > max_debit_pct:
+            continue
+        breakeven = round(short["strike"] + net_debit, 2)
+
+        score = 0.0
+        if s_dsweet[0] <= short["delta"] <= s_dsweet[1]: score += 20
+        elif (s_dsweet[0] - 0.05) <= short["delta"] <= (s_dsweet[1] + 0.05): score += 10
+        if l_dsweet[0] <= long["delta"] <= l_dsweet[1]: score += 20
+        elif (l_dsweet[0] - 0.05) <= long["delta"] <= (l_dsweet[1] + 0.05): score += 10
+        for oi in (short["oi"], long["oi"]):
+            if oi >= 1000: score += 8
+            elif oi >= 500: score += 4
+        score += max(0.0, 10 - 0.5 * short["spread_pct"] * 100)
+        score += max(0.0, 10 - 0.5 * long["spread_pct"] * 100)
+        score -= abs(short["dte"] - s_dte_sweet) * 0.1
+        score -= abs(long["dte"] - l_dte_sweet) * 0.02
+
+        results.append({
+            "ticker": ticker, "strategy": strategy,
+            "short_exp": short["exp"], "short_dte": short["dte"], "short_strike": short["strike"],
+            "short_mid": short["mid"], "short_bid": short["bid"], "short_delta": short["delta"],
+            "short_iv": short["iv"], "short_oi": short["oi"],
+            "long_exp": long["exp"], "long_dte": long["dte"], "long_strike": long["strike"],
+            "long_mid": long["mid"], "long_ask": long["ask"], "long_delta": long["delta"],
+            "long_iv": long["iv"], "long_oi": long["oi"],
+            "net_debit": net_debit, "width": width, "breakeven": breakeven, "score": round(score, 1),
+        })
+
+    results.sort(key=lambda x: -x["score"])
+    return results[:top_n]
 
 
 def evaluate_debit_spreads(ticker, strategy, config, dte_target=None, top_n=5):

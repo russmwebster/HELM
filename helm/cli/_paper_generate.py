@@ -10,7 +10,7 @@ LONG_PUT) book via paper_open_one as one contract at a single bid/ask fill;
 credit verticals (BULL_PUT_SPREAD, BEAR_CALL_SPREAD) book via
 paper_open_spread_one, and the BEAR_PUT_SPREAD debit vertical books via
 paper_open_debit_spread_one, all as two conservatively-filled legs. Anything
-absent from the map -- diagonals, PMCC, straddle,
+absent from the map -- DIAGONAL_PUT, straddle,
 PERM, and ANY future or unknown strategy -- is skipped with an explicit reason
 and counted, never silently dropped, until its booker exists.
 Fail-closed is deliberate: an unrecognised strategy is excluded, not booked.
@@ -45,7 +45,7 @@ from rich.console import Console
 from helm.db import get_conn
 from helm.cli.check_cmd import is_market_open
 from helm.cli.open_cmd import STRATEGY_CONFIG
-from helm.cli._paper_open import paper_open_one, paper_open_spread_one, paper_open_debit_spread_one, paper_open_condor_one
+from helm.cli._paper_open import paper_open_one, paper_open_spread_one, paper_open_debit_spread_one, paper_open_condor_one, paper_open_diagonal_one
 from helm.models.position import Position
 
 # Explicit, fail-closed dispatch: strategy -> the paper-open unit that books it.
@@ -53,7 +53,7 @@ from helm.models.position import Position
 # credit verticals route to paper_open_spread_one and the bear-put debit
 # vertical routes to paper_open_debit_spread_one (two legs, conservative fills,
 # via open_multileg_with_snapshot). NOT derived from config flags -- strategies
-# still without a booker (DIAGONAL, DIAGONAL_PUT, PMCC, PERM,
+# still without a booker (DIAGONAL_PUT, PERM,
 # straddle) live in STRATEGY_CONFIG too and must never slip
 # through: anything absent from this map is skipped.
 _PAPER_BOOKERS = {
@@ -66,6 +66,8 @@ _PAPER_BOOKERS = {
     "BEAR_PUT_SPREAD": paper_open_debit_spread_one,
     "BULL_CALL_SPREAD": paper_open_debit_spread_one,
     "IRON_CONDOR": paper_open_condor_one,
+    "DIAGONAL": paper_open_diagonal_one,
+    "PMCC": paper_open_diagonal_one,
 }
 
 
