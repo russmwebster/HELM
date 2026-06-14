@@ -10,7 +10,7 @@ LONG_PUT) book via paper_open_one as one contract at a single bid/ask fill;
 credit verticals (BULL_PUT_SPREAD, BEAR_CALL_SPREAD) book via
 paper_open_spread_one, and the BEAR_PUT_SPREAD debit vertical books via
 paper_open_debit_spread_one, all as two conservatively-filled legs. Anything
-absent from the map -- diagonals, PMCC, BULL_CALL_SPREAD, straddle,
+absent from the map -- diagonals, PMCC, straddle,
 PERM, and ANY future or unknown strategy -- is skipped with an explicit reason
 and counted, never silently dropped, until its booker exists.
 Fail-closed is deliberate: an unrecognised strategy is excluded, not booked.
@@ -54,7 +54,7 @@ from helm.models.position import Position
 # vertical routes to paper_open_debit_spread_one (two legs, conservative fills,
 # via open_multileg_with_snapshot). NOT derived from config flags -- strategies
 # still without a booker (DIAGONAL, DIAGONAL_PUT, PMCC, PERM,
-# BULL_CALL_SPREAD, straddle) live in STRATEGY_CONFIG too and must never slip
+# straddle) live in STRATEGY_CONFIG too and must never slip
 # through: anything absent from this map is skipped.
 _PAPER_BOOKERS = {
     "CSP": paper_open_one,
@@ -64,6 +64,7 @@ _PAPER_BOOKERS = {
     "BULL_PUT_SPREAD": paper_open_spread_one,
     "BEAR_CALL_SPREAD": paper_open_spread_one,
     "BEAR_PUT_SPREAD": paper_open_debit_spread_one,
+    "BULL_CALL_SPREAD": paper_open_debit_spread_one,
     "IRON_CONDOR": paper_open_condor_one,
 }
 
