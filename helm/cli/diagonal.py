@@ -14,6 +14,7 @@ console = Console()
 
 # ── Config defaults (all tunable) ─────────────────────────────────────────────
 DIAGONAL_CONFIG = {
+    "strategy":          "DIAGONAL",
     "option_type":       "CALL",
     "label":             "Diagonal Spread",
     "is_diagonal":       True,
@@ -36,6 +37,7 @@ DIAGONAL_CONFIG = {
 }
 
 PMCC_CONFIG = {
+    "strategy":          "PMCC",
     "option_type":       "CALL",
     "label":             "Poor Man's Covered Call (PMCC)",
     # Short leg — OTM front-month call, rolled monthly
@@ -75,126 +77,50 @@ def _fetch_calls(tk, exp):
         return None
 
 
+def _reshape_diagonal(r: dict, spot: float) -> dict:
+    """Reshape one flat evaluate_diagonals row into the nested candidate shape
+    that display_diagonal / _confirm_diagonal (and the _put variants) consume."""
+    return {
+        "short": {"expiration": r["short_exp"], "dte": r["short_dte"],
+                  "strike": r["short_strike"], "mid": r["short_mid"],
+                  "delta": r["short_delta"], "iv": r.get("short_iv"), "oi": r.get("short_oi")},
+        "long": {"expiration": r["long_exp"], "dte": r["long_dte"],
+                 "strike": r["long_strike"], "mid": r["long_mid"],
+                 "delta": r["long_delta"], "iv": r.get("long_iv"), "oi": r.get("long_oi")},
+        "net_debit": r["net_debit"],
+        "net_debit_total": round(r["net_debit"] * 100, 2),
+        "breakeven": r["breakeven"],
+        "max_profit_approx": round(r["short_mid"] * 100, 2),
+        "spot": spot,
+    }
+
+
 def evaluate_diagonal(ticker: str, config: dict = None) -> tuple:
     """
-    Fetch options chain and find best diagonal combinations.
+    Best CALL diagonal combinations for the live/manual path. Delegates
+    selection to the validated evaluate_diagonals core (BS-delta from yfinance
+    IV, two-expiry pairing, corrected gates) and reshapes its flat output into
+    the nested shape display_diagonal / _confirm_diagonal consume.
     Returns (spot, diagonals_list).
     """
     import yfinance as yf
-
+    from helm.cli.open_cmd import evaluate_diagonals, STRATEGY_CONFIG
     cfg = {**DIAGONAL_CONFIG, **(config or {})}
-
+    strategy = cfg.get("strategy", "DIAGONAL")
+    side = str(cfg.get("option_type", "CALL")).upper()
+    core_cfg = STRATEGY_CONFIG.get(strategy, cfg)
     console.print(f"  [dim]Fetching options chain for {ticker}...[/dim]")
     tk = yf.Ticker(ticker)
-    info = tk.fast_info
-    spot = getattr(info, "last_price", None) or getattr(info, "previous_close", 0) or 0
-
-    exps = tk.options
-    today = date.today()
-
-    short_exps, long_exps = [], []
-    for exp in exps:
-        try:
-            dte = (datetime.strptime(exp, "%Y-%m-%d").date() - today).days
-            if cfg["short_dte_min"] <= dte <= cfg["short_dte_max"]:
-                short_exps.append((dte, exp))
-            elif cfg["long_dte_min"] <= dte <= cfg["long_dte_max"]:
-                long_exps.append((dte, exp))
-        except Exception:
-            continue
-
-    if not short_exps:
-        raise RuntimeError(f"No expirations in {cfg['short_dte_min']}-{cfg['short_dte_max']} DTE for short leg.")
-    if not long_exps:
-        raise RuntimeError(f"No expirations in {cfg['long_dte_min']}-{cfg['long_dte_max']} DTE for long leg.")
-
-    # Score short leg candidates
-    short_candidates = []
-    for dte, exp in sorted(short_exps, key=lambda x: abs(x[0] - cfg["short_dte_sweet"])):
-        df = _fetch_calls(tk, exp)
-        if df is None:
-            continue
-        for _, row in df.iterrows():
-            delta = abs(float(row.get("delta") or 0))
-            if not (cfg["short_delta_min"] <= delta <= cfg["short_delta_max"]):
-                continue
-            sp = float(row["spread_pct"])
-            if sp > 0.15:
-                continue
-            score = _score_delta(delta, cfg["short_delta_sweet"]) * 0.6 + (1 - min(sp, 0.15) / 0.15) * 0.4
-            short_candidates.append({
-                "expiration": exp, "dte": dte,
-                "strike": float(row["strike"]),
-                "mid": round(float(row["mid"]), 2),
-                "delta": round(delta, 3),
-                "iv": round(float(row.get("impliedVolatility") or 0) * 100, 1),
-                "oi": int(row.get("openInterest") or 0),
-                "spread_pct": round(sp * 100, 1),
-                "score": score,
-            })
-
-    if not short_candidates:
-        raise RuntimeError("No suitable short leg contracts found.")
-
-    short_candidates.sort(key=lambda x: -x["score"])
-
-    # For each top short, find best long leg
-    diagonals = []
-    for short in short_candidates[:5]:
-        best_long, best_score = None, -1
-        for dte, exp in sorted(long_exps, key=lambda x: abs(x[0] - cfg["long_dte_sweet"])):
-            df = _fetch_calls(tk, exp)
-            if df is None:
-                continue
-            for _, row in df.iterrows():
-                delta = abs(float(row.get("delta") or 0))
-                if not (cfg["long_delta_min"] <= delta <= cfg["long_delta_max"]):
-                    continue
-                if float(row["strike"]) > short["strike"]:
-                    continue  # long strike must be <= short strike
-                sp = float(row["spread_pct"])
-                if sp > 0.12:
-                    continue
-                score = _score_delta(delta, cfg["long_delta_sweet"]) * 0.7 + (1 - min(sp, 0.12) / 0.12) * 0.3
-                if score > best_score:
-                    best_score = score
-                    best_long = {
-                        "expiration": exp, "dte": dte,
-                        "strike": float(row["strike"]),
-                        "mid": round(float(row["mid"]), 2),
-                        "delta": round(delta, 3),
-                        "iv": round(float(row.get("impliedVolatility") or 0) * 100, 1),
-                        "oi": int(row.get("openInterest") or 0),
-                        "spread_pct": round(sp * 100, 1),
-                    }
-
-        if not best_long:
-            continue
-
-        net_debit = round(best_long["mid"] - short["mid"], 2)
-        if net_debit <= 0:
-            continue
-
-        spread_width = short["strike"] - best_long["strike"]
-        if spread_width > 0 and (net_debit / spread_width) > cfg["max_debit_pct"]:
-            continue
-
-        breakeven = round(short["strike"] + net_debit, 2)
-        max_profit_approx = round(short["mid"] * 100, 2)
-
-        diagonals.append({
-            "short": short, "long": best_long,
-            "net_debit": net_debit,
-            "net_debit_total": round(net_debit * 100, 2),
-            "breakeven": breakeven,
-            "max_profit_approx": max_profit_approx,
-            "spot": spot,
-        })
-
-    if not diagonals:
+    spot = getattr(tk.fast_info, "last_price", None)
+    if not spot:
+        h = tk.history(period="5d")
+        spot = float(h["Close"].iloc[-1]) if not h.empty else None
+    if not spot:
+        raise RuntimeError(f"Could not determine spot price for {ticker}.")
+    flat = evaluate_diagonals(ticker, strategy, core_cfg, side=side)
+    if not flat:
         raise RuntimeError("No diagonal combinations found matching risk criteria.")
-
-    return spot, diagonals
+    return spot, [_reshape_diagonal(r, spot) for r in flat]
 
 
 def display_diagonal(ticker: str, spot: float, diagonals: list, args: list, label: str = "Diagonal Spread"):
@@ -322,6 +248,7 @@ def _confirm_diagonal(ticker: str, spot: float, diagonals: list):
 
 # -- Put Diagonal Config -------------------------------------------------
 DIAGONAL_PUT_CONFIG = {
+    "strategy":          "DIAGONAL_PUT",
     "option_type":       "PUT",
     "label":             "Diagonal Spread (Put)",
     "is_diagonal":       True,
@@ -355,97 +282,28 @@ def _fetch_puts(tk, exp):
 
 def evaluate_diagonal_put(ticker, config=None):
     """
-    Fetch options chain and find best put diagonal combinations.
+    Best PUT diagonal combinations for the live/manual path. Delegates to
+    evaluate_diagonals(side="PUT") and reshapes (see evaluate_diagonal).
     Returns (spot, diagonals_list).
     """
     import yfinance as yf
+    from helm.cli.open_cmd import evaluate_diagonals, STRATEGY_CONFIG
     cfg = {**DIAGONAL_PUT_CONFIG, **(config or {})}
-    console.print(f'  [dim]Fetching put chain for {ticker}...[/dim]')
+    strategy = cfg.get("strategy", "DIAGONAL_PUT")
+    side = str(cfg.get("option_type", "PUT")).upper()
+    core_cfg = STRATEGY_CONFIG.get(strategy, cfg)
+    console.print(f"  [dim]Fetching put chain for {ticker}...[/dim]")
     tk = yf.Ticker(ticker)
-    info = tk.fast_info
-    spot = getattr(info, 'last_price', None) or getattr(info, 'previous_close', 0) or 0
-    exps = tk.options
-    today = date.today()
-    short_exps, long_exps = [], []
-    for exp in exps:
-        try:
-            dte = (datetime.strptime(exp, '%Y-%m-%d').date() - today).days
-            if cfg['short_dte_min'] <= dte <= cfg['short_dte_max']:
-                short_exps.append((dte, exp))
-            elif cfg['long_dte_min'] <= dte <= cfg['long_dte_max']:
-                long_exps.append((dte, exp))
-        except Exception:
-            continue
-    if not short_exps:
-        raise RuntimeError(f"No expirations in {cfg['short_dte_min']}-{cfg['short_dte_max']} DTE for short leg.")
-    if not long_exps:
-        raise RuntimeError(f"No expirations in {cfg['long_dte_min']}-{cfg['long_dte_max']} DTE for long leg.")
-    short_candidates = []
-    for dte, exp in sorted(short_exps, key=lambda x: abs(x[0] - cfg['short_dte_sweet'])):
-        df = _fetch_puts(tk, exp)
-        if df is None: continue
-        for _, row in df.iterrows():
-            delta = abs(float(row.get('delta') or 0))
-            if not (cfg['short_delta_min'] <= delta <= cfg['short_delta_max']): continue
-            sp = float(row['spread_pct'])
-            if sp > 0.15: continue
-            score = _score_delta(delta, cfg['short_delta_sweet']) * 0.6 + (1 - min(sp, 0.15) / 0.15) * 0.4
-            short_candidates.append({
-                'expiration': exp, 'dte': dte,
-                'strike': float(row['strike']),
-                'mid': round(float(row['mid']), 2),
-                'delta': round(delta, 3),
-                'iv': round(float(row.get('impliedVolatility') or 0) * 100, 1),
-                'oi': int(row.get('openInterest') or 0),
-                'spread_pct': round(sp * 100, 1),
-                'score': score,
-            })
-    if not short_candidates:
-        raise RuntimeError('No suitable short put leg contracts found.')
-    short_candidates.sort(key=lambda x: -x['score'])
-    diagonals = []
-    for short in short_candidates[:5]:
-        best_long, best_score = None, -1
-        for dte, exp in sorted(long_exps, key=lambda x: abs(x[0] - cfg['long_dte_sweet'])):
-            df = _fetch_puts(tk, exp)
-            if df is None: continue
-            for _, row in df.iterrows():
-                delta = abs(float(row.get('delta') or 0))
-                if not (cfg['long_delta_min'] <= delta <= cfg['long_delta_max']): continue
-                # Long put strike must be >= short put strike (higher strike = more expensive put)
-                if float(row['strike']) < short['strike']: continue
-                sp = float(row['spread_pct'])
-                if sp > 0.12: continue
-                score = _score_delta(delta, cfg['long_delta_sweet']) * 0.7 + (1 - min(sp, 0.12) / 0.12) * 0.3
-                if score > best_score:
-                    best_score = score
-                    best_long = {
-                        'expiration': exp, 'dte': dte,
-                        'strike': float(row['strike']),
-                        'mid': round(float(row['mid']), 2),
-                        'delta': round(delta, 3),
-                        'iv': round(float(row.get('impliedVolatility') or 0) * 100, 1),
-                        'oi': int(row.get('openInterest') or 0),
-                        'spread_pct': round(sp * 100, 1),
-                    }
-        if not best_long: continue
-        net_debit = round(best_long['mid'] - short['mid'], 2)
-        if net_debit <= 0: continue
-        spread_width = best_long['strike'] - short['strike']
-        if spread_width > 0 and (net_debit / spread_width) > cfg['max_debit_pct']: continue
-        breakeven = round(short['strike'] - net_debit, 2)
-        max_profit_approx = round(short['mid'] * 100, 2)
-        diagonals.append({
-            'short': short, 'long': best_long,
-            'net_debit': net_debit,
-            'net_debit_total': round(net_debit * 100, 2),
-            'breakeven': breakeven,
-            'max_profit_approx': max_profit_approx,
-            'spot': spot,
-        })
-    if not diagonals:
-        raise RuntimeError('No put diagonal combinations found matching risk criteria.')
-    return spot, diagonals
+    spot = getattr(tk.fast_info, "last_price", None)
+    if not spot:
+        h = tk.history(period="5d")
+        spot = float(h["Close"].iloc[-1]) if not h.empty else None
+    if not spot:
+        raise RuntimeError(f"Could not determine spot price for {ticker}.")
+    flat = evaluate_diagonals(ticker, strategy, core_cfg, side=side)
+    if not flat:
+        raise RuntimeError("No put diagonal combinations found matching risk criteria.")
+    return spot, [_reshape_diagonal(r, spot) for r in flat]
 
 
 def display_diagonal_put(ticker, spot, diagonals, args):
