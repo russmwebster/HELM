@@ -82,6 +82,46 @@ def _show_position_summary(pos, legs):
     console.print(tbl)
 
 
+def _finalize_close(pos, legs, close_prices, reason="manual"):
+    """Write a close: net P&L across legs, close legs + position, snapshot.
+    Pure persistence -- no prompts, no confirm. Shared by interactive close
+    and the paper auto-manager. Returns {ok, realized_pnl, close_prices}."""
+    total_pnl = 0.0
+    for leg in legs:
+        cp = close_prices[leg.id]
+        if leg.direction == "SHORT":
+            total_pnl += (leg.open_price - cp) * leg.contracts * leg.multiplier
+        else:
+            total_pnl += (cp - leg.open_price) * leg.contracts * leg.multiplier
+    now = datetime.now().isoformat()
+    for leg in legs:
+        leg.close(close_prices[leg.id], close_date=now)
+    pos.close(total_pnl, closed_at=now, exit_reason=reason)
+    try:
+        from helm.models.close_snapshot import save_close_snapshot
+        save_close_snapshot(
+            position_id=pos.id,
+            ticker=pos.ticker,
+            realized_pnl=total_pnl,
+            close_prices=close_prices,
+            legs=legs,
+            reason=reason,
+        )
+    except Exception:
+        pass  # never block a close
+    # back-propagate the realized outcome onto the originating signal
+    try:
+        if getattr(pos, "signal_id", None):
+            from helm.models.signal import Signal
+            sig = Signal.get(pos.signal_id)
+            if sig is not None:
+                outcome = "WIN" if total_pnl > 0 else ("LOSS" if total_pnl < 0 else "BREAKEVEN")
+                sig.record_outcome(total_pnl, outcome, notes=reason)
+    except Exception:
+        pass  # never block a close
+    return {"ok": True, "realized_pnl": total_pnl, "close_prices": close_prices}
+
+
 def close_position(pos, legs, reason="manual"):
     """Close legs interactively. Returns {ok, realized_pnl, close_prices}."""
     _show_position_summary(pos, legs)
@@ -123,28 +163,11 @@ def close_position(pos, legs, reason="manual"):
     if not Confirm.ask("  Confirm close?", default=True):
         console.print("[dim]  Cancelled.[/dim]")
         return {"ok": False}
-    now = datetime.now().isoformat()
-    for leg in legs:
-        leg.close(close_prices[leg.id], close_date=now)
-    pos.close(total_pnl, closed_at=now)
-
-    # Save close snapshot for trade-life analysis
-    try:
-        from helm.models.close_snapshot import save_close_snapshot
-        save_close_snapshot(
-            position_id=pos.id,
-            ticker=pos.ticker,
-            realized_pnl=total_pnl,
-            close_prices=close_prices,
-            legs=legs,
-            reason=reason,
-        )
-    except Exception:
-        pass  # never block a close
+    result = _finalize_close(pos, legs, close_prices, reason)
     console.print()
-    console.print(f"  [green]OK[/green]  {pos.ticker} [bold]CLOSED[/bold]  Realized P&L: {_fmt_pnl(total_pnl)}")
+    console.print(f"  [green]OK[/green]  {pos.ticker} [bold]CLOSED[/bold]  Realized P&L: {_fmt_pnl(result['realized_pnl'])}")
     console.print()
-    return {"ok": True, "realized_pnl": total_pnl, "close_prices": close_prices}
+    return result
 
 
 def run():

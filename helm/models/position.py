@@ -170,10 +170,12 @@ class Position:
             )
         return self
 
-    def close(self, realized_pnl: float, closed_at: Optional[str] = None) -> Position:
+    def close(self, realized_pnl: float, closed_at: Optional[str] = None, exit_reason: Optional[str] = None) -> Position:
         self.status = 'CLOSED'
         self.realized_pnl = realized_pnl
         self.closed_at = closed_at or datetime.now().isoformat()
+        if exit_reason is not None:
+            self.exit_reason = exit_reason
         return self.save()
 
     def mark_rolled(self) -> Position:
