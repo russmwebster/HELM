@@ -7,12 +7,6 @@ import uuid
 
 from helm.db import get_conn, transaction, row_to_dict
 
-STRATEGIES = [
-    'CSP','COVERED_CALL','LONG_CALL','PERM',
-    'BULL_PUT_SPREAD','BEAR_CALL_SPREAD','IRON_CONDOR',
-    'DIAGONAL','PMCC','SHORT_STRANGLE','JADE_LIZARD'
-]
-
 @dataclass
 class StrategySettings:
     id:                          str

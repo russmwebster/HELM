@@ -9,12 +9,7 @@ from helm.db import get_conn, transaction, row_to_dict
 
 # Source of truth is the positions table CHECK constraint; keep this >= that
 # set so __post_init__ / from_row never reject a real ledger row.
-STRATEGIES = [
-    'CSP','COVERED_CALL','LONG_CALL','PERM',
-    'BULL_PUT_SPREAD','BEAR_CALL_SPREAD','IRON_CONDOR',
-    'BEAR_PUT_SPREAD','BULL_CALL_SPREAD','LONG_CONDOR',
-    'DIAGONAL','PMCC','DIAGONAL_PUT','SHORT_STRANGLE','JADE_LIZARD'
-]
+from helm.strategies import STRATEGIES
 STATUSES = ['PENDING','OPEN','CLOSED','EXPIRED','ASSIGNED','ROLLED_OUT']
 BOOKS = ['REAL','PAPER','SHADOW']
 

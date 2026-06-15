@@ -251,6 +251,17 @@ def run():
         pass
 
     # ── Quick actions ─────────────────────────────────────────────────────────
+    # Strategy CHECK reconciliation -- silent unless canonical (helm/strategies.py) and DB disagree
+    from helm.strategies import verify_strategy_checks
+    _drift = verify_strategy_checks()
+    if not _drift["ok"]:
+        console.print()
+        console.print("  [red]Strategy CHECK drift[/red] [dim](helm/strategies.py vs DB)[/dim]")
+        for _tbl, _d in _drift["tables"].items():
+            if _d["missing"] or _d["extra"]:
+                console.print(f"    [red]{_tbl}: missing={_d['missing']} extra={_d['extra']}[/red]")
+        console.print()
+
     console.print("  [dim]Quick actions:[/dim]")
     console.print("  [dim]  helm check        Monitor all positions[/dim]")
     console.print("  [dim]  helm scan         Scan for opportunities[/dim]")

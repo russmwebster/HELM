@@ -28,12 +28,6 @@ from helm.models.settings import StrategySettings
 
 console = Console()
 
-STRATEGIES = [
-    'CSP','COVERED_CALL','LONG_CALL','PERM',
-    'BULL_PUT_SPREAD','BEAR_CALL_SPREAD','IRON_CONDOR',
-    'DIAGONAL','PMCC','SHORT_STRANGLE','JADE_LIZARD'
-]
-
 # Practitioner defaults per strategy
 # (account_id substituted at runtime)
 DEFAULTS = {
@@ -175,7 +169,6 @@ def seed_strategy_defaults(account_id: str) -> int:
             )
             seeded += 1
     return seeded
-
 
 def run():
     console.print()
@@ -358,13 +351,12 @@ def run():
         f'[dim]Next steps:[/dim]\n'
         f'  [cyan]helm watchlist add AAPL[/cyan]   Add tickers to your universe\n'
         f'  [cyan]helm scan[/cyan]                  Scan for opportunities\n'
-        f'  [cyan]helm settings[/cyan]              View or adjust strategy rules
-  [cyan]helm guide[/cyan]                 Understand how HELM selects strategies',
+        f'  [cyan]helm settings[/cyan]              View or adjust strategy rules\n'
+        f'  [cyan]helm guide[/cyan]                 Understand how HELM selects strategies',
         border_style='green',
         title='Setup Complete'
     ))
     console.print()
-
 
 if __name__ == '__main__':
     run()
