@@ -172,7 +172,7 @@ def save_check(position_id: str, assessment: dict, pos: dict) -> None:
     pnl_pct = buffer_pct = None
     try:
         pnl = a.get("pnl_mtm")
-        premium = pos.get("premium_collected") or (primary.get("open_price", 0) * 100)
+        premium = pos.get("net_premium") or pos.get("premium_collected") or (primary.get("open_price", 0) * 100)
         if pnl is not None and premium:
             pnl_pct = round(float(pnl) / abs(float(premium)) * 100, 1)
     except Exception:
@@ -381,7 +381,8 @@ def fetch_yf_data(ticker: str, expiration: str, strike: float,
 # ── Health assessment logic ───────────────────────────────────────────────────
 
 def assess_position(pos: dict, legs: list, underlying_price: Optional[float],
-                    opt_data: dict, strategy_settings: dict) -> dict:
+                    opt_data: dict, strategy_settings: dict,
+                    leg_marks: Optional[dict] = None) -> dict:
     """
     Compute health assessment for a position.
     Returns: {flag, flag_style, reasons, pnl_mtm, pnl_pct, intrinsic_buffer}
@@ -395,6 +396,7 @@ def assess_position(pos: dict, legs: list, underlying_price: Optional[float],
     opt_legs = [l for l in legs if l["option_type"] not in (None, "STOCK")]
     stock_legs = [l for l in legs if l["option_type"] == "STOCK"]
     primary = opt_legs[0] if opt_legs else None
+    is_multileg = len(opt_legs) > 1
 
     pnl_mtm = None
     pnl_pct = None
@@ -409,20 +411,49 @@ def assess_position(pos: dict, legs: list, underlying_price: Optional[float],
         expiration = primary["expiration"]
         days_left = dte(expiration)
 
-        # Mark-to-market P&L
-        current_mid = opt_data.get("mid")
-        if current_mid is not None:
-            if direction == "SHORT":
-                # Sold option: P&L = (open_price - current_mid) * contracts * 100
-                pnl_mtm = round((open_price - current_mid) * contracts * 100, 2)
-            else:
-                # Long option: P&L = (current_mid - open_price) * contracts * 100
-                pnl_mtm = round((current_mid - open_price) * contracts * 100, 2)
-            if net_premium != 0:
-                pnl_pct = round((pnl_mtm / abs(net_premium)) * 100, 1)
+        # For multi-leg credit structures the net position behaves like a short-
+        # premium trade (profit as value decays). Derive the signal's direction
+        # from net_premium so it does not depend on which leg is opt_legs[0].
+        if is_multileg:
+            flag_direction = "SHORT" if net_premium > 0 else "LONG"
+        else:
+            flag_direction = direction
 
-        # Intrinsic buffer (distance from strike)
-        if underlying_price:
+        # Mark-to-market P&L
+        if is_multileg:
+            # HELM-018: mark EVERY leg and sum per-leg P&L. Pricing only the
+            # primary leg counts one leg's decay as the whole position's P&L.
+            marks = leg_marks or {}
+            _total = 0.0
+            _marked_all = True
+            for _l in opt_legs:
+                _m = marks.get((_l["option_type"], _l["strike"]))
+                if _m is None:
+                    _marked_all = False
+                    break
+                if _l["direction"] == "SHORT":
+                    _total += (_l["open_price"] - _m) * _l["contracts"] * 100
+                else:
+                    _total += (_m - _l["open_price"]) * _l["contracts"] * 100
+            if _marked_all:
+                pnl_mtm = round(_total, 2)
+                if net_premium != 0:
+                    pnl_pct = round((pnl_mtm / abs(net_premium)) * 100, 1)
+        else:
+            current_mid = opt_data.get("mid")
+            if current_mid is not None:
+                if direction == "SHORT":
+                    # Sold option: P&L = (open_price - current_mid) * contracts * 100
+                    pnl_mtm = round((open_price - current_mid) * contracts * 100, 2)
+                else:
+                    # Long option: P&L = (current_mid - open_price) * contracts * 100
+                    pnl_mtm = round((current_mid - open_price) * contracts * 100, 2)
+                if net_premium != 0:
+                    pnl_pct = round((pnl_mtm / abs(net_premium)) * 100, 1)
+
+        # Intrinsic buffer (distance from strike) -- single-leg only; a condor's
+        # one-wing buffer is misleading (deep view shows both wings).
+        if underlying_price and not is_multileg:
             if opt_type == "PUT":
                 intrinsic_buffer = round(underlying_price - strike, 2)
             else:  # CALL
@@ -444,29 +475,29 @@ def assess_position(pos: dict, legs: list, underlying_price: Optional[float],
             reasons.append(f"{days_left} DTE — approaching exit threshold ({dte_exit}d)")
 
         if pnl_pct is not None:
-            if direction == "SHORT" and pnl_pct >= profit_target:
+            if flag_direction == "SHORT" and pnl_pct >= profit_target:
                 flags.append("GREEN")
                 reasons.append(f"Profit target reached ({pnl_pct:.0f}% of {profit_target:.0f}%)")
-            elif direction == "SHORT" and pnl_pct >= 25:
+            elif flag_direction == "SHORT" and pnl_pct >= 25:
                 flags.append("GREEN")
                 reasons.append(f"Healthy gain ({pnl_pct:.0f}% of premium)")
-            elif direction == "SHORT" and pnl_pct < -50:
+            elif flag_direction == "SHORT" and pnl_pct < -50:
                 flags.append("RED")
                 reasons.append(f"Significantly underwater ({pnl_pct:.0f}%) — consider closing or rolling")
-            elif direction == "SHORT" and pnl_pct < -15:
+            elif flag_direction == "SHORT" and pnl_pct < -15:
                 flags.append("YELLOW")
                 reasons.append(f"Position losing ({pnl_pct:.0f}%) — monitor closely")
-            elif direction == "LONG" and pnl_pct > 5:
+            elif flag_direction == "LONG" and pnl_pct > 5:
                 flags.append("GREEN")
                 reasons.append(f"Long position profitable (+{pnl_pct:.0f}%)")
-            elif direction == "LONG" and pnl_pct < -50:
+            elif flag_direction == "LONG" and pnl_pct < -50:
                 flags.append("RED")
                 reasons.append(f"Long position down {pnl_pct:.0f}%")
-            elif direction == "LONG" and pnl_pct < -25:
+            elif flag_direction == "LONG" and pnl_pct < -25:
                 flags.append("YELLOW")
                 reasons.append(f"Long position down {pnl_pct:.0f}%")
 
-        if intrinsic_buffer is not None and direction == "SHORT":
+        if intrinsic_buffer is not None and flag_direction == "SHORT" and not is_multileg:
             pct_buffer = (intrinsic_buffer / underlying_price * 100) if underlying_price else 0
             if intrinsic_buffer < 0:
                 flags.append("RED")
@@ -577,6 +608,23 @@ def check_one(pos: dict, legs: list, deep: bool = False) -> dict:
                     opt_data = yf_data
                     opt_source = "yfinance"
 
+    # HELM-018: mark every leg for multi-leg P&L. The single opt_data above only
+    # prices the primary leg; netting all legs needs a quote per leg.
+    leg_marks = {}
+    if len(opt_legs) > 1:
+        if primary is not None and opt_data.get("mid") is not None:
+            leg_marks[(primary["option_type"], primary["strike"])] = opt_data.get("mid")
+        for _lg in opt_legs:
+            _key = (_lg["option_type"], _lg["strike"])
+            if _key in leg_marks:
+                continue
+            _q = fetch_ibkr_option(ticker, _lg["expiration"], _lg["strike"], _lg["option_type"])
+            _mid = _q.get("mid")
+            if _mid is None:
+                _yq = fetch_yf_data(ticker, _lg["expiration"], _lg["strike"], _lg["option_type"])
+                _mid = _yq.get("mid")
+            leg_marks[_key] = _mid
+
     # Get strategy settings
     conn = get_conn()
     account_id = get_active_account()
@@ -588,7 +636,7 @@ def check_one(pos: dict, legs: list, deep: bool = False) -> dict:
     strategy_settings = dict(settings_row) if settings_row else {}
 
     # Run assessment
-    assessment = assess_position(pos, legs, underlying_price, opt_data, strategy_settings)
+    assessment = assess_position(pos, legs, underlying_price, opt_data, strategy_settings, leg_marks=leg_marks)
     assessment.update({
         "ticker": ticker,
         "strategy": strategy,
