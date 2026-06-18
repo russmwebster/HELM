@@ -131,80 +131,88 @@ def open_position_with_snapshot(
     if direction == "LONG":
         net_premium = -net_premium
 
-    # Create position as OPEN -- --confirm means the trade was executed
-    pos = Position.create(
-        account_id=account_id,
-        strategy=strategy,
-        ticker=ticker,
-        company_name=company_name,
-        status='OPEN',
-        opened_at=now,
-        total_contracts=contracts,
-        net_premium=net_premium,
-        book=book,
-        notes=f"Pending execution — opened via HELM on {today}",
-    )
+    # Atomic (HELM-013): position + leg + OPENED event + snapshot in one
+    # transaction. Any failure rolls the whole open back -- no orphans.
+    with transaction() as conn:
+        # Create position as OPEN -- --confirm means the trade was executed
+        pos = Position.create(
+            account_id=account_id,
+            strategy=strategy,
+            ticker=ticker,
+            company_name=company_name,
+            status='OPEN',
+            opened_at=now,
+            total_contracts=contracts,
+            net_premium=net_premium,
+            book=book,
+            notes=f"Pending execution — opened via HELM on {today}",
+            conn=conn,
+        )
 
-    # Create leg
-    opt_type = contract["opt_type"]
-    leg_role = ("SHORT_" if direction == "SHORT" else "LONG_") + opt_type
-    leg = Leg.create(
-        position_id=pos.id,
-        leg_role=leg_role,
-        direction=direction,
-        open_price=fill_price,
-        open_date=today,
-        option_type=opt_type,
-        strike=contract["strike"],
-        expiration=contract["expiration"],
-        contracts=contracts,
-        entry_delta=contract.get("delta"),
-    )
+        # Create leg
+        opt_type = contract["opt_type"]
+        leg_role = ("SHORT_" if direction == "SHORT" else "LONG_") + opt_type
+        leg = Leg.create(
+            position_id=pos.id,
+            leg_role=leg_role,
+            direction=direction,
+            open_price=fill_price,
+            open_date=today,
+            option_type=opt_type,
+            strike=contract["strike"],
+            expiration=contract["expiration"],
+            contracts=contracts,
+            entry_delta=contract.get("delta"),
+            conn=conn,
+        )
 
-    # Log lifecycle event
-    LifecycleEvent.record(
-        position_id=pos.id,
-        event_type="OPENED",
-        narrative=f"Trade decision: {contracts}x {leg_role} ${contract['strike']} {contract['expiration']} @ ${fill_price:.2f} mid — pending execution in Fidelity",
-    )
+        # Log lifecycle event
+        LifecycleEvent.record(
+            position_id=pos.id,
+            event_type="OPENED",
+            narrative=f"Trade decision: {contracts}x {leg_role} ${contract['strike']} {contract['expiration']} @ ${fill_price:.2f} mid — pending execution in Fidelity",
+            conn=conn,
+        )
 
-    # Capture entry snapshot
-    account_conn = get_conn()
-    acct = account_conn.execute(
-        "SELECT portfolio_value FROM accounts WHERE id = ?", (account_id,)
-    ).fetchone()
-    portfolio_value = acct["portfolio_value"] if acct else None
-    account_conn.close()
+        # Capture entry snapshot
+        account_conn = get_conn()
+        acct = account_conn.execute(
+            "SELECT portfolio_value FROM accounts WHERE id = ?", (account_id,)
+        ).fetchone()
+        portfolio_value = acct["portfolio_value"] if acct else None
+        account_conn.close()
 
-    snap_id = capture_entry_snapshot(
-        position_id=pos.id,
-        leg_id=leg.id,
-        spot_price=contract.get("spot"),
-        delta=contract.get("delta"),
-        theta=contract.get("theta"),
-        gamma=contract.get("gamma"),
-        vega=contract.get("vega"),
-        iv_current=contract.get("iv"),
-        dte=contract.get("dte"),
-        premium_collected=abs(net_premium),
-        atr_14=scan_data.get("atr_14") if scan_data else None,
-        rsi_14=scan_data.get("rsi_14") if scan_data else None,
-        ema_20=scan_data.get("ema_20") if scan_data else None,
-        sma_50=scan_data.get("sma_50") if scan_data else None,
-        bias_score=scan_data.get("bias_score") if scan_data else None,
-        bias_factors=scan_data.get("bias_factors") if scan_data else None,
-        price_vs_52wk_pct=scan_data.get("price_vs_52wk_pct") if scan_data else None,
-        week_52_high=scan_data.get("week_52_high") if scan_data else None,
-        week_52_low=scan_data.get("week_52_low") if scan_data else None,
-        portfolio_value=portfolio_value,
-        open_interest=contract.get("oi"),
-        bid_ask_spread=contract.get("spread"),
-        bid_ask_spread_pct=contract.get("spread_pct"),
-    )
+        snap_id = capture_entry_snapshot(
+            position_id=pos.id,
+            leg_id=leg.id,
+            spot_price=contract.get("spot"),
+            delta=contract.get("delta"),
+            theta=contract.get("theta"),
+            gamma=contract.get("gamma"),
+            vega=contract.get("vega"),
+            iv_current=contract.get("iv"),
+            dte=contract.get("dte"),
+            premium_collected=abs(net_premium),
+            atr_14=scan_data.get("atr_14") if scan_data else None,
+            rsi_14=scan_data.get("rsi_14") if scan_data else None,
+            ema_20=scan_data.get("ema_20") if scan_data else None,
+            sma_50=scan_data.get("sma_50") if scan_data else None,
+            bias_score=scan_data.get("bias_score") if scan_data else None,
+            bias_factors=scan_data.get("bias_factors") if scan_data else None,
+            price_vs_52wk_pct=scan_data.get("price_vs_52wk_pct") if scan_data else None,
+            week_52_high=scan_data.get("week_52_high") if scan_data else None,
+            week_52_low=scan_data.get("week_52_low") if scan_data else None,
+            portfolio_value=portfolio_value,
+            open_interest=contract.get("oi"),
+            bid_ask_spread=contract.get("spread"),
+            bid_ask_spread_pct=contract.get("spread_pct"),
+            conn=conn,
+        )
 
     # Close the decision->position link on the originating scan signal, if one
     # exists (latest unlinked russ_intent='OPEN' for this ticker). Best-effort:
-    # a real position must never fail to open because of this stamp.
+    # a real position must never fail to open because of this stamp. Kept OUTSIDE
+    # the transaction so this stamp can never roll back a real open.
     if book == 'REAL':
         try:
             from helm.models.signal import Signal
