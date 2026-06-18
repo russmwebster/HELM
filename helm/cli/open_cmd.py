@@ -842,6 +842,8 @@ def confirm_and_log(ticker: str, strategy: str, contracts: list, config: dict,
 
     # Add spot to contract for snapshot
     selected["spot"] = spot
+    # HELM-017: stamp config-authoritative direction onto the selected contract so single-leg longs are not persisted with the fetch_chain_from_ibkr SHORT placeholder (entry_snapshot reads contract['direction'])
+    selected["direction"] = config["direction"]
 
     # Open position with full entry snapshot
     console.print()
@@ -1224,6 +1226,183 @@ def evaluate_condors(ticker: str, strategy: str, config: dict,
     return unique[:top_n]
 
 
+def confirm_condor(ticker: str, strategy: str, condors: list, config: dict,
+                   spot: float, args: list):
+    """
+    Interactive confirm flow for iron condors (HELM-013).
+
+    Captures the actual NET credit, assembles the four legs, and writes one
+    Position + 4 legs + one short-leg-anchored snapshot + OPENED event in a
+    single transaction via open_multileg_with_snapshot (atomic -- a partial
+    failure rolls the whole open back). Per-leg fills default to the conservative
+    values modeled by evaluate_condors (short -> bid, long -> ask); on a net
+    override the delta is absorbed into the two short legs so the derived net
+    matches the actual fill while the long legs stay at ask.
+    """
+    from rich.prompt import Prompt, Confirm
+    from helm.cli.entry_snapshot import open_multileg_with_snapshot
+
+    if not condors:
+        console.print("[yellow]No condors to open.[/yellow]")
+        console.print()
+        return
+
+    console.print()
+    console.print("[bold]Open an iron condor?[/bold]")
+    console.print("[dim]Enter rank number to select, or 'n' to exit.[/dim]")
+    console.print()
+
+    while True:
+        choice = Prompt.ask(
+            "Select condor",
+            default="1",
+            choices=[str(i + 1) for i in range(len(condors))] + ["n"],
+            show_choices=False,
+        )
+        if choice.lower() == "n":
+            console.print("[dim]No position opened.[/dim]")
+            console.print()
+            return
+        try:
+            idx = int(choice) - 1
+            if 0 <= idx < len(condors):
+                c = condors[idx]
+                break
+        except ValueError:
+            pass
+        console.print("[yellow]Invalid choice. Enter a rank number or 'n'.[/yellow]")
+
+    width = max(c["put_width"], c["call_width"])
+
+    console.print()
+    console.print(Panel.fit(
+        f"[bold]Selected:[/bold] {ticker} Iron Condor {c['expiration']} ({c['dte']}d)\n"
+        f"  Put spread:  Long ${c['long_put']:.0f} / Short ${c['short_put']:.0f}  "
+        f"(delta {c['put_delta']:.3f})\n"
+        f"  Call spread: Short ${c['short_call']:.0f} / Long ${c['long_call']:.0f}  "
+        f"(delta {c['call_delta']:.3f})\n"
+        f"  Modeled net credit: ${c['total_credit']:.2f}/contract  |  "
+        f"Max loss: ${c['max_loss']:.2f}/contract\n"
+        f"  Width: ${width:.0f}  |  Credit/width: {c['cw_pct']:.0f}%  |  R/R: {c['rr_ratio']:.2f}",
+        border_style="cyan", title="Confirm Iron Condor",
+    ))
+    console.print()
+
+    # Number of contracts (portfolio-sized via max_loss, mirroring display_condors).
+    suggested = 1
+    try:
+        from helm.db import get_conn as _gc
+        _c = _gc()
+        acct = _c.execute(
+            "SELECT portfolio_value FROM accounts WHERE id = ?", (get_active_account(),)
+        ).fetchone()
+        _c.close()
+        if acct and acct[0]:
+            suggested = max(1, min(20, int((acct[0] * 0.05) / (c["max_loss"] * 100))))
+    except Exception:
+        pass
+    contracts_str = Prompt.ask("  Number of contracts", default=str(suggested))
+    try:
+        num_contracts = int(contracts_str)
+    except ValueError:
+        num_contracts = suggested
+
+    # Conservative per-leg fills (short -> bid, long -> ask); modeled net = signed sum.
+    sp_bid = float(c["short_put_bid"]); lp_ask = float(c["long_put_ask"])
+    sc_bid = float(c["short_call_bid"]); lc_ask = float(c["long_call_ask"])
+    modeled_net = round((sp_bid + sc_bid) - (lp_ask + lc_ask), 2)
+
+    fill_str = Prompt.ask("  Actual NET credit received", default=f"{modeled_net:.2f}")
+    try:
+        net_credit = float(fill_str.replace("$", "").strip())
+    except ValueError:
+        console.print("[red]Invalid net credit. Aborting.[/red]")
+        console.print()
+        return
+
+    # Absorb any net override into the two short legs (longs stay at ask) so the
+    # writer-derived net_premium equals the actual fill.
+    base_short_sum = sp_bid + sc_bid
+    target_short_sum = net_credit + lp_ask + lc_ask
+    if base_short_sum > 0:
+        scale = target_short_sum / base_short_sum
+        sp_fill = max(0.0, round(sp_bid * scale, 2))
+        sc_fill = max(0.0, round(sc_bid * scale, 2))
+    else:
+        sp_fill, sc_fill = sp_bid, sc_bid
+
+    total_credit_amt = round(net_credit * 100 * num_contracts, 2)
+    console.print()
+    if not Confirm.ask(
+        f"  Open [bold]{num_contracts}x {ticker} Iron Condor "
+        f"{c['short_put']:.0f}/{c['long_put']:.0f}P {c['short_call']:.0f}/{c['long_call']:.0f}C "
+        f"{c['expiration']}[/bold] @ net ${net_credit:.2f} (collect ${total_credit_amt:.0f})?",
+        default=True,
+    ):
+        console.print("[dim]Cancelled.[/dim]")
+        console.print()
+        return
+
+    legs = [
+        {"direction": "SHORT", "opt_type": "PUT", "strike": c["short_put"],
+         "expiration": c["expiration"], "fill_price": sp_fill, "delta": c.get("put_delta"),
+         "iv": c.get("put_iv"), "dte": c["dte"], "spot": spot, "oi": c.get("put_oi")},
+        {"direction": "LONG", "opt_type": "PUT", "strike": c["long_put"],
+         "expiration": c["expiration"], "fill_price": lp_ask, "dte": c["dte"], "spot": spot},
+        {"direction": "SHORT", "opt_type": "CALL", "strike": c["short_call"],
+         "expiration": c["expiration"], "fill_price": sc_fill, "delta": c.get("call_delta"),
+         "iv": c.get("call_iv"), "dte": c["dte"], "spot": spot, "oi": c.get("call_oi")},
+        {"direction": "LONG", "opt_type": "CALL", "strike": c["long_call"],
+         "expiration": c["expiration"], "fill_price": lc_ask, "dte": c["dte"], "spot": spot},
+    ]
+
+    position_fields = {
+        "spread_width": width,
+        "max_profit": round(net_credit * 100 * num_contracts, 2),
+        "max_loss": round((width - net_credit) * 100 * num_contracts, 2),
+        "credit_to_width_ratio": round(net_credit / width, 4) if width else None,
+        "breakeven_low": round(c["short_put"] - net_credit, 2),
+        "breakeven_high": round(c["short_call"] + net_credit, 2),
+    }
+
+    # Live `helm open` sources its chain from IBKR (see "Data: IBKR live" header).
+    pricing_source = "ibkr"
+
+    console.print()
+    console.print("[dim]Recording position...[/dim]")
+    try:
+        pos_id, leg_ids, snap_ids = open_multileg_with_snapshot(
+            ticker=ticker,
+            strategy=strategy,
+            legs=legs,
+            contracts=num_contracts,
+            spot=spot,
+            scan_data=None,
+            book="REAL",
+            position_fields=position_fields,
+            pricing_source=pricing_source,
+        )
+    except Exception as e:
+        console.print(f"[red]Failed to record position: {e}[/red]")
+        console.print()
+        return
+
+    console.print()
+    console.print(Panel(
+        f"[bold green]Position Opened[/bold green]\n\n"
+        f"  Ticker:      [bold cyan]{ticker}[/bold cyan]  {strategy}\n"
+        f"  Structure:   {c['short_put']:.0f}/{c['long_put']:.0f}P  "
+        f"{c['short_call']:.0f}/{c['long_call']:.0f}C  {c['expiration']}\n"
+        f"  Contracts:   {num_contracts}\n"
+        f"  Net credit:  [green]${net_credit:.2f}/contract[/green]  (collected ${total_credit_amt:.0f})\n"
+        f"  Max loss:    [red]${position_fields['max_loss']:.0f}[/red]\n"
+        f"  Break-evens: ${position_fields['breakeven_low']:.2f} / ${position_fields['breakeven_high']:.2f}\n"
+        f"  Position:    [dim]{pos_id}[/dim]",
+        border_style="green", title="Opened",
+    ))
+    console.print()
+
+
 def display_condors(ticker: str, strategy: str, config: dict, condors: list,
                     spot: float, atr: float, account_id: str, args: list):
     """Display iron condor evaluation results."""
@@ -1333,6 +1512,10 @@ def display_condors(ticker: str, strategy: str, config: dict, condors: list,
         border_style="green"
     ))
     console.print()
+
+    # --confirm flow for iron condors (HELM-013)
+    if "--confirm" in args:
+        confirm_condor(ticker, strategy, condors, config, spot, args)
 
 
 def evaluate_strangles(ticker: str, strategy: str, config: dict,
