@@ -6,6 +6,7 @@ from typing import Optional
 import uuid
 
 from helm.db import get_conn, transaction, row_to_dict
+from contextlib import nullcontext
 
 LEG_ROLES = ['SHORT_PUT','LONG_PUT','SHORT_CALL','LONG_CALL','LONG_STOCK','SHORT_STOCK','LONG_LEAPS']
 DIRECTIONS = ['LONG','SHORT']
@@ -47,6 +48,7 @@ class Leg:
     @classmethod
     def create(cls, position_id: str, leg_role: str, direction: str,
                open_price: float, open_date: str, **kwargs) -> Leg:
+        conn = kwargs.pop('conn', None)
         leg = cls(
             id=kwargs.pop('id', cls.new_id(position_id, leg_role)),
             position_id=position_id,
@@ -56,7 +58,7 @@ class Leg:
             open_date=open_date,
             **kwargs
         )
-        leg.save()
+        leg.save(conn=conn)
         return leg
 
     @classmethod
@@ -84,8 +86,8 @@ class Leg:
         finally:
             conn.close()
 
-    def save(self) -> Leg:
-        with transaction() as conn:
+    def save(self, conn=None) -> Leg:
+        with (transaction() if conn is None else nullcontext(conn)) as conn:
             conn.execute("""
                 INSERT OR REPLACE INTO legs (
                     id, position_id, leg_role, option_type, direction,

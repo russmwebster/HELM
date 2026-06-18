@@ -6,6 +6,7 @@ from typing import Optional
 import uuid
 
 from helm.db import get_conn, transaction, row_to_dict
+from contextlib import nullcontext
 
 # Source of truth is the positions table CHECK constraint; keep this >= that
 # set so __post_init__ / from_row never reject a real ledger row.
@@ -59,6 +60,7 @@ class Position:
 
     @classmethod
     def create(cls, account_id: str, strategy: str, ticker: str, **kwargs) -> Position:
+        conn = kwargs.pop('conn', None)
         pos = cls(
             id=kwargs.pop('id', cls.new_id(ticker, strategy)),
             account_id=account_id,
@@ -66,7 +68,7 @@ class Position:
             ticker=ticker,
             **kwargs
         )
-        pos.save()
+        pos.save(conn=conn)
         return pos
 
     @classmethod
@@ -139,7 +141,7 @@ class Position:
         finally:
             conn.close()
 
-    def save(self) -> Position:
+    def save(self, conn=None) -> Position:
         # Schema-derived column list (mirrors Signal.save) so save() can never
         # drift from the positions table again.
         #
@@ -159,7 +161,7 @@ class Position:
         set_clause = ', '.join(f'{c}=?' for c in upd_cols)
         update_vals = tuple(getattr(self, c) for c in upd_cols) + (self.id,)
 
-        with transaction() as conn:
+        with (transaction() if conn is None else nullcontext(conn)) as conn:
             conn.execute(
                 'INSERT OR IGNORE INTO positions (' + ', '.join(cols) + ') VALUES (' + insert_ph + ')',
                 insert_vals,

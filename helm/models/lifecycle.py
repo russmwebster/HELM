@@ -6,6 +6,7 @@ from typing import Optional
 import uuid
 
 from helm.db import get_conn, transaction, row_to_dict
+from contextlib import nullcontext
 
 EVENT_TYPES = ['PENDING','OPENED','ROLLED','CLOSED','ASSIGNED','EXPIRED','ADJUSTED','NOTE','CHECK_ALERT']
 
@@ -31,6 +32,7 @@ class LifecycleEvent:
 
     @classmethod
     def record(cls, position_id: str, event_type: str, **kwargs) -> LifecycleEvent:
+        conn = kwargs.pop('conn', None)
         event = cls(
             id=kwargs.pop('id', 'EVT-' + uuid.uuid4().hex[:8].upper()),
             position_id=position_id,
@@ -38,7 +40,7 @@ class LifecycleEvent:
             occurred_at=kwargs.pop('occurred_at', datetime.now().isoformat()),
             **kwargs
         )
-        event.save()
+        event.save(conn=conn)
         return event
 
     @classmethod
@@ -77,8 +79,8 @@ class LifecycleEvent:
         finally:
             conn.close()
 
-    def save(self) -> LifecycleEvent:
-        with transaction() as conn:
+    def save(self, conn=None) -> LifecycleEvent:
+        with (transaction() if conn is None else nullcontext(conn)) as conn:
             conn.execute("""
                 INSERT OR REPLACE INTO lifecycle_events (
                     id, position_id, leg_id, event_type, occurred_at,
