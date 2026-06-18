@@ -1614,8 +1614,189 @@ def cmd_check_one(ticker: str, deep: bool = False):
     console.print()
 
 
+
+# ============================================================================
+# helm check --integrity : exhaustive data-integrity invariant sweep
+# The "ratchet" -- each s23 post-mortem becomes a standing assertion so a bug
+# found once can never silently recur. Read-only. Fail-closed: strategies with
+# no explicit rule are NAMED, never silently passed. No silent drops: every
+# family reports its inputs and itemizes exclusions (missing != inconsistent).
+# ============================================================================
+
+_INTEG_SIGN_CREDIT = frozenset({'CSP', 'COVERED_CALL', 'BULL_PUT_SPREAD',
+    'BEAR_CALL_SPREAD', 'IRON_CONDOR', 'SHORT_STRANGLE', 'JADE_LIZARD'})
+_INTEG_SIGN_DEBIT = frozenset({'LONG_CALL', 'BEAR_PUT_SPREAD', 'BULL_CALL_SPREAD',
+    'DIAGONAL', 'DIAGONAL_PUT', 'PMCC', 'LONG_CONDOR'})
+_INTEG_LEG_COUNT = {'CSP': 1, 'LONG_CALL': 1, 'COVERED_CALL': 2, 'BULL_PUT_SPREAD': 2,
+    'BEAR_CALL_SPREAD': 2, 'BEAR_PUT_SPREAD': 2, 'BULL_CALL_SPREAD': 2, 'DIAGONAL': 2,
+    'DIAGONAL_PUT': 2, 'PMCC': 2, 'SHORT_STRANGLE': 2, 'IRON_CONDOR': 4,
+    'LONG_CONDOR': 4, 'JADE_LIZARD': 3}
+# PERM intentionally unmapped in both -> surfaces as "no rule defined".
+_INTEG_DUP_PRICE_TOL = 0.05
+_INTEG_DUP_DAYS_TOL = 1
+
+
+def _integ_date(s):
+    if not s:
+        return None
+    try:
+        return datetime.strptime(str(s)[:10], '%Y-%m-%d')
+    except Exception:
+        return None
+
+
+def _integrity_findings(conn):
+    """Return family findings: {key,title,status,summary,items}. Read-only."""
+    F = []
+
+    bad, unmapped = [], set()
+    for pid, strat, npx in conn.execute(
+            "SELECT id, strategy, net_premium FROM positions WHERE net_premium IS NOT NULL"):
+        if strat in _INTEG_SIGN_CREDIT:
+            if not npx > 0:
+                bad.append((pid, strat, npx, 'expected credit (+)'))
+        elif strat in _INTEG_SIGN_DEBIT:
+            if not npx < 0:
+                bad.append((pid, strat, npx, 'expected debit (-)'))
+        else:
+            unmapped.add(strat)
+    F.append({'key': 'sign', 'title': 'Sign vs strategy (HELM-017)',
+              'status': 'FAIL' if bad else 'PASS',
+              'summary': '%d sign mismatch(es)%s' % (len(bad),
+                  ('; no sign rule for: ' + ', '.join(sorted(unmapped))) if unmapped else ''),
+              'items': ['%s  %s  net_premium=%s  (%s)' % (p, s, n, w) for p, s, n, w in bad]})
+
+    rb = list(conn.execute(
+        "SELECT id, position_id, leg_role, direction FROM legs "
+        "WHERE NOT ((leg_role LIKE 'LONG%' AND direction='LONG') "
+        "       OR  (leg_role LIKE 'SHORT%' AND direction='SHORT'))"))
+    F.append({'key': 'role', 'title': 'Leg role vs direction (HELM-017)',
+              'status': 'FAIL' if rb else 'PASS',
+              'summary': '%d role/direction mismatch(es)' % len(rb),
+              'items': ['%s (pos %s)  role=%s  direction=%s' % (lid, pid, role, dr)
+                        for lid, pid, role, dr in rb]})
+
+    lc_bad, lc_unmapped = [], set()
+    for pid, strat, n in conn.execute(
+            "SELECT p.id, p.strategy, COUNT(l.id) FROM positions p "
+            "LEFT JOIN legs l ON l.position_id=p.id GROUP BY p.id, p.strategy"):
+        exp = _INTEG_LEG_COUNT.get(strat)
+        if exp is None:
+            lc_unmapped.add(strat)
+        elif n != exp:
+            lc_bad.append((pid, strat, n, exp))
+    F.append({'key': 'legcount', 'title': 'Leg count per strategy',
+              'status': 'FAIL' if lc_bad else 'PASS',
+              'summary': '%d leg-count mismatch(es)%s' % (len(lc_bad),
+                  ('; no leg rule for: ' + ', '.join(sorted(lc_unmapped))) if lc_unmapped else ''),
+              'items': ['%s  %s  has %d leg(s), expected %d' % (p, s, n, e) for p, s, n, e in lc_bad]})
+
+    fk = list(conn.execute("PRAGMA foreign_key_check"))
+    bytab = {}
+    for row in fk:
+        bytab[row[0]] = bytab.get(row[0], 0) + 1
+    F.append({'key': 'orphans', 'title': 'FK orphans',
+              'status': 'FAIL' if fk else 'PASS',
+              'summary': '%d orphan row(s)%s' % (len(fk),
+                  (': ' + ', '.join('%s=%d' % (t, c) for t, c in sorted(bytab.items()))) if bytab else ''),
+              'items': ['%s rowid=%s -> missing %s' % (t, rid, parent) for t, rid, parent, fkid in fk[:40]]})
+
+    a_items = []
+    dupsnap = list(conn.execute(
+        "SELECT position_id, COUNT(*) FROM entry_snapshots GROUP BY position_id HAVING COUNT(*)>1"))
+    for pid, n in dupsnap:
+        a_items.append('%s has %d snapshots (UNIQUE breach)' % (pid, n))
+    mis = list(conn.execute(
+        "SELECT e.position_id, e.leg_id, l.direction FROM entry_snapshots e "
+        "JOIN legs l ON e.leg_id=l.id "
+        "WHERE (SELECT COUNT(*) FROM legs lg WHERE lg.position_id=e.position_id)>1 "
+        "  AND l.direction<>'SHORT'"))
+    for pid, lid, dr in mis:
+        a_items.append('%s multileg snapshot anchored to %s leg %s (want SHORT)' % (pid, dr, lid))
+    F.append({'key': 'anchor', 'title': 'Snapshot anchoring',
+              'status': 'FAIL' if a_items else 'PASS',
+              'summary': '%d UNIQUE breach(es), %d mis-anchored multileg' % (len(dupsnap), len(mis)),
+              'items': a_items})
+
+    posrows = {}
+    for pid, tkr, strat, opened, role, strike, exp, ctr, price in conn.execute(
+            "SELECT p.id,p.ticker,p.strategy,p.opened_at,l.leg_role,l.strike,l.expiration,"
+            "l.contracts,l.open_price FROM positions p JOIN legs l ON l.position_id=p.id "
+            "WHERE p.book='REAL'"):
+        d = posrows.setdefault(pid, {'tkr': tkr, 'strat': strat, 'opened': opened, 'legs': []})
+        d['legs'].append((role, strike, exp, ctr, price))
+    buckets = {}
+    for pid, d in posrows.items():
+        ls = sorted(d['legs'], key=lambda x: (str(x[0]), x[1] if x[1] is not None else 0,
+                                              str(x[2]), x[3] if x[3] is not None else 0))
+        struct = tuple((role, strike, exp, ctr) for role, strike, exp, ctr, _ in ls)
+        buckets.setdefault((d['tkr'], d['strat'], struct), []).append(
+            (pid, d['opened'], [p for *_, p in ls]))
+    dups = []
+    for key, members in buckets.items():
+        for i in range(len(members)):
+            for j in range(i + 1, len(members)):
+                pa, oa, pra = members[i]
+                pb, ob, prb = members[j]
+                da, db = _integ_date(oa), _integ_date(ob)
+                day_ok = da is not None and db is not None and abs((da - db).days) <= _INTEG_DUP_DAYS_TOL
+                price_ok = all(abs((x or 0) - (y or 0)) <= _INTEG_DUP_PRICE_TOL for x, y in zip(pra, prb))
+                if day_ok and price_ok:
+                    dups.append('%s ~ %s  (%s %s, opened %s/%s)' % (pa, pb, key[0], key[1], oa, ob))
+    F.append({'key': 'dupfill', 'title': 'Duplicate fills (price+time+size)',
+              'status': 'FAIL' if dups else 'PASS',
+              'summary': '%d suspected double-book(s)' % len(dups), 'items': dups})
+
+    npos = conn.execute("SELECT COUNT(*) FROM positions").fetchone()[0]
+    cov = conn.execute("SELECT COUNT(DISTINCT position_id) FROM entry_snapshots").fetchone()[0]
+    F.append({'key': 'coverage', 'title': 'Snapshot coverage (info)', 'status': 'INFO',
+              'summary': '%d/%d positions have an entry snapshot (missing = backfillable, not a bug)' % (cov, npos),
+              'items': []})
+    return F
+
+
+def cmd_check_integrity(verbose=False):
+    """helm check --integrity : exhaustive data-integrity invariant sweep."""
+    conn = get_conn()
+    try:
+        findings = _integrity_findings(conn)
+    finally:
+        conn.close()
+    n_fail = sum(1 for f in findings if f['status'] == 'FAIL')
+    hs = 'red' if n_fail else 'green'
+    head = ('%d FAILING' % n_fail) if n_fail else 'ALL CLEAR'
+    console.print()
+    console.print(Panel.fit(
+        "[bold %s]HELM Integrity — %s[/bold %s]\n[dim]%d invariant families · exhaustive sweep[/dim]"
+        % (hs, head, hs, len(findings)), border_style=hs))
+    t = Table(box=box.SIMPLE_HEAD, show_header=True, padding=(0, 1))
+    t.add_column("", width=3, no_wrap=True)
+    t.add_column("Invariant")
+    t.add_column("Result")
+    marks = {'PASS': '[green]ok[/green]', 'FAIL': '[red]X[/red]', 'INFO': '[cyan]i[/cyan]'}
+    styles = {'PASS': 'green', 'FAIL': 'red', 'INFO': 'cyan'}
+    for f in findings:
+        t.add_row(marks[f['status']], f['title'],
+                  "[%s]%s[/%s]" % (styles[f['status']], f['summary'], styles[f['status']]))
+    console.print(t)
+    for f in findings:
+        if f['items'] and (f['status'] == 'FAIL' or verbose):
+            console.print("\n[bold]%s[/bold]" % f['title'])
+            for it in f['items']:
+                console.print("  [dim]-[/dim] %s" % it)
+    console.print()
+    if n_fail:
+        console.print("[red]Integrity: %d family(ies) failing.[/red] Use [bold]--verbose[/bold] for all items." % n_fail)
+    else:
+        console.print("[green]Integrity: all invariants hold.[/green]")
+
+
 def run():
     args = sys.argv[1:]
+
+    if "--integrity" in args:
+        cmd_check_integrity(verbose=("--verbose" in args or "-v" in args))
+        return
 
     if not get_active_account():
         console.print("[red]No active account. Run helm setup first.[/red]")
