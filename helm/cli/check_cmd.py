@@ -382,7 +382,8 @@ def fetch_yf_data(ticker: str, expiration: str, strike: float,
 
 def assess_position(pos: dict, legs: list, underlying_price: Optional[float],
                     opt_data: dict, strategy_settings: dict,
-                    leg_marks: Optional[dict] = None) -> dict:
+                    leg_marks: Optional[dict] = None,
+                    mark_confidence: str = "live") -> dict:
     """
     Compute health assessment for a position.
     Returns: {flag, flag_style, reasons, pnl_mtm, pnl_pct, intrinsic_buffer}
@@ -474,7 +475,13 @@ def assess_position(pos: dict, legs: list, underlying_price: Optional[float],
             flags.append("YELLOW")
             reasons.append(f"{days_left} DTE — approaching exit threshold ({dte_exit}d)")
 
-        if pnl_pct is not None:
+        if pnl_pct is not None and mark_confidence != "live":
+            # HELM-019: frozen/stale marks must not drive an actionable
+            # profit-target/stop signal. Show the number, cap at YELLOW,
+            # tell the trader to confirm at RTH.
+            flags.append("YELLOW")
+            reasons.append(f"Frozen/stale marks ({mark_confidence}) — P&L {pnl_pct:+.0f}% unverified, confirm at RTH")
+        elif pnl_pct is not None:
             if flag_direction == "SHORT" and pnl_pct >= profit_target:
                 flags.append("GREEN")
                 reasons.append(f"Profit target reached ({pnl_pct:.0f}% of {profit_target:.0f}%)")
@@ -635,8 +642,17 @@ def check_one(pos: dict, legs: list, deep: bool = False) -> dict:
     conn.close()
     strategy_settings = dict(settings_row) if settings_row else {}
 
+    # HELM-019: classify mark freshness from the primary leg's opt_source as a
+    # market-state proxy (per-leg weakest-link is a logged deferral).
+    if opt_source == "ibkr-live":
+        mark_confidence = "live"
+    elif opt_source == "ibkr-frozen":
+        mark_confidence = "frozen"
+    else:
+        mark_confidence = "stale"
+
     # Run assessment
-    assessment = assess_position(pos, legs, underlying_price, opt_data, strategy_settings, leg_marks=leg_marks)
+    assessment = assess_position(pos, legs, underlying_price, opt_data, strategy_settings, leg_marks=leg_marks, mark_confidence=mark_confidence)
     assessment.update({
         "ticker": ticker,
         "strategy": strategy,
@@ -644,6 +660,7 @@ def check_one(pos: dict, legs: list, deep: bool = False) -> dict:
         "underlying_source": underlying_source,
         "opt_data": opt_data,
         "opt_source": opt_source,
+        "mark_confidence": mark_confidence,
         "primary_leg": primary,
         "pos": pos,
         "legs": legs,
