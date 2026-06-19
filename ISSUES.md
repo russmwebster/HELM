@@ -107,6 +107,11 @@ booked WELL IC read +$80 vs Fidelity ~-$2,300 (~$2,400 gap); frozen MCD +$760 vs
 ~break-even. Fix: prefer live marks; tag frozen P&L low-confidence in `helm check`; build a
 HELM-vs-Fidelity mark/P&L reconcile (oracle = Fidelity CSV value + gain/loss). Re-validate
 WELL/MCD next RTH. (Sibling of HELM-006.)
+_Deferred (weakest-leg) — `check_one`'s leg_marks loop (`check_cmd.py` ~L617–626)
+stores only each leg's mid and discards its source, so v1 confidence uses the primary
+leg's `opt_source` as a market-state proxy (live / frozen / stale). Stamp per-leg source
+there when that loop is reworked; pairs with the carried "mid-only fast fetch for hedge
+legs" (HELM-018 follow-up)._
 
 ### Docs
 
