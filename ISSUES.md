@@ -32,13 +32,6 @@ signal flipped to `OPEN`; see Resolved log). Repairs the existing row only — t
 linkage on every `--confirm` is still unfixed, gated by the in-place-vs-select-to-open
 restructure decision._
 
-**HELM-020 · `BUG` · `OPEN` · `check_cmd.py` deep-view hygiene (hardcoded ticker + dead dup)**
-Two cleanups surfaced during HELM-019: (1) `cmd_check_deep_iron_condor` hardcodes the ticker
-label "HON" (`HON now: …`, `Alert if HON moves …`), so every non-HON condor deep view (WELL,
-MCD) prints the wrong ticker — use the position's ticker. (2) `generate_guidance` is defined
-twice at module scope (~L1032 and ~L1478); the first is dead (shadowed) and has *diverged*
-(stale RED-branch text), a footgun for anyone editing it — remove the L1032 copy.
-
 ### Tech debt
 
 **HELM-002 · `DEBT` · `OPEN` · `schema.sql` not yet a fully faithful builder of live**
@@ -143,6 +136,12 @@ were unpopulated). Likely a prior partial/ad-hoc migration. Unresolved; not bloc
 
 ## Resolved log
 
+- **2026-06-19 (s24)** — **HELM-020** resolved. (1) `cmd_check_deep_iron_condor` now uses the
+  position's ticker, not a hardcoded "HON" label (it was printing the wrong ticker on every
+  non-HON condor deep view — WELL, MCD). (2) Removed the dead, shadowed `generate_guidance`
+  duplicate — an exact copy sitting before `cmd_check_deep_iron_condor`; only the
+  post-`cmd_check_deep` def ever ran (positional delete, one copy remains). Patches
+  `apply_helm020_hon.py`, `apply_helm020_deadgg.py`.
 - **2026-06-19 (s24)** — HELM-019 frozen-mark confidence shipped (v1 + v1.1). `helm check`
   derives `mark_confidence` (live/frozen/stale) from the primary `opt_source`; non-live marks
   can't drive a GREEN profit-target or RED stop (compact) or the condor deep-view "close and
