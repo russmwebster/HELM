@@ -12,7 +12,7 @@ session where the issue was worked.
 - Status: `OPEN` · `DEFERRED` (deliberate, with a trigger) · `RESOLVED` · `WONTFIX`.
 - On resolution: move the line to the **Resolved log** with a one-line outcome + date.
 
-_Last updated: 2026-06-18 (s24)._
+_Last updated: 2026-06-19 (s24)._
 
 ---
 
@@ -31,6 +31,13 @@ _2026-06-17 (s23) — the live TSLA long was relinked in-place (`signal_id` → 
 signal flipped to `OPEN`; see Resolved log). Repairs the existing row only — the source
 linkage on every `--confirm` is still unfixed, gated by the in-place-vs-select-to-open
 restructure decision._
+
+**HELM-020 · `BUG` · `OPEN` · `check_cmd.py` deep-view hygiene (hardcoded ticker + dead dup)**
+Two cleanups surfaced during HELM-019: (1) `cmd_check_deep_iron_condor` hardcodes the ticker
+label "HON" (`HON now: …`, `Alert if HON moves …`), so every non-HON condor deep view (WELL,
+MCD) prints the wrong ticker — use the position's ticker. (2) `generate_guidance` is defined
+twice at module scope (~L1032 and ~L1478); the first is dead (shadowed) and has *diverged*
+(stale RED-branch text), a footgun for anyone editing it — remove the L1032 copy.
 
 ### Tech debt
 
@@ -107,6 +114,10 @@ booked WELL IC read +$80 vs Fidelity ~-$2,300 (~$2,400 gap); frozen MCD +$760 vs
 ~break-even. Fix: prefer live marks; tag frozen P&L low-confidence in `helm check`; build a
 HELM-vs-Fidelity mark/P&L reconcile (oracle = Fidelity CSV value + gain/loss). Re-validate
 WELL/MCD next RTH. (Sibling of HELM-006.)
+_v1+v1.1 shipped (2026-06-19, s24): `helm check` compact + condor deep views gate frozen/stale
+marks — no profit-target/stop close off non-live data; P&L shown + tagged, capped YELLOW,
+"confirm at RTH"; DTE + zone signals untouched. Remaining: the HELM-vs-Fidelity mark/P&L
+reconcile (oracle = Fidelity CSV value + gain/loss)._
 _Deferred (weakest-leg) — `check_one`'s leg_marks loop (`check_cmd.py` ~L617–626)
 stores only each leg's mid and discards its source, so v1 confidence uses the primary
 leg's `opt_source` as a market-state proxy (live / frozen / stale). Stamp per-leg source
@@ -132,6 +143,12 @@ were unpopulated). Likely a prior partial/ad-hoc migration. Unresolved; not bloc
 
 ## Resolved log
 
+- **2026-06-19 (s24)** — HELM-019 frozen-mark confidence shipped (v1 + v1.1). `helm check`
+  derives `mark_confidence` (live/frozen/stale) from the primary `opt_source`; non-live marks
+  can't drive a GREEN profit-target or RED stop (compact) or the condor deep-view "close and
+  redeploy" verdict — P&L shown + tagged, capped YELLOW, "confirm at RTH". DTE + zone signals
+  untouched. Patches `apply_helm019_v1.py`, `apply_helm019_v1_1.py`; live-validated on WELL/MCD.
+  Remaining under HELM-019: the HELM-vs-Fidelity mark/P&L reconcile.
 - **2026-06-18 (s24)** — WELL iron condor **backfilled** (live in Fidelity, never booked;
   reconcile showed 4 loose Fidelity-only legs). Recorded via one-off `book_well_condor.py`
   on the atomic writer — 4 legs, net credit $5,960, max loss $14,040, position opened
