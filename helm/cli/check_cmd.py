@@ -1161,6 +1161,7 @@ def cmd_check_deep_iron_condor(pos, legs, assessment, snap):
     per_contract = round(net_premium / contracts / 100, 2) if contracts else 0
     pnl_mtm = a.get('pnl_mtm') or 0
     profit_pct = round(pnl_mtm / net_premium * 100, 1) if net_premium else 0
+    mark_confidence = a.get('mark_confidence', 'live')  # HELM-019 v1.1
     target = round(net_premium * 0.50, 0)
     expiration = None
     short_put = long_put = short_call = long_call = None
@@ -1219,7 +1220,8 @@ def cmd_check_deep_iron_condor(pos, legs, assessment, snap):
     console.print('  [bold]P&L[/bold]')
     console.print(f'  Collected:   ${net_premium:,.0f}  ({contracts} x ${per_contract:.2f}/contract)')
     pnl_color = 'green' if pnl_mtm >= 0 else 'red'
-    console.print(f'  Current P&L: [{pnl_color}]{pnl_mtm:+,.0f}  ({profit_pct:.1f}% of max profit)[/{pnl_color}]')
+    _fz = '' if mark_confidence == 'live' else f'  [yellow]({mark_confidence})[/yellow]'
+    console.print(f'  Current P&L: [{pnl_color}]{pnl_mtm:+,.0f}  ({profit_pct:.1f}% of max profit)[/{pnl_color}]{_fz}')
     console.print(f'  Target:      ${target:,.0f} (50% of premium)  —  {round(100 - profit_pct, 0):.0f}% remaining')
     console.print()
     # Position map
@@ -1263,7 +1265,7 @@ def cmd_check_deep_iron_condor(pos, legs, assessment, snap):
         console.print('  [bold red]⚠  7 DTE — close immediately, gamma risk extreme[/bold red]')
     elif (days_left or 99) <= 21:
         console.print('  [yellow]⚠  21 DTE — consider closing regardless of P&L[/yellow]')
-    elif profit_pct >= 50:
+    elif profit_pct >= 50 and mark_confidence == "live":
         console.print('  [green]🎯 50% profit target reached — close and redeploy[/green]')
     elif in_zone:
         console.print('  [green]✓ Centered in profit zone — hold, let theta work[/green]')
@@ -1272,6 +1274,8 @@ def cmd_check_deep_iron_condor(pos, legs, assessment, snap):
         console.print(f'  Alert if HON moves below [yellow]${alert_put:.2f}[/yellow] or above [yellow]${alert_call:.2f}[/yellow] (within 3% of short strikes)')
     else:
         console.print('  [red]⚠  Outside profit zone — evaluate adjustment or close[/red]')
+    if mark_confidence != "live":
+        console.print('  [yellow]⚠  P&L is frozen/stale — confirm at RTH before acting on profit/stop levels[/yellow]')
     console.print()
 
 
