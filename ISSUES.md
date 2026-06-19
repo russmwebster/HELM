@@ -71,14 +71,6 @@ Also: HELM's sell/buy IVR lines (≥35 / <15) are aggressive vs convention (~50 
 same loop should validate them. Trigger: the loop can score expectancy on neutral-sub-rich,
 or a `NO_TRADE` return gets wired through scan/open.
 
-**HELM-016 · `DESIGN` · `DEFERRED` · `analyze edge` v1.1**
-The s22 grader (shipped — see Resolved log) is mean-only, closed-trades-only. Deferred
-follow-ups: (a) report **median** alongside mean (annualized-return distribution is
-right-skewed — the 883% LONG_CALL row shows it); (b) fold in **EXPIRED** trades once expiry
-stamps `realized_pnl`; (c) audit the 1 ungradeable closed trade (missing capital basis or
-P&L); (d) sanity-check the LONG_CALL capital basis (confirm `abs(net_premium)` units).
-Trigger: next time `edge` is iterated, or when expiry P&L stamping lands.
-
 ### Ops / enhancement
 
 **HELM-006 · `OPS` · `OPEN` · Scan trusts stale IVR silently**
@@ -136,6 +128,17 @@ were unpopulated). Likely a prior partial/ad-hoc migration. Unresolved; not bloc
 
 ## Resolved log
 
+- **2026-06-19 (s24)** — **HELM-016** resolved (`analyze edge` v1.1). All four deferred
+  follow-ups verified done. (a) **median** is reported alongside mean — summary-table column,
+  per-strategy `mean/med` cells, and a median selection-skill line (`cli/analyze.py`,
+  `_median`/`cmd_edge`). (c) the **ungradeable audit** itemizes every skipped trade
+  (ticker/strategy/reason). (b) **EXPIRED** trades fold in via the query guard
+  `status IN ('CLOSED','EXPIRED') AND realized_pnl IS NOT NULL`. (d) **LONG_CALL capital
+  basis** confirmed against the live book — all five closed long-call rows (APP, UNH×2, UEC,
+  CRWV) have `net_premium` = −(open_price × contracts × 100) to the dollar, so
+  `abs(net_premium)` is total-dollar matching `realized_pnl`; the 883% row is a real
+  annualized figure, not a units bug. (a)/(b)/(c) were already in the code — the register's
+  "deferred" label was stale; no code change this session.
 - **2026-06-19 (s24)** — **HELM-020** resolved. (1) `cmd_check_deep_iron_condor` now uses the
   position's ticker, not a hardcoded "HON" label (it was printing the wrong ticker on every
   non-HON condor deep view — WELL, MCD). (2) Removed the dead, shadowed `generate_guidance`
