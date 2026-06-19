@@ -1155,6 +1155,7 @@ def generate_guidance(pos: dict, primary: dict, assessment: dict, snap: dict,
 
 def cmd_check_deep_iron_condor(pos, legs, assessment, snap):
     a = assessment
+    tkr = pos.get('ticker', '')  # HELM-020
     spot = a.get('underlying_price')
     net_premium = pos.get('net_premium') or 0
     contracts = pos.get('total_contracts') or 1
@@ -1210,7 +1211,7 @@ def cmd_check_deep_iron_condor(pos, legs, assessment, snap):
         console.print(f'  Break-evens:  [cyan]${be_low:.2f}[/cyan] (put side)  /  [cyan]${be_high:.2f}[/cyan] (call side)')
     console.print()
     console.print('  [bold]Current Position[/bold]')
-    console.print(f'  HON now:  ${spot:.2f}  —  {zone_str}')
+    console.print(f'  {tkr} now:  ${spot:.2f}  —  {zone_str}')
     console.print(f'  Put side:  [{put_color}]${dist_put:.2f} ({pct_put:.1f}%)[/{put_color}] above short put ${sp_str:.0f}')
     console.print(f'  Call side: [{call_color}]${dist_call:.2f} ({pct_call:.1f}%)[/{call_color}] below short call ${sc_str:.0f}')
     pct_used = min(abs(pct_put or 99), abs(pct_call or 99))
@@ -1271,7 +1272,7 @@ def cmd_check_deep_iron_condor(pos, legs, assessment, snap):
         console.print('  [green]✓ Centered in profit zone — hold, let theta work[/green]')
         alert_put  = round(float(sp_str) * 1.03, 2)
         alert_call = round(float(sc_str) * 0.97, 2)
-        console.print(f'  Alert if HON moves below [yellow]${alert_put:.2f}[/yellow] or above [yellow]${alert_call:.2f}[/yellow] (within 3% of short strikes)')
+        console.print(f'  Alert if {tkr} moves below [yellow]${alert_put:.2f}[/yellow] or above [yellow]${alert_call:.2f}[/yellow] (within 3% of short strikes)')
     else:
         console.print('  [red]⚠  Outside profit zone — evaluate adjustment or close[/red]')
     if mark_confidence != "live":
