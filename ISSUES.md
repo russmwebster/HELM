@@ -1,0 +1,250 @@
+# HELM — Issues & Tech-Debt Register
+
+Canonical list of known issues, tech debt, deferred work, and open questions.
+Referenced by session handovers. Keep entries **terse**; detail lives in the
+session where the issue was worked.
+
+**Conventions**
+- IDs are stable (`HELM-NNN`); never reuse a retired number.
+- Severity: `BUG` (wrong behavior) · `DEBT` (correct but accruing risk) ·
+  `DESIGN` (architecture/sequencing) · `OPS` (operational/runtime) ·
+  `DOCS` · `QUESTION` (unresolved unknown).
+- Status: `OPEN` · `DEFERRED` (deliberate, with a trigger) · `RESOLVED` · `WONTFIX`.
+- On resolution: move the line to the **Resolved log** with a one-line outcome + date.
+
+_Last updated: 2026-06-18 (s24)._
+
+---
+
+## Active
+
+### Bugs
+
+**HELM-012 · `BUG` · `OPEN` · `helm open --confirm` does not link the originating signal**
+A REAL open writes the position with `signal_id = NULL`; the best-effort signal stamp
+(needs a signal with `russ_intent = 'OPEN'`) never fires, so the originating signal stays
+`russ_action = 'PENDING'`. Consequences: (1) `paper_generate`'s passed-on set failed to
+exclude live picks (now defended by the s22 ticker-level exclusion — see Resolved log);
+(2) outcome back-prop has no signal to stamp on close. Fix at the source: stamp `signal_id`
++ flip `russ_action`/`russ_intent` on confirm.
+_2026-06-17 (s23) — the live TSLA long was relinked in-place (`signal_id` → `SIG-78A351DC`,
+signal flipped to `OPEN`; see Resolved log). Repairs the existing row only — the source
+linkage on every `--confirm` is still unfixed, gated by the in-place-vs-select-to-open
+restructure decision._
+
+### Tech debt
+
+**HELM-002 · `DEBT` · `OPEN` · `schema.sql` not yet a fully faithful builder of live**
+Additive table/column drift **reconciled s23** (see Resolved log): `schema.sql` now declares
+all 20 live tables and all live columns; a fresh `init_db` reproduces live (validated by
+executing the patched `schema.sql` into an in-memory DB and diffing to zero). **Remaining
+(keep `OPEN`):** a deeper pass on constraints / defaults / indexes / FKs beyond table+column
+presence, plus the dead `shadow_*` drop. Trigger: before any DB rebuild-from-schema, or when
+convenient. Keep the execute-and-rediff gate (`apply_schema_reconcile.py`) as the standing
+schema-change check.
+
+**HELM-004 · `DEBT` · `DEFERRED` · Multileg paper liquidity capture not wired**
+`_paper_open.py` leg dicts don't carry `oi`/`spread`/`spread_pct`, so multileg paper
+writes those three `entry_snapshots` columns NULL. The `capture` fn and both helpers
+are wired to accept them (s20); the remaining work is enriching each `_paper_open.py`
+builder from the per-strategy `evaluate_*` keys, plus deciding short-leg vs
+net-structure liquidity. Trigger: the thin-name thematic sleeve, where the signal
+stops being muted.
+
+### Design / sequencing
+
+**HELM-005 · `DESIGN` · `OPEN` · Watchlist breadth → strategy monoculture**
+The 22-name mega-cap `sector_v1` watchlist clusters neutral / high-IVR, funneling
+candidates into IRON_CONDOR. A counterfactual paper corpus drawn from this watchlist
+alone is too narrow for entry-lever learning (low feature variation). Fix = the thematic
+sleeve (dispersed bias / IVR / liquidity). Arguably the gating item for the learning loop
+producing anything analyzable.
+_2026-06-16 (s21) — the HELM-001 fix removed the moderate-band → IC routing, so the prior
+~55% IC figure now overstates; confirm the true IC share on the next fresh RTH scan._
+
+**HELM-011 · `DESIGN` · `DEFERRED` · Neutral-sub-rich cell + IVR boundary tuning**
+Post-HELM-001, neutral + sub-rich IVR → `LONG_STRADDLE`, which `paper generate`
+fail-closed-skips (no auto-paperable neutral long-vol structure), so that cell yields no
+corpus. Accepted as the weakest cell. The real question — `NO_TRADE` sentinel vs straddle
+vs where the cheap/rich line actually sits — is a learning-loop decision, not a hardcode.
+Also: HELM's sell/buy IVR lines (≥35 / <15) are aggressive vs convention (~50 / ~30); the
+same loop should validate them. Trigger: the loop can score expectancy on neutral-sub-rich,
+or a `NO_TRADE` return gets wired through scan/open.
+
+**HELM-016 · `DESIGN` · `DEFERRED` · `analyze edge` v1.1**
+The s22 grader (shipped — see Resolved log) is mean-only, closed-trades-only. Deferred
+follow-ups: (a) report **median** alongside mean (annualized-return distribution is
+right-skewed — the 883% LONG_CALL row shows it); (b) fold in **EXPIRED** trades once expiry
+stamps `realized_pnl`; (c) audit the 1 ungradeable closed trade (missing capital basis or
+P&L); (d) sanity-check the LONG_CALL capital basis (confirm `abs(net_premium)` units).
+Trigger: next time `edge` is iterated, or when expiry P&L stamping lands.
+
+### Ops / enhancement
+
+**HELM-006 · `OPS` · `OPEN` · Scan trusts stale IVR silently**
+Scan output shifts materially on stale vs fresh IVR (s20: the first scan's
+monoculture and a false NEE anomaly were both stale-IVR artifacts; both corrected
+after `helm ivr refresh`). Candidate enhancement: scan warns or refuses when IVR
+data is stale, so it can't silently mis-assign strategies.
+
+**HELM-009 · `OPS` · `OPEN` (suspected, unconfirmed) · No per-ticker timeout in paper generate**
+First `paper generate` run (2026-06-16) showed `entry_snapshots.created_at` in two bursts —
+AAPL→GE at 14:45:03–08, a ~45-min gap, then GOOGL→XOM at 15:30:17–59 — with the gap at the first
+IBKR single-leg fetch (GOOGL). Single-run-with-stall is the leading read (summary said "booked 20",
+exactly 20 rows exist, no dups), but run count could not be confirmed. If it's a stall, the
+orchestration's try/except catches exceptions but not hangs, so one slow IBKR chain blocks the
+batch. Candidate fix if confirmed: per-ticker fetch timeout → surface a stuck request as a skip,
+not a stall.
+_2026-06-17 (s22) — one RTH `helm paper generate` completed with no ~45-min single-leg stall in
+visible output. One clean data point, not conclusive; keep watching across runs before deciding
+on a per-ticker timeout._
+
+**HELM-019 · `OPS` · `OPEN` · Stale frozen marks → wrong multi-leg P&L when market closed**
+Outside RTH, `helm check` on multi-leg positions reads `ibkr-frozen` last-close marks that are
+stale/noisy on thin OTM wings, so net P&L and any profit-target/stop signal off it can be
+materially wrong. Not a calc bug — HELM-018's net math is correct; garbage-frozen-in. Freshly
+booked WELL IC read +$80 vs Fidelity ~-$2,300 (~$2,400 gap); frozen MCD +$760 vs Fidelity
+~break-even. Fix: prefer live marks; tag frozen P&L low-confidence in `helm check`; build a
+HELM-vs-Fidelity mark/P&L reconcile (oracle = Fidelity CSV value + gain/loss). Re-validate
+WELL/MCD next RTH. (Sibling of HELM-006.)
+
+### Docs
+
+**HELM-007 · `DOCS` · `OPEN` · Stale help / docstrings**
+`paper_cmd.py` help says "single-leg" but `_PAPER_BOOKERS` books multileg too;
+`workflow_cmd.py` is stale (missing `--manage` / paper, per handover). `_paper_generate.py`
+(L32–35) still describes `open_position_with_snapshot` as non-atomic — stale since the s24
+atomic-open fix (HELM-003). Pattern of docstrings lagging implementation.
+
+### Open questions
+
+**HELM-008 · `QUESTION` · `OPEN` · Provenance of `entry_snapshots` liquidity columns**
+`open_interest` + `bid_ask_spread` were found on live with no `schema.sql` or code
+ALTER trail; could not establish when/how they were added. Benign (correct types,
+were unpopulated). Likely a prior partial/ad-hoc migration. Unresolved; not blocking.
+
+---
+
+## Resolved log
+
+- **2026-06-18 (s24)** — WELL iron condor **backfilled** (live in Fidelity, never booked;
+  reconcile showed 4 loose Fidelity-only legs). Recorded via one-off `book_well_condor.py`
+  on the atomic writer — 4 legs, net credit $5,960, max loss $14,040, position opened
+  2026-06-17, `pricing_source=fidelity`. First attempt failed on a null `spot_price` and
+  rolled back cleanly (live proof of the HELM-013 atomic open); after the entry-spot fix,
+  reconcile 20/20, integrity ALL CLEAR at 55 positions. (P&L read caveat → HELM-019.)
+- **2026-06-18 (s24)** — **HELM-018** multi-leg P&L'd from a single leg **fixed**.
+  `assess_position` priced only `opt_legs[0]`; now nets all legs, credit/debit signal from
+  `net_premium` sign, `pnl_pct` over `net_premium`. Patch `apply_helm018_multileg_pnl.py`.
+  Live RTH re-confirm + multi-leg sweep pending (carried).
+- **2026-06-18 (s24)** — **HELM-003** non-atomic open **resolved**. Single-leg
+  `open_position_with_snapshot` now wraps its 4 writes in one `transaction()` (best-effort
+  Signal link kept outside); the multileg sibling was made all-or-nothing the same session.
+  All four open paths (live/paper × single/multi) route through the two writers, so partial
+  opens can no longer occur. Patch `apply_singleleg_atomic.py`.
+- **2026-06-18 (s24)** — **HELM-013** live `confirm_condor`. `helm open <T> IRON_CONDOR
+  --confirm` writes via the atomic multileg path (net-credit entry, short-leg reconciliation,
+  `pricing_source=ibkr`); live-confirmed prompt + clean `n` exit. Patch `apply_confirm_condor.py`.
+- **2026-06-18 (s24)** — **HELM-013** atomic multileg open. Conn-injectable models;
+  `open_multileg_with_snapshot` threads one `transaction()` through Position/Leg/Lifecycle/
+  snapshot; mid-sequence failure → 0 rows. Patch `apply_helm013.py`.
+- **2026-06-18 (s24)** — `helm check --integrity` ratchet. 7-family invariant sweep
+  (sign/role, leg-count, FK orphans, snapshot anchoring, dup-fills, coverage), fail-closed on
+  unmapped strategies; cleared 32 orphaned SMR check rows in the same pass.
+  Patch `apply_integrity_check.py` + `helm_orphan_checks_fix.py`.
+- **2026-06-17 (s23)** — **HELM-017** fixed. `confirm_and_log` (`cli/open_cmd.py`) now stamps
+  `selected["direction"] = config["direction"]` before `open_position_with_snapshot`, closing
+  the class where single-leg longs inherited the `fetch_chain_from_ibkr` SHORT placeholder and
+  persisted as `SHORT_CALL` / +credit. Patch `apply_helm017_code.py` (anchor-asserted,
+  idempotent, py_compile-gated). Latent: the L531 SHORT placeholder is now harmless but remains.
+- **2026-06-17 (s23)** — TSLA row correction + **HELM-012** relink (gated, Russ-executed). One
+  txn, 11 fields across 4 rows: `positions` net_premium 3398 → -3398, signal_id → `SIG-78A351DC`;
+  `legs` SHORT → LONG / `SHORT_CALL` → `LONG_CALL`; `signals` → `OPEN`/`OPEN`, position_opened 1.
+  Script `helm017_data_fix.py` (drift-guarded, two WAL-safe backups, in-txn readback). Repairs the
+  existing row only; source linkage still open under HELM-012.
+- **2026-06-17 (s23)** — **HELM-015** resolved. Duplicate REAL SMR CSP row removed, keeping the
+  one matching the Fidelity fill ($1.22): KEEP `SMR-CSP-20260603-5773F7`, DROP `...-694D73`
+  (a stray re-booking 93 min later). Gated child-first delete `helm015_smr_dedupe.py` (drift guard
+  refuses unless DROP=1.23 / KEEP=1.22; two WAL-safe backups; per-table rowcount asserts).
+- **2026-06-17 (s23)** — **HELM-002** additive reconcile shipped. `schema.sql` brought to live for
+  table+column presence: +4 `CREATE TABLE IF NOT EXISTS`, +6 `ALTER TABLE ADD COLUMN`, matching the
+  file's CREATE+ALTER idiom. Self-sourcing, self-guarding `apply_schema_reconcile.py` with an
+  in-memory execute-and-rediff gate (20/20 tables, zero column diff). Deeper constraint/index/FK
+  pass + `shadow_*` drop remain under HELM-002.
+- **2026-06-17 (s23)** — **HELM-014** resolved (premise corrected). `get_conn` (`db.py:18`) sets
+  `PRAGMA foreign_keys = ON` per connection and is the only `sqlite3.connect` in the package —
+  in-app FK enforcement is uniform. The s22/s23 CASCADE-didn't-fire was out-of-band scripts using a
+  bare connect (FK OFF). Discipline: maintenance scripts route through `get_conn` or stay
+  child-first. No app change.
+- **2026-06-17 (s23)** — **HELM-010** resolved. Orphan `import_pathways` row `PTH-8E897BE6`
+  (account_id `fidelity_5fee37`, a deleted account; `last_file` NULL, never imported) deleted via
+  gated leaf delete `helm010_orphan_fix.py` (drift guard, two WAL-safe backups); `import_pathways`
+  now 2 rows, 0 orphans, both on `fidelity_9e60c8`.
+- **2026-06-17 (s22)** — `helm analyze edge` shipped (`cli/analyze.py`, additive). Per-trade score
+  = annualized return on capital-tied-up (P&L ÷ capital × 365/days, 7-day floor), simple average,
+  **closed trades only**, graded vs the whole field (REAL ∪ PAPER); reports selection-skill
+  (picks − field) and pass-cost (paper), overall + by strategy, count + thin flag (N<5). First run:
+  301.3% overall, CSP 107.3% (n=15), LONG_CALL 883.2% (n=5), 1 ungradeable. Patch `apply_edge.py`.
+  v1.1 follow-ups → HELM-016.
+- **2026-06-17 (s22)** — Paper-generate live-pick exclusion shipped (`cli/_paper_generate.py`,
+  ticker-level, v3). Any ticker with an open REAL position is skipped on the paper side regardless
+  of strategy, so the paper book never rides an underlying Russ is already live in. `seen`/`seen.add`
+  dedup intact. Sandbox-proven incl. different-strategy-same-ticker. Earlier (ticker,strategy)-keyed
+  v1/v2 superseded (v1 had a `seen`-rename `NameError`); deploy only v3.
+- **2026-06-17 (s22)** — Live paper-book contamination cleaned. Two erroneous paper positions on
+  live tickers (`TSLA-LONG_CALL-20260617-5DEB97` double-book + pre-existing
+  `AAPL-BULL_PUT_SPREAD-20260617-2BC3A5`) removed via gated child-first txn: 9 rows. WAL-safe
+  `.backup()` + keeper (`data/helm.db.predelete_20260617_150853.bak`), before/after verified zero,
+  REAL book untouched (exact-id scoped).
+- **2026-06-16 (s21)** — HELM-001 low-IVR-neutral/mildly-bearish → IRON_CONDOR
+  fallthrough **fixed**. The moderate IVR band (15–34) no longer routes to a
+  premium-sell: neutral → LONG_STRADDLE, mildly-bearish → BEAR_PUT_SPREAD; IC now
+  fires only at IVR ≥ 35 (`ivr_rich`). Two-line edit to `bias_to_strategy`
+  (`scan_cmd.py`) fallthroughs; cheap branches and the rich sell-line untouched.
+  Closed offline via a direct `bias_to_strategy` ladder test (10/10 cells); live-scan
+  confirmation rides along next RTH. (`scan_cmd.py.bak.20260616_201920`.)
+- **2026-06-16 (s21)** — `helm guide` strategy matrix **re-based** to the engine's
+  real IVR boundaries. The guide was built on a 35/60 scheme while `bias_to_strategy`
+  sells at ≥35 / buys <15 — pre-existing drift independent of HELM-001 (the mildly-
+  bull and mildly-bear 35–60 cells were already wrong). Columns moved to
+  <15 / 15–35 / ≥35, all 5 rows re-derived from the engine, IVR table reconciled,
+  RSI-conditional mildly-bull-moderate cell footnoted. (`guide_cmd.py.bak.20260616_204019`.)
+- **2026-06-16 (s20)** — NEE "mildly-bearish → IRON_CONDOR" anomaly: was a
+  **stale-IVR artifact**, not a bug. On fresh IVR (IVR 11) it correctly assigned
+  BEAR_PUT_SPREAD. (The live low-IVR-neutral fallthrough remains — see HELM-001.)
+- **2026-06-16 (s20)** — Entry-liquidity capture shipped: additive migration
+  (`bid_ask_spread_pct` to live; `open_interest` + `bid_ask_spread` already present),
+  plus `cli/entry_snapshot.py` wiring (signature + INSERT + single-leg pass-through +
+  multileg helper forward-wired). Single-leg opens now populate the three columns.
+
+---
+
+## Carried handover threads (see latest `HELM_handover_sNN.md` for detail)
+
+Not yet promoted to numbered issues; pull in as they get worked.
+
+**s24:**
+- HELM-018 RTH confirm + multi-leg P&L sweep — re-run `helm check MCD` / `helm check WELL` at
+  RTH (expect convergence toward Fidelity), then sweep all multi-leg positions.
+- HELM-018 follow-ups — mid-only fast fetch for hedge legs (skip the ~8s greek wait); store net
+  cost-to-close as `current_price` for multi-leg; integrity invariant: persisted `pnl_pct` > 100%
+  on a credit structure → FAIL.
+- Manual multi-leg booking command (`helm open <T> --manual`) — so backfills / exact-fill entries
+  don't need one-off scripts. The atomic writer needs an `opened_at` override and a non-null
+  `spot_price` path (entry-snapshot `spot_price` is NOT NULL — bit the WELL backfill).
+- Reconcile UX — group unmatched Fidelity-only legs into a suspected structure ("WELL: looks like
+  an iron condor, 4 legs, unbooked") instead of N loose `--` rows.
+- Strangles hint typo — `display_strangles` "To open" line: `IRON_CONDOR --confirm` →
+  `SHORT_STRANGLE --confirm`.
+- Real booking via `--confirm` — condor + single-leg not yet exercised end-to-end with a live
+  fill (RTH, real money; write path proven).
+- Duplicate `'check'` key in `helm.py` (L17 dead `helm.cli.check` / L28 live `helm.cli.check_cmd`).
+
+**Earlier (carried):**
+three-way `STRATEGIES` constant collapse (`position.py`/`settings.py`/`setup.py`) ·
+`confirmed_bias` not respecting `user_bias_override` · `to_ibkr_symbol()` wiring ·
+`WatchlistItem.save()` schema derivation · BRK-B CSV mapping · `strategy_settings`
+second-strategy CHECK unsynced · diagonal.py vestigial code · `paper_generate` RTH gate
+edge cases · `STRATEGY_CONFIG` dup key · Russ-scan desktop interface · additional scan
+metrics (expected move, IV/HV ratio, OI/liquidity, skew, ex-div, earnings move) ·
+trust-handover staging model.
