@@ -12,7 +12,7 @@ session where the issue was worked.
 - Status: `OPEN` · `DEFERRED` (deliberate, with a trigger) · `RESOLVED` · `WONTFIX`.
 - On resolution: move the line to the **Resolved log** with a one-line outcome + date.
 
-_Last updated: 2026-06-19 (s24)._
+_Last updated: 2026-06-20 (s25)._
 
 ---
 
@@ -38,8 +38,8 @@ restructure decision._
 Additive table/column drift **reconciled s23** (see Resolved log): `schema.sql` now declares
 all 20 live tables and all live columns; a fresh `init_db` reproduces live (validated by
 executing the patched `schema.sql` into an in-memory DB and diffing to zero). **Remaining
-(keep `OPEN`):** a deeper pass on constraints / defaults / indexes / FKs beyond table+column
-presence, plus the dead `shadow_*` drop. Trigger: before any DB rebuild-from-schema, or when
+(keep `OPEN`):** a deeper pass on constraints / defaults / FKs beyond table+column+index
+presence. (Index drift + dead `shadow_*` drop reconciled s25; the live reverse-gap of 6 `positions` indexes is tracked as HELM-021.) Trigger: before any DB rebuild-from-schema, or when
 convenient. Keep the execute-and-rediff gate (`apply_schema_reconcile.py`) as the standing
 schema-change check.
 
@@ -50,6 +50,15 @@ are wired to accept them (s20); the remaining work is enriching each `_paper_ope
 builder from the per-strategy `evaluate_*` keys, plus deciding short-leg vs
 net-structure liquidity. Trigger: the thin-name thematic sleeve, where the signal
 stops being muted.
+
+**HELM-021 · `DEBT` · `OPEN` · Live `positions` table missing 6 declared secondary indexes**
+The builder declares six `positions` indexes (`idx_pos_account` / `ticker` / `strategy` /
+`status` / `opened` / `signal`) that the **live DB does not have** — surfaced s25 by diffing
+the live index set against a `/tmp` build of `schema.sql` (builder 34, live 30; the 6 are the
+reverse gap). `positions` is the hot table (every lookup, `reconcile`, `analyze edge`) and runs
+unindexed live. Not a builder bug — a live-DB deficiency. Fix: a **gated live `CREATE INDEX`
+pass** (read-only probe → `/tmp` validate → backup → live → verify baseline), not a `schema.sql`
+edit. Trigger: before scale, or when convenient.
 
 ### Design / sequencing
 
@@ -127,6 +136,14 @@ were unpopulated). Likely a prior partial/ad-hoc migration. Unresolved; not bloc
 ---
 
 ## Resolved log
+
+- **2026-06-20 (s25)** — **HELM-002** index reconcile + `shadow_*` drop shipped (Cluster B —
+  the s24 working-tree orphan, never committed). Forward-index gap closed: `idx_ptx_hash` /
+  `idx_ptx_date` (present live, undeclared) added to the reconcile block; the builder now
+  produces all 30 live indexes, proven by a `/tmp` build + index-set diff
+  (`apply_s25_index_reconcile.py`). Dead `shadow_positions` / `shadow_marks` confirmed gone
+  live and dropped from the builder. HELM-002 narrowed to a constraints / defaults / FK pass;
+  the reverse gap (6 builder-declared `positions` indexes absent live) spun out as **HELM-021**.
 
 - **2026-06-19 (s24)** — **HELM-016** resolved (`analyze edge` v1.1). All four deferred
   follow-ups verified done. (a) **median** is reported alongside mean — summary-table column,

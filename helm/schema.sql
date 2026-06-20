@@ -655,47 +655,6 @@ CREATE TABLE market_context (
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
  );
 
-CREATE TABLE shadow_positions (
-    id TEXT PRIMARY KEY,
-    signal_id TEXT REFERENCES signals(id) ON DELETE CASCADE,
-    ticker TEXT NOT NULL,
-    strategy TEXT NOT NULL,
-    opt_type TEXT,
-    direction TEXT,
-    strike REAL,
-    expiration TEXT,
-    contracts INTEGER DEFAULT 1,
-    entry_price REAL,
-    entry_spot REAL,
-    entry_iv REAL,
-    opened_at TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'OPEN' CHECK(status IN ('OPEN','CLOSED','EXPIRED')),
-    closed_at TEXT,
-    exit_price REAL,
-    realized_pnl REAL,
-    exit_reason TEXT,
-    spec TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
- );
-
-CREATE TABLE shadow_marks (
-    id TEXT PRIMARY KEY,
-    shadow_position_id TEXT NOT NULL REFERENCES shadow_positions(id) ON DELETE CASCADE,
-    marked_at TEXT NOT NULL,
-    spot_price REAL,
-    option_price REAL,
-    dte_now INTEGER,
-    delta REAL,
-    iv_current REAL,
-    pnl_unrealized REAL,
-    pnl_pct REAL,
-    max_profit_pct REAL,
-    health_flag TEXT,
-    action_signal TEXT,
-    data_source TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
- );
 
 DROP VIEW IF EXISTS v_exit_decisions;
 CREATE VIEW v_exit_decisions AS
@@ -720,4 +679,70 @@ CREATE VIEW v_exit_decisions AS
     CASE WHEN p.closed_at IS NOT NULL AND p.closed_at >= ch.checked_at THEN 1 ELSE 0 END AS closed_after_check
  FROM checks ch
  JOIN positions p ON p.id = ch.position_id;
+
+
+-- ---------------------------------------------------------------
+-- Reconciled to live (s23) — additive: undeclared tables + columns
+-- ---------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS helm_meta (
+                key   TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+
+CREATE TABLE IF NOT EXISTS import_pathways (
+    id              TEXT PRIMARY KEY,
+    account_id      TEXT NOT NULL REFERENCES accounts(id),
+    broker          TEXT NOT NULL,             -- 'fidelity' | 'ibkr' | 'tastytrade'
+    broker_account  TEXT,                      -- broker-side account number (e.g. '218481565')
+    watch_folder    TEXT NOT NULL,             -- path where exports land (e.g. '~/Downloads')
+    file_pattern    TEXT NOT NULL,             -- glob pattern (e.g. 'Portfolio_Positions_*.csv')
+    import_both_accounts INTEGER DEFAULT 1,    -- 1 = import all accounts found in file
+    last_imported_at TEXT,                     -- ISO datetime of last successful import
+    last_file       TEXT,                      -- filename of last imported file
+    is_active       INTEGER NOT NULL DEFAULT 1,
+    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    notes           TEXT,
+
+    CHECK (broker IN ('fidelity','ibkr','tastytrade'))
+);
+
+CREATE TABLE IF NOT EXISTS processed_transactions (
+        id          TEXT PRIMARY KEY,
+        run_date    TEXT NOT NULL,
+        account_num TEXT,
+        symbol      TEXT NOT NULL,
+        action      TEXT NOT NULL,
+        quantity    REAL,
+        price       REAL,
+        amount      REAL,
+        tx_hash     TEXT UNIQUE NOT NULL,
+        processed_at TEXT NOT NULL
+    );
+
+CREATE TABLE IF NOT EXISTS stock_positions (
+    id          TEXT PRIMARY KEY,
+    account_id  TEXT NOT NULL,
+    ticker      TEXT NOT NULL,
+    shares      INTEGER NOT NULL,
+    cost_basis  REAL,
+    acquired_at TEXT,
+    notes       TEXT,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(account_id, ticker)
+);
+
+ALTER TABLE checks ADD COLUMN buffer_dollars REAL;
+ALTER TABLE checks ADD COLUMN buffer_pct REAL;
+ALTER TABLE checks ADD COLUMN rth_flag TEXT;
+
+ALTER TABLE entry_snapshots ADD COLUMN open_interest INTEGER;
+ALTER TABLE entry_snapshots ADD COLUMN bid_ask_spread REAL;
+ALTER TABLE entry_snapshots ADD COLUMN bid_ask_spread_pct REAL;
+
+-- s25 index reconcile: forward-gap indexes (exist live, were undeclared)
+CREATE INDEX IF NOT EXISTS idx_ptx_hash ON processed_transactions(tx_hash);
+CREATE INDEX IF NOT EXISTS idx_ptx_date ON processed_transactions(run_date);
+
 
