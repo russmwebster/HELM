@@ -19,10 +19,10 @@ _Last updated: 2026-06-20 (s27)._
 ## Status — where HELM is
 _Snapshot; refreshed each `helm checkpoint`, read via `helm status`._
 
-- **Phase:** scaffolding complete (live book · paper book · edge instrument). Watchlist is a deliberate 65-name `core_v1` universe; paper book clean-slated at the s26 regime-break. Learning loop still the frontier — corpus accumulating fresh on the clean universe, now with the neutral long-vol (straddle) cell live.
-- **Next highest-leverage:** HELM-012 — link the originating signal on `helm open --confirm` (outcome back-prop for the learning layer depends on it; gated on the in-place-vs-select-to-open decision). Self-contained alternative: HELM-002 schema-builder pass.
-- **Blocked (market/RTH):** `core_v1` IVR backfill (Mon RTH — the 12 new names); HELM-019 Fidelity reconcile; HELM-018 RTH P&L sweep; first paper straddle books on the next RTH scan (HELM-011 cell now wired end-to-end).
-- **Counts:** 12 active · 5 parked · last shipped s27 (HELM-011 — straddle paper cell lit end-to-end).
+- **Phase:** scaffolding complete (live book · paper book · edge instrument). Watchlist is a deliberate 65-name `core_v1` universe; paper book clean-slated at the s26 regime-break. Learning loop still the frontier — corpus accumulating fresh on the clean universe, with the neutral long-vol (straddle) cell live and REAL opens now stamping their originating signal end-to-end.
+- **Next highest-leverage:** HELM-002 — the `schema.sql` constraints / defaults / FK pass (self-contained desk work, no live dependency). Quick-win alternative: HELM-025/026 enum hygiene (drop the off-limits tokens; reconcile `LONG_PUT`).
+- **Blocked (market/RTH):** `core_v1` IVR backfill (Mon RTH — the 12 new names); HELM-019 Fidelity reconcile; HELM-018 RTH P&L sweep; first paper straddle books on the next RTH scan (HELM-011); HELM-012 first live signal-link on the next RTH REAL open.
+- **Counts:** 11 active · 5 parked · last shipped s27 (HELM-011 straddle cell + HELM-012 signal link).
 
 ---
 
@@ -32,18 +32,6 @@ _Snapshot; refreshed each `helm checkpoint`, read via `helm status`._
 
 **HELM-026 · `BUG` · `OPEN` · `LONG_PUT` is wired to book but absent from the canonical enum + CHECK**
 `_PAPER_BOOKERS` maps `LONG_PUT` → `paper_open_one` and the `'buy'` family / `_paper_generate` docstring reference it, but `LONG_PUT` is in neither `STRATEGIES` nor the `positions`/`strategy_settings` CHECK. A `LONG_PUT` paper open would be rejected by the CHECK (caught as an atomic skip, so no corruption — but the cell is silently un-bookable). Fix: add `LONG_PUT` to the enum + CHECK (mirror of HELM-011 locus 1), or strip its booker wiring if it is not a target strategy.
-
-**HELM-012 · `BUG` · `OPEN` · `helm open --confirm` does not link the originating signal**
-A REAL open writes the position with `signal_id = NULL`; the best-effort signal stamp
-(needs a signal with `russ_intent = 'OPEN'`) never fires, so the originating signal stays
-`russ_action = 'PENDING'`. Consequences: (1) `paper_generate`'s passed-on set failed to
-exclude live picks (now defended by the s22 ticker-level exclusion — see Resolved log);
-(2) outcome back-prop has no signal to stamp on close. Fix at the source: stamp `signal_id`
-+ flip `russ_action`/`russ_intent` on confirm.
-_2026-06-17 (s23) — the live TSLA long was relinked in-place (`signal_id` → `SIG-78A351DC`,
-signal flipped to `OPEN`; see Resolved log). Repairs the existing row only — the source
-linkage on every `--confirm` is still unfixed, gated by the in-place-vs-select-to-open
-restructure decision._
 
 ### Tech debt
 
@@ -144,7 +132,8 @@ were unpopulated). Likely a prior partial/ad-hoc migration. Unresolved; not bloc
 
 ## Resolved log
 
-- **2026-06-20 (s27)** — **HELM-011 RESOLVED — straddle paper cell lit end-to-end.** Neutral + cheap-IVR → `LONG_STRADDLE` was already emitting signals (config, `evaluate_straddles`, live `helm open` dispatch, and the `bias_to_strategy` entry trigger were all pre-built — code had outrun the register); the only real gap was the paper booker. Shipped: DB token + CHECK widening on `positions`/`strategy_settings` via `writable_schema` (`helm011_a`/`_b`); `paper_open_straddle_one` — two LONG legs, ATM strike, same expiry, both filled @ ask → net debit — plus `_PAPER_BOOKERS` registration and `call_ask`/`put_ask` exposed in `evaluate_straddles` (`helm011_c`); long-vol exit guard in `paper_manage` (skip credit-family PT/stop for `LONG_STRADDLE`, DTE/EXPIRY-only) + a `strategy_settings` row (`dte_exit=21`, no PT/stop) (`helm011_d`/`_e`). IVR-boundary sub-question decided: leave the 35/15 lines untouched (trigger already produces ~2/wk). First booking lands on the next RTH scan; the 14 pre-`core_v1` straddle signals stay unbooked (pre-regime-break, old universe). Patches `helm011_a..e` (guarded). Commit pending.
+- **2026-06-20 (s27)** — **HELM-012 RESOLVED (pending first live link) — originating-signal stamp on REAL open.** Root cause was threefold: (D1) the link required `russ_intent='OPEN'`, a mark the scan→open flow never sets, so it never fired; (D2) the match was ticker-only, no strategy filter; (D3) the multi-leg writer never called the link at all — condors/straddles/diagonals could never link. Rewrote `Signal.link_position_opened(ticker, strategy, position_id)`: drops the intent gate, matches the latest unlinked signal for the ticker, links only when `top_strategy` equals the opened strategy (a deliberate exception stays unlinked), and wires **both** sides in one txn — `signals` (position_opened/position_id/russ_action='OPEN') and `positions.signal_id` (the field `close_cmd` reads for back-prop, which the old code never set). Threaded `strategy` into the single-leg call; added the best-effort block to the multi-leg writer. Code-only (all columns already present); `/tmp` contract validation green before apply (match→both sides, mismatch/no-signal→unlinked); `import OK`. Patch `apply_helm012_signal_link.py` (anchor-asserted, compile-gated, .bak per file). First real link lands on the next RTH REAL open. Unblocks the REAL side of HELM-023 back-prop. Commit `3c3403f`.
+- **2026-06-20 (s27)** — **HELM-011 RESOLVED — straddle paper cell lit end-to-end.** Neutral + cheap-IVR → `LONG_STRADDLE` was already emitting signals (config, `evaluate_straddles`, live `helm open` dispatch, and the `bias_to_strategy` entry trigger were all pre-built — code had outrun the register); the only real gap was the paper booker. Shipped: DB token + CHECK widening on `positions`/`strategy_settings` via `writable_schema` (`helm011_a`/`_b`); `paper_open_straddle_one` — two LONG legs, ATM strike, same expiry, both filled @ ask → net debit — plus `_PAPER_BOOKERS` registration and `call_ask`/`put_ask` exposed in `evaluate_straddles` (`helm011_c`); long-vol exit guard in `paper_manage` (skip credit-family PT/stop for `LONG_STRADDLE`, DTE/EXPIRY-only) + a `strategy_settings` row (`dte_exit=21`, no PT/stop) (`helm011_d`/`_e`). IVR-boundary sub-question decided: leave the 35/15 lines untouched (trigger already produces ~2/wk). First booking lands on the next RTH scan; the 14 pre-`core_v1` straddle signals stay unbooked (pre-regime-break, old universe). Patches `helm011_a..e` (guarded). Commit `9c4764f`.
 - **2026-06-20 (s26)** — **HELM-005 RESOLVED (reframed) — `core_v1` cull.** The monoculture wasn't a narrow watchlist: bare `helm scan` runs the `active` set, which had silently grown to 60 uncurated names (75% of signals from 156 thematic non-core tickers — the "benched" themes were never benched). Data-only fix: re-culled `active` to a deliberate 65 (53 quality + 12 directional-diversity adds — DHI PNC DAL FDX DE GM SLB NEM NUE TGT DG O), tagged `core_v1`, benched the rest (preserved, dormant). `active` is now the single source of truth for the scan universe; `build` is a label only. Verified 65 active / 65 core_v1 / 41 REAL untouched / paper emptied. Patch `patch_core_v1.py` (guarded). Commit `469c3cc`.
 - **2026-06-20 (s26)** — **Paper clean slate.** Soft-voided the 14 open PAPER positions (→ CLOSED) so the corpus restarts on the clean 65; the `core_v1` cull date is the regime-break line for the learning layer. REAL book untouched. Commit `469c3cc`.
 - **2026-06-20 (s26)** — **HELM-024 found + fixed — `helm watchlist add` crash.** `WatchlistItem` dataclass field `active: int = 0` collided with the classmethod `active(cls)`; @dataclass captured the method as the field default, so fresh items got `self.active = <bound method>` and `save()` raised `type 'method' is not supported`. Latent since the `active()` fetcher landed (rows had arrived via screen/build/import). Fix: renamed classmethod `active` → `active_universe` (sole caller `scan_cmd.py`); mechanical rename, no behavior change. Patch `fix_active_collision.py` (guarded). Commit `469c3cc`.
@@ -332,3 +321,9 @@ trust-handover staging model.
 - Monday RTH: `helm ivr refresh` to backfill IVR on the 12 `core_v1` adds (they scan via the `ivr_unknown` score-only path until then).
 - `helm ivr refresh` churns all 206 watchlist names, not just the active 65 — harmless, but scoping it to `active` is a small OPS nicety worth a future ticket.
 - Uncommitted after this checkpoint: `patch_issues_s26.py` + `ISSUES.md` — commit on the usual explicit-named-files step; push separate. (Cull/fix landed in commit `469c3cc`.)
+
+**s27:**
+- WELL half-link cleanup — its signal is `russ_action=OPEN` but `position_id` NULL (the s24 backfill flipped the action without stamping the position side). One-line data fix to complete or reset the link; HELM-012 prevents recurrence going forward.
+- Conviction not stored — `signals` has no `conviction` column; the scan's Low/Mod/High is derived at display (off `top_fit`/fit_score). HELM-023 will need a real source when it scores conviction.
+- Working-dir clutter mounting — s27 alone added `validate_helm012_link.py`, `apply_helm012_signal_link.py`, `helm011_a..e`, and several `.bak`s. Promote the `.gitignore` sweep (parking lot) to a numbered issue.
+- Uncommitted after this checkpoint: `ISSUES.md` (this register update) — commit on the usual explicit-named-files step; push separate. (HELM-012 code landed in `3c3403f`.)
