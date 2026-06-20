@@ -12,17 +12,17 @@ session where the issue was worked.
 - Status: `OPEN` · `DEFERRED` (deliberate, with a trigger) · `RESOLVED` · `WONTFIX`.
 - On resolution: move the line to the **Resolved log** with a one-line outcome + date.
 
-_Last updated: 2026-06-20 (s25)._
+_Last updated: 2026-06-20 (s26)._
 
 ---
 
 ## Status — where HELM is
 _Snapshot; refreshed each `helm checkpoint`, read via `helm status`._
 
-- **Phase:** scaffolding complete (live book · paper book · edge instrument). The learning loop is the frontier and not yet turning — the PAPER book has no closed trades to score yet.
-- **Next highest-leverage:** HELM-005 — watchlist breadth (gates the learning loop).
-- **Blocked (market/RTH):** HELM-019 Fidelity reconcile; HELM-018 RTH P&L sweep.
-- **Counts:** 12 active · 5 parked · last shipped s25 (Clusters B/C/D landed; A parked under HELM-011).
+- **Phase:** scaffolding complete (live book · paper book · edge instrument). Watchlist is now a deliberate 65-name `core_v1` universe; paper book clean-slated. Learning loop still the frontier — corpus now accumulating fresh on the clean universe.
+- **Next highest-leverage:** HELM-011 — light the neutral long-vol (straddle) cell so the cheap-IVR corner produces corpus.
+- **Blocked (market/RTH):** `core_v1` IVR backfill (Mon RTH — the 12 new names); HELM-019 Fidelity reconcile; HELM-018 RTH P&L sweep.
+- **Counts:** 11 active · 5 parked · last shipped s26 (HELM-005 `core_v1` cull + HELM-024 `add`-bug fix).
 
 ---
 
@@ -72,16 +72,7 @@ edit. Trigger: before scale, or when convenient.
 
 ### Design / sequencing
 
-**HELM-005 · `DESIGN` · `OPEN` · Watchlist breadth → strategy monoculture**
-The 22-name mega-cap `sector_v1` watchlist clusters neutral / high-IVR, funneling
-candidates into IRON_CONDOR. A counterfactual paper corpus drawn from this watchlist
-alone is too narrow for entry-lever learning (low feature variation). Fix = the thematic
-sleeve (dispersed bias / IVR / liquidity). Arguably the gating item for the learning loop
-producing anything analyzable.
-_2026-06-16 (s21) — the HELM-001 fix removed the moderate-band → IC routing, so the prior
-~55% IC figure now overstates; confirm the true IC share on the next fresh RTH scan._
-
-**HELM-011 · `DESIGN` · `DEFERRED` · Neutral-sub-rich cell + IVR boundary tuning**
+**HELM-011 · `DESIGN` · `OPEN` · Neutral-sub-rich cell + IVR boundary tuning**
 Post-HELM-001, neutral + sub-rich IVR → `LONG_STRADDLE`, which `paper generate`
 fail-closed-skips (no auto-paperable neutral long-vol structure), so that cell yields no
 corpus. Accepted as the weakest cell. The real question — `NO_TRADE` sentinel vs straddle
@@ -157,6 +148,9 @@ were unpopulated). Likely a prior partial/ad-hoc migration. Unresolved; not bloc
 
 ## Resolved log
 
+- **2026-06-20 (s26)** — **HELM-005 RESOLVED (reframed) — `core_v1` cull.** The monoculture wasn't a narrow watchlist: bare `helm scan` runs the `active` set, which had silently grown to 60 uncurated names (75% of signals from 156 thematic non-core tickers — the "benched" themes were never benched). Data-only fix: re-culled `active` to a deliberate 65 (53 quality + 12 directional-diversity adds — DHI PNC DAL FDX DE GM SLB NEM NUE TGT DG O), tagged `core_v1`, benched the rest (preserved, dormant). `active` is now the single source of truth for the scan universe; `build` is a label only. Verified 65 active / 65 core_v1 / 41 REAL untouched / paper emptied. Patch `patch_core_v1.py` (guarded). Commit `469c3cc`.
+- **2026-06-20 (s26)** — **Paper clean slate.** Soft-voided the 14 open PAPER positions (→ CLOSED) so the corpus restarts on the clean 65; the `core_v1` cull date is the regime-break line for the learning layer. REAL book untouched. Commit `469c3cc`.
+- **2026-06-20 (s26)** — **HELM-024 found + fixed — `helm watchlist add` crash.** `WatchlistItem` dataclass field `active: int = 0` collided with the classmethod `active(cls)`; @dataclass captured the method as the field default, so fresh items got `self.active = <bound method>` and `save()` raised `type 'method' is not supported`. Latent since the `active()` fetcher landed (rows had arrived via screen/build/import). Fix: renamed classmethod `active` → `active_universe` (sole caller `scan_cmd.py`); mechanical rename, no behavior change. Patch `fix_active_collision.py` (guarded). Commit `469c3cc`.
 - **2026-06-20 (s25)** — **HELM-016 code landed** (Cluster D). Correction to the s24 entry
   below: the `analyze edge` command (`cmd_edge` + `_edge_*` helpers, ~174 lines, `cli/analyze.py`)
   was **never committed in s24** — it sat uncommitted in the working tree, and the "no code
@@ -336,3 +330,8 @@ second-strategy CHECK unsynced · diagonal.py vestigial code · `paper_generate`
 edge cases · `STRATEGY_CONFIG` dup key · Russ-scan desktop interface · additional scan
 metrics (expected move, IV/HV ratio, OI/liquidity, skew, ex-div, earnings move) ·
 trust-handover staging model.
+
+**s26:**
+- Monday RTH: `helm ivr refresh` to backfill IVR on the 12 `core_v1` adds (they scan via the `ivr_unknown` score-only path until then).
+- `helm ivr refresh` churns all 206 watchlist names, not just the active 65 — harmless, but scoping it to `active` is a small OPS nicety worth a future ticket.
+- Uncommitted after this checkpoint: `patch_issues_s26.py` + `ISSUES.md` — commit on the usual explicit-named-files step; push separate. (Cull/fix landed in commit `469c3cc`.)
