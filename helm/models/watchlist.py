@@ -87,7 +87,7 @@ class WatchlistItem:
             conn.close()
 
     @classmethod
-    def active(cls) -> list[WatchlistItem]:
+    def active_universe(cls) -> list[WatchlistItem]:
         conn = get_conn()
         try:
             rows = conn.execute('SELECT * FROM watchlist WHERE active = 1 AND is_optionable = 1 ORDER BY ticker').fetchall()

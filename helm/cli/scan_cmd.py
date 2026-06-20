@@ -421,7 +421,7 @@ def run():
                 console.print(f"[yellow]No optionable tickers in build '{build_tag}'.[/yellow]")
                 return
         else:
-            items = WatchlistItem.active()
+            items = WatchlistItem.active_universe()
             if not items:
                 console.print("[yellow]No active tickers found.[/yellow]")
                 console.print("[dim]Set active tickers via the master cull (active flag).[/dim]")
