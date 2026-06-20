@@ -1,7 +1,43 @@
-# ── HELM working-dir artifacts ───────────────────────────────────────────
-# Throwaway patch / validate / fix / booking scripts. The resolved log names
-# them for the audit trail, but they're archival, not source. Root-anchored so
-# nothing inside the helm/ package is ever caught.
+# ════════════════════════════════════════════════════════════════════════
+# HELM .gitignore
+# ════════════════════════════════════════════════════════════════════════
+
+# ── Python ───────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyc
+.pytest_cache/
+
+# ── Secrets / logs ───────────────────────────────────────────────────────
+.env
+*.log
+
+# ── Live database (real DB is data/helm.db; never track it) ──────────────
+data/helm.db
+data/*.db
+/helm.db
+*.db-shm
+*.db-wal
+*.db-journal
+
+# ── Backups: plain, timestamped, editor/transfer ─────────────────────────
+*.bak
+*.bak.*
+*.pre_*
+*_bak
+
+# ── Scratch prefixes (transfer crumbs, scratch modules) ──────────────────
+_ic_*
+_plc_*
+_pm_*
+_bps_*
+_p*_*
+# paper-book source modules ARE tracked source -- re-include after _p*_*:
+!_paper_*.py
+debit_spread_*.py
+straddle_*.py
+
+# ── HELM working-dir scripts (root-anchored; never catches the helm/ pkg) ─
 /apply_*.py
 /patch_*.py
 /validate_*.py
@@ -10,25 +46,17 @@
 /helm_*.py
 /helm[0-9]*.py
 
-# Timestamped backups (source, schema, db, register) — anywhere in the tree
-*.bak
-*.bak.*
-
-# Register / handover scratch (root)
+# ── Register / handover / scratch docs (root) ────────────────────────────
 /ISSUES*bak*
 /ISSUES_*_additions.md
 /HELM_handover_*.md
 /integrity_block.txt
 
-# ── SQLite runtime sidecars (never the live .db itself) ──────────────────
-*.db-wal
-*.db-shm
-*.db-journal
-
-# ── Python ───────────────────────────────────────────────────────────────
-__pycache__/
-*.py[cod]
-.pytest_cache/
+# ── Generated render output / local archive ──────────────────────────────
+/master.html
+/master_data.json
+/data/master.csv
+archive/
 
 # ── macOS ────────────────────────────────────────────────────────────────
 .DS_Store
