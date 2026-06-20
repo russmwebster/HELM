@@ -1,0 +1,64 @@
+diff --git a/helm/cli/guide_cmd.py b/helm/cli/guide_cmd.py
+index e29e79a..71107b8 100644
+--- a/helm/cli/guide_cmd.py
++++ b/helm/cli/guide_cmd.py
+@@ -53,9 +53,9 @@ def cmd_quick():
+     t2.add_column("IVR",        justify="center", width=10)
+     t2.add_column("Meaning",    width=20)
+     t2.add_column("Action",     width=42)
+-    t2.add_row(c("≥ 60","green"),  "Expensive options", "Sell premium — collect inflated credit")
+-    t2.add_row(c("35–60","cyan"),  "Moderate options",  "Context-dependent — direction matters more")
+-    t2.add_row(c("< 35","yellow"), "Cheap options",     "Buy premium — cheap to enter directional trades")
++    t2.add_row(c("≥ 35","green"),  "Rich options",      "Sell premium — collect elevated credit")
++    t2.add_row(c("15–35","cyan"),  "Moderate options",  "Context-dependent — direction drives the structure")
++    t2.add_row(c("< 15","yellow"), "Cheap options",     "Buy premium — cheap long-vol / directional entry")
+     console.print(t2)
+     console.print()
+ 
+@@ -63,16 +63,17 @@ def cmd_quick():
+     console.print()
+     m = Table(box=box.SIMPLE_HEAVY, show_header=True, header_style="bold", padding=(0,1))
+     m.add_column("Bias",              style="bold", width=18)
+-    m.add_column("IVR < 35 (cheap)",  justify="center", width=20)
+-    m.add_column("IVR 35–60 (mod)",   justify="center", width=20)
+-    m.add_column("IVR ≥ 60 (rich)",   justify="center", width=20)
+-    m.add_row(c("Bullish +2/+3","green"),     c("LONG_CALL ✅","yellow"),        c("CSP","green"),              c("CSP ✅","green"))
+-    m.add_row(c("Mildly bull +1","cyan"),     c("DIAGONAL","cyan"),              c("BULL_PUT_SPREAD","cyan"),   c("CSP ✅","green"))
+-    m.add_row(c("Neutral 0","dim"),           c("LONG_STRADDLE","magenta"),      c("IRON_CONDOR","blue"),       c("IRON_CONDOR ✅","blue"))
+-    m.add_row(c("Mildly bear -1","yellow"),   c("BEAR_PUT_SPREAD","red"),        c("IRON_CONDOR","blue"),       c("BEAR_CALL_SPREAD ✅","red"))
+-    m.add_row(c("Bearish -2/-3","red"),       c("BEAR_PUT_SPREAD ✅","red"),     c("BEAR_CALL_SPREAD","red"),   c("BEAR_CALL_SPREAD ✅","red"))
++    m.add_column("IVR < 15 (cheap)",  justify="center", width=20)
++    m.add_column("IVR 15–35 (mod)",   justify="center", width=20)
++    m.add_column("IVR ≥ 35 (rich)",   justify="center", width=20)
++    m.add_row(c("Bullish +2/+3","green"),     c("LONG_CALL ✅","yellow"),     c("LONG_CALL","yellow"),       c("CSP ✅","green"))
++    m.add_row(c("Mildly bull +1","cyan"),     c("LONG_CALL","yellow"),       c("DIAGONAL †","cyan"),        c("CSP ✅","green"))
++    m.add_row(c("Neutral 0","dim"),           c("LONG_STRADDLE","magenta"),  c("LONG_STRADDLE","magenta"),  c("IRON_CONDOR ✅","blue"))
++    m.add_row(c("Mildly bear -1","yellow"),   c("BEAR_PUT_SPREAD","red"),    c("BEAR_PUT_SPREAD","red"),    c("BEAR_CALL_SPREAD ✅","red"))
++    m.add_row(c("Bearish -2/-3","red"),       c("BEAR_PUT_SPREAD ✅","red"),  c("BEAR_PUT_SPREAD","red"),    c("BEAR_CALL_SPREAD ✅","red"))
+     console.print(m)
+     console.print(dim("  ✅ = clearest, highest-conviction setup for that cell"))
++    console.print(dim("  † mildly-bull + moderate IVR: DIAGONAL with momentum (RSI 40–65), else BULL_PUT_SPREAD"))
+     console.print()
+ 
+     console.print(bold("4. Conviction Level") + "  " + dim("(strength of the combined signal)"))
+diff --git a/helm/cli/scan_cmd.py b/helm/cli/scan_cmd.py
+index d22ac96..a15b807 100644
+--- a/helm/cli/scan_cmd.py
++++ b/helm/cli/scan_cmd.py
+@@ -158,14 +158,14 @@ def bias_to_strategy(score: int, iv_pct, rsi=None, ivr=None):
+             return 'IRON_CONDOR', 'Neutral + elevated IVR — iron condor (IRA-safe defined risk)'
+         if ivr_cheap or (ivr_unknown and iv_low):
+             return 'LONG_STRADDLE', 'Neutral + low IVR — buy cheap volatility on both sides'
+-        return 'IRON_CONDOR', 'Neutral, moderate IV — defined risk condor'
++        return 'LONG_STRADDLE', 'Neutral + moderate IVR — long vol, no premium-sell edge'
+ 
+     elif score == -1:
+         if ivr_rich or (ivr_unknown and iv_high):
+             return 'BEAR_CALL_SPREAD', 'Mildly bearish + elevated IVR — bear call credit spread'
+         if ivr_cheap or (ivr_unknown and iv_low):
+             return 'BEAR_PUT_SPREAD', 'Mildly bearish + low IVR — buy cheap puts via debit spread'
+-        return 'IRON_CONDOR', 'Mildly bearish, moderate IV — iron condor for range-bound move'
++        return 'BEAR_PUT_SPREAD', 'Mildly bearish + moderate IVR — debit put spread, no premium-sell edge'
+ 
+     else:  # score <= -2, Bearish
+         if ivr_rich or (ivr_unknown and iv_high):

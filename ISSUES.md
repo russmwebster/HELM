@@ -79,6 +79,7 @@ vs where the cheap/rich line actually sits — is a learning-loop decision, not 
 Also: HELM's sell/buy IVR lines (≥35 / <15) are aggressive vs convention (~50 / ~30); the
 same loop should validate them. Trigger: the loop can score expectancy on neutral-sub-rich,
 or a `NO_TRADE` return gets wired through scan/open.
+_2026-06-20 (s25) — Cluster A (drafted, **parked, not committed**). A working-tree recalibration moved both moderate-IVR cells off `IRON_CONDOR` — neutral+moderate → `LONG_STRADDLE`, mild-bear+moderate → `BEAR_PUT_SPREAD` — and updated `guide` docs to the live 35/15 lines. Held back because it hardcodes the cell this issue reserves for the loop and leans on the 35/15 lines flagged above. Correction to the s21 HELM-005 note: the moderate→IC routing is **still live** in committed `bias_to_strategy` (both moderate cells return `IRON_CONDOR`); it was never removed from these fallbacks. Recalibration preserved as `clusterA_helm011_pending.patch` — reapply when the loop (or a deliberate override) decides the cell. Entangled with HELM-005; best taken as one design conversation._
 
 ### Ops / enhancement
 
