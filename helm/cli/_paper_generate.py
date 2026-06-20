@@ -45,7 +45,7 @@ from rich.console import Console
 from helm.db import get_conn
 from helm.cli.check_cmd import is_market_open
 from helm.cli.open_cmd import STRATEGY_CONFIG
-from helm.cli._paper_open import paper_open_one, paper_open_spread_one, paper_open_debit_spread_one, paper_open_condor_one, paper_open_diagonal_one
+from helm.cli._paper_open import paper_open_one, paper_open_spread_one, paper_open_debit_spread_one, paper_open_condor_one, paper_open_diagonal_one, paper_open_straddle_one
 from helm.models.position import Position
 
 # Explicit, fail-closed dispatch: strategy -> the paper-open unit that books it.
@@ -69,6 +69,7 @@ _PAPER_BOOKERS = {
     "DIAGONAL": paper_open_diagonal_one,
     "PMCC": paper_open_diagonal_one,
     "DIAGONAL_PUT": paper_open_diagonal_one,
+    "LONG_STRADDLE": paper_open_straddle_one,
 }
 
 

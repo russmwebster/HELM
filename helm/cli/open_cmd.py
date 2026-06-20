@@ -2031,6 +2031,7 @@ def evaluate_straddles(ticker, strategy, config, dte_target=None, top_n=5):
             score += min(10, min(call_oi, put_oi) / 500)
             results.append({'exp': exp, 'dte': dte, 'strike': strike,
                 'call_mid': call_mid, 'put_mid': put_mid, 'total_debit': total_debit,
+                'call_ask': round(float(call_row['ask']), 2), 'put_ask': round(float(put_row['ask']), 2),
                 'call_oi': call_oi, 'put_oi': put_oi,
                 'be_down': round(strike - total_debit, 2),
                 'be_up':   round(strike + total_debit, 2),

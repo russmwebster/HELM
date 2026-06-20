@@ -9,7 +9,7 @@ reconciles them so DB drift surfaces as a loud (non-fatal) warning.
 from __future__ import annotations
 
 STRATEGIES = (
-    'CSP', 'COVERED_CALL', 'LONG_CALL', 'PERM',
+    'CSP', 'COVERED_CALL', 'LONG_CALL', 'LONG_STRADDLE', 'PERM',
     'BULL_PUT_SPREAD', 'BEAR_CALL_SPREAD', 'IRON_CONDOR',
     'BEAR_PUT_SPREAD', 'BULL_CALL_SPREAD', 'LONG_CONDOR',
     'DIAGONAL', 'PMCC', 'DIAGONAL_PUT', 'SHORT_STRANGLE', 'JADE_LIZARD',

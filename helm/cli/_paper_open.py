@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from helm.cli.open_cmd import evaluate_contracts, evaluate_spreads, evaluate_debit_spreads, evaluate_condors, evaluate_diagonals, STRATEGY_CONFIG
+from helm.cli.open_cmd import evaluate_contracts, evaluate_spreads, evaluate_debit_spreads, evaluate_condors, evaluate_diagonals, evaluate_straddles, STRATEGY_CONFIG
 from helm.cli.entry_snapshot import open_position_with_snapshot, open_multileg_with_snapshot
 
 
@@ -319,6 +319,69 @@ def paper_open_condor_one(ticker: str, strategy: str, spot: Optional[float],
         "credit_to_width_ratio": round(net_credit / width, 4) if width else None,
         "breakeven_low": round(top["short_put"] - net_credit, 2),
         "breakeven_high": round(top["short_call"] + net_credit, 2),
+    }
+
+    pos_id, _leg_ids, _snap_ids = open_multileg_with_snapshot(
+        ticker=ticker,
+        strategy=strategy,
+        legs=legs,
+        contracts=contracts,
+        spot=spot,
+        scan_data=None,
+        book="PAPER",
+        position_fields=position_fields,
+        pricing_source="yfinance",
+    )
+    return pos_id
+
+
+def paper_open_straddle_one(ticker: str, strategy: str, spot: Optional[float],
+                            dte_target: Optional[int] = None, top_n: int = 6,
+                            contracts: int = 1) -> Optional[str]:
+    """Open HELM's top-ranked long straddle (ATM call + ATM put, same strike
+    and expiry) for (ticker, strategy) as a PAPER position. Both legs are LONG
+    and fill conservatively at the ASK -- the paper book's long-leg convention --
+    so paper entry cost is never optimistic versus a real fill. Books both legs
+    under one position via open_multileg_with_snapshot. Prices off the same
+    yfinance chain as the live LONG_STRADDLE open path (evaluate_straddles).
+
+    Returns the new position id, or None if nothing tradable (no spot, no
+    ranked straddle, missing asks, or a non-positive net debit)."""
+    if spot is None:
+        return None
+    config = STRATEGY_CONFIG[strategy]
+    ranked = evaluate_straddles(ticker, strategy, config, dte_target, top_n)
+    if not ranked:
+        return None
+    top = dict(ranked[0])
+
+    call_fill = top.get("call_ask")
+    put_fill = top.get("put_ask")
+    if not call_fill or not put_fill:
+        return None
+    net_debit = round(call_fill + put_fill, 2)
+    if net_debit <= 0:
+        return None
+
+    strike = top["strike"]
+    expiration = top["exp"]
+    dte = top.get("dte")
+    legs = [
+        {"direction": "LONG", "opt_type": "CALL",
+         "strike": strike, "expiration": expiration,
+         "fill_price": call_fill, "delta": None,
+         "iv": None, "dte": dte, "spot": spot},
+        {"direction": "LONG", "opt_type": "PUT",
+         "strike": strike, "expiration": expiration,
+         "fill_price": put_fill, "delta": None,
+         "iv": None, "dte": dte, "spot": spot},
+    ]
+
+    position_fields = {
+        "max_loss": round(net_debit * 100 * contracts, 2),
+        "max_profit": None,  # long straddle: unbounded upside
+        "breakeven_low": top.get("be_down", round(strike - net_debit, 2)),
+        "breakeven_high": top.get("be_up", round(strike + net_debit, 2)),
     }
 
     pos_id, _leg_ids, _snap_ids = open_multileg_with_snapshot(

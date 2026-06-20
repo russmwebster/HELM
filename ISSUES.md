@@ -12,23 +12,26 @@ session where the issue was worked.
 - Status: `OPEN` · `DEFERRED` (deliberate, with a trigger) · `RESOLVED` · `WONTFIX`.
 - On resolution: move the line to the **Resolved log** with a one-line outcome + date.
 
-_Last updated: 2026-06-20 (s26)._
+_Last updated: 2026-06-20 (s27)._
 
 ---
 
 ## Status — where HELM is
 _Snapshot; refreshed each `helm checkpoint`, read via `helm status`._
 
-- **Phase:** scaffolding complete (live book · paper book · edge instrument). Watchlist is now a deliberate 65-name `core_v1` universe; paper book clean-slated. Learning loop still the frontier — corpus now accumulating fresh on the clean universe.
-- **Next highest-leverage:** HELM-011 — light the neutral long-vol (straddle) cell so the cheap-IVR corner produces corpus.
-- **Blocked (market/RTH):** `core_v1` IVR backfill (Mon RTH — the 12 new names); HELM-019 Fidelity reconcile; HELM-018 RTH P&L sweep.
-- **Counts:** 11 active · 5 parked · last shipped s26 (HELM-005 `core_v1` cull + HELM-024 `add`-bug fix).
+- **Phase:** scaffolding complete (live book · paper book · edge instrument). Watchlist is a deliberate 65-name `core_v1` universe; paper book clean-slated at the s26 regime-break. Learning loop still the frontier — corpus accumulating fresh on the clean universe, now with the neutral long-vol (straddle) cell live.
+- **Next highest-leverage:** HELM-012 — link the originating signal on `helm open --confirm` (outcome back-prop for the learning layer depends on it; gated on the in-place-vs-select-to-open decision). Self-contained alternative: HELM-002 schema-builder pass.
+- **Blocked (market/RTH):** `core_v1` IVR backfill (Mon RTH — the 12 new names); HELM-019 Fidelity reconcile; HELM-018 RTH P&L sweep; first paper straddle books on the next RTH scan (HELM-011 cell now wired end-to-end).
+- **Counts:** 12 active · 5 parked · last shipped s27 (HELM-011 — straddle paper cell lit end-to-end).
 
 ---
 
 ## Active
 
 ### Bugs
+
+**HELM-026 · `BUG` · `OPEN` · `LONG_PUT` is wired to book but absent from the canonical enum + CHECK**
+`_PAPER_BOOKERS` maps `LONG_PUT` → `paper_open_one` and the `'buy'` family / `_paper_generate` docstring reference it, but `LONG_PUT` is in neither `STRATEGIES` nor the `positions`/`strategy_settings` CHECK. A `LONG_PUT` paper open would be rejected by the CHECK (caught as an atomic skip, so no corruption — but the cell is silently un-bookable). Fix: add `LONG_PUT` to the enum + CHECK (mirror of HELM-011 locus 1), or strip its booker wiring if it is not a target strategy.
 
 **HELM-012 · `BUG` · `OPEN` · `helm open --confirm` does not link the originating signal**
 A REAL open writes the position with `signal_id = NULL`; the best-effort signal stamp
@@ -43,6 +46,9 @@ linkage on every `--confirm` is still unfixed, gated by the in-place-vs-select-t
 restructure decision._
 
 ### Tech debt
+
+**HELM-025 · `DEBT` · `OPEN` · Off-limits strategies are live tokens in the canonical enum**
+`SHORT_STRANGLE` and `JADE_LIZARD` sit in `STRATEGIES` (and the `positions`/`strategy_settings` CHECK) despite being confirmed off-limits (undefined-risk, IRA-ineligible). `bias_to_strategy` never emits them, so no live exposure today — but a token that passes the CHECK can be booked. Fix: drop them from the canonical set + CHECK, or add an explicit `off_limits` guard at the open path.
 
 **HELM-002 · `DEBT` · `OPEN` · `schema.sql` not yet a fully faithful builder of live**
 Additive table/column drift **reconciled s23** (see Resolved log): `schema.sql` now declares
@@ -71,16 +77,6 @@ pass** (read-only probe → `/tmp` validate → backup → live → verify basel
 edit. Trigger: before scale, or when convenient.
 
 ### Design / sequencing
-
-**HELM-011 · `DESIGN` · `OPEN` · Neutral-sub-rich cell + IVR boundary tuning**
-Post-HELM-001, neutral + sub-rich IVR → `LONG_STRADDLE`, which `paper generate`
-fail-closed-skips (no auto-paperable neutral long-vol structure), so that cell yields no
-corpus. Accepted as the weakest cell. The real question — `NO_TRADE` sentinel vs straddle
-vs where the cheap/rich line actually sits — is a learning-loop decision, not a hardcode.
-Also: HELM's sell/buy IVR lines (≥35 / <15) are aggressive vs convention (~50 / ~30); the
-same loop should validate them. Trigger: the loop can score expectancy on neutral-sub-rich,
-or a `NO_TRADE` return gets wired through scan/open.
-_2026-06-20 (s25) — Cluster A (drafted, **parked, not committed**). A working-tree recalibration moved both moderate-IVR cells off `IRON_CONDOR` — neutral+moderate → `LONG_STRADDLE`, mild-bear+moderate → `BEAR_PUT_SPREAD` — and updated `guide` docs to the live 35/15 lines. Held back because it hardcodes the cell this issue reserves for the loop and leans on the 35/15 lines flagged above. Correction to the s21 HELM-005 note: the moderate→IC routing is **still live** in committed `bias_to_strategy` (both moderate cells return `IRON_CONDOR`); it was never removed from these fallbacks. Recalibration preserved as `clusterA_helm011_pending.patch` — reapply when the loop (or a deliberate override) decides the cell. Entangled with HELM-005; best taken as one design conversation._
 
 **HELM-023 · `DESIGN` · `DEFERRED` · Learning / look-back layer (the endgame)**
 The core purpose: use the PAPER counterfactual corpus to score and tune HELM's entry/exit levers
@@ -148,6 +144,7 @@ were unpopulated). Likely a prior partial/ad-hoc migration. Unresolved; not bloc
 
 ## Resolved log
 
+- **2026-06-20 (s27)** — **HELM-011 RESOLVED — straddle paper cell lit end-to-end.** Neutral + cheap-IVR → `LONG_STRADDLE` was already emitting signals (config, `evaluate_straddles`, live `helm open` dispatch, and the `bias_to_strategy` entry trigger were all pre-built — code had outrun the register); the only real gap was the paper booker. Shipped: DB token + CHECK widening on `positions`/`strategy_settings` via `writable_schema` (`helm011_a`/`_b`); `paper_open_straddle_one` — two LONG legs, ATM strike, same expiry, both filled @ ask → net debit — plus `_PAPER_BOOKERS` registration and `call_ask`/`put_ask` exposed in `evaluate_straddles` (`helm011_c`); long-vol exit guard in `paper_manage` (skip credit-family PT/stop for `LONG_STRADDLE`, DTE/EXPIRY-only) + a `strategy_settings` row (`dte_exit=21`, no PT/stop) (`helm011_d`/`_e`). IVR-boundary sub-question decided: leave the 35/15 lines untouched (trigger already produces ~2/wk). First booking lands on the next RTH scan; the 14 pre-`core_v1` straddle signals stay unbooked (pre-regime-break, old universe). Patches `helm011_a..e` (guarded). Commit pending.
 - **2026-06-20 (s26)** — **HELM-005 RESOLVED (reframed) — `core_v1` cull.** The monoculture wasn't a narrow watchlist: bare `helm scan` runs the `active` set, which had silently grown to 60 uncurated names (75% of signals from 156 thematic non-core tickers — the "benched" themes were never benched). Data-only fix: re-culled `active` to a deliberate 65 (53 quality + 12 directional-diversity adds — DHI PNC DAL FDX DE GM SLB NEM NUE TGT DG O), tagged `core_v1`, benched the rest (preserved, dormant). `active` is now the single source of truth for the scan universe; `build` is a label only. Verified 65 active / 65 core_v1 / 41 REAL untouched / paper emptied. Patch `patch_core_v1.py` (guarded). Commit `469c3cc`.
 - **2026-06-20 (s26)** — **Paper clean slate.** Soft-voided the 14 open PAPER positions (→ CLOSED) so the corpus restarts on the clean 65; the `core_v1` cull date is the regime-break line for the learning layer. REAL book untouched. Commit `469c3cc`.
 - **2026-06-20 (s26)** — **HELM-024 found + fixed — `helm watchlist add` crash.** `WatchlistItem` dataclass field `active: int = 0` collided with the classmethod `active(cls)`; @dataclass captured the method as the field default, so fresh items got `self.active = <bound method>` and `save()` raised `type 'method' is not supported`. Latent since the `active()` fetcher landed (rows had arrived via screen/build/import). Fix: renamed classmethod `active` → `active_universe` (sole caller `scan_cmd.py`); mechanical rename, no behavior change. Patch `fix_active_collision.py` (guarded). Commit `469c3cc`.

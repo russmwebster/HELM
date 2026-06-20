@@ -69,9 +69,13 @@ def _evaluate(pos, legs, marks: dict):
     dte_now = min([d for d in dtes if d is not None], default=None)
 
     reason = None
-    if credit and (total_pnl / abs(credit)) >= pt:
+    # Long straddle is a long-vol bet: the convex move/vol-pop tail IS the edge,
+    # so the credit-family profit target (which would cap winners) and the
+    # premium stop do not apply. It exits on the DTE/EXPIRY calendar rule only.
+    is_long_vol = pos.strategy == 'LONG_STRADDLE'
+    if not is_long_vol and credit and (total_pnl / abs(credit)) >= pt:
         reason = 'PROFIT_TARGET'
-    elif credit:
+    elif not is_long_vol and credit:
         stop_dollars = stop_mult * abs(credit)
         if pos.max_loss:
             stop_dollars = min(stop_dollars, abs(pos.max_loss))
