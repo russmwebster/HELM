@@ -101,6 +101,11 @@ def _open_paper_keys() -> set:
     return {(p.ticker, p.strategy) for p in Position.open_positions(book="PAPER")}
 
 
+def _open_real_tickers() -> set:
+    """Tickers with any open position in the REAL book (live picks)."""
+    return {p.ticker for p in Position.open_positions(book="REAL")}
+
+
 def paper_generate() -> dict:
     """Open HELM's paper picks for the latest run's passed-on, single-leg field.
     Returns a summary dict; prints a visible summary."""
@@ -116,6 +121,7 @@ def paper_generate() -> dict:
 
     eligible = paperable_strategies()
     seen = _open_paper_keys()
+    real_tickers = _open_real_tickers()
     field = _latest_run_passed_on()
 
     booked = []           # (ticker, strategy, position_id)
@@ -128,6 +134,9 @@ def paper_generate() -> dict:
 
         if not strategy:
             skipped.append((ticker, strategy, "no top_strategy on signal"))
+            continue
+        if ticker in real_tickers:
+            skipped.append((ticker, strategy, "live ticker - open in real book"))
             continue
         if strategy not in eligible:
             skipped.append((ticker, strategy, "multi-leg / unsupported (deferred to v2)"))

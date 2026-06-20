@@ -137,6 +137,12 @@ were unpopulated). Likely a prior partial/ad-hoc migration. Unresolved; not bloc
 
 ## Resolved log
 
+- **2026-06-20 (s25)** — **HELM-022** opened + resolved: `paper generate` now skips tickers
+  already open in the **REAL** book (`_paper_generate.py`, `_open_real_tickers()` + skip-with-
+  reason "live ticker - open in real book"). Keeps a name out of both books at once, so the
+  picks-vs-field edge comparison (`analyze edge`) isn't confounded by a ticker living in REAL
+  and PAPER simultaneously. Cluster C — s24 working-tree orphan, now committed.
+
 - **2026-06-20 (s25)** — **HELM-002** index reconcile + `shadow_*` drop shipped (Cluster B —
   the s24 working-tree orphan, never committed). Forward-index gap closed: `idx_ptx_hash` /
   `idx_ptx_date` (present live, undeclared) added to the reconcile block; the builder now
