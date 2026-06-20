@@ -1,4 +1,4 @@
-# HELM — Issues & Tech-Debt Register
+# HELM — Register  (issues · parking lot · status)
 
 Canonical list of known issues, tech debt, deferred work, and open questions.
 Referenced by session handovers. Keep entries **terse**; detail lives in the
@@ -13,6 +13,16 @@ session where the issue was worked.
 - On resolution: move the line to the **Resolved log** with a one-line outcome + date.
 
 _Last updated: 2026-06-20 (s25)._
+
+---
+
+## Status — where HELM is
+_Snapshot; refreshed each `helm checkpoint`, read via `helm status`._
+
+- **Phase:** scaffolding complete (live book · paper book · edge instrument). The learning loop is the frontier and not yet turning — the PAPER book has no closed trades to score yet.
+- **Next highest-leverage:** HELM-005 — watchlist breadth (gates the learning loop).
+- **Blocked (market/RTH):** HELM-019 Fidelity reconcile; HELM-018 RTH P&L sweep.
+- **Counts:** 12 active · 5 parked · last shipped s25 (Clusters B/C/D landed; A parked under HELM-011).
 
 ---
 
@@ -80,6 +90,15 @@ Also: HELM's sell/buy IVR lines (≥35 / <15) are aggressive vs convention (~50 
 same loop should validate them. Trigger: the loop can score expectancy on neutral-sub-rich,
 or a `NO_TRADE` return gets wired through scan/open.
 _2026-06-20 (s25) — Cluster A (drafted, **parked, not committed**). A working-tree recalibration moved both moderate-IVR cells off `IRON_CONDOR` — neutral+moderate → `LONG_STRADDLE`, mild-bear+moderate → `BEAR_PUT_SPREAD` — and updated `guide` docs to the live 35/15 lines. Held back because it hardcodes the cell this issue reserves for the loop and leans on the 35/15 lines flagged above. Correction to the s21 HELM-005 note: the moderate→IC routing is **still live** in committed `bias_to_strategy` (both moderate cells return `IRON_CONDOR`); it was never removed from these fallbacks. Recalibration preserved as `clusterA_helm011_pending.patch` — reapply when the loop (or a deliberate override) decides the cell. Entangled with HELM-005; best taken as one design conversation._
+
+**HELM-023 · `DESIGN` · `DEFERRED` · Learning / look-back layer (the endgame)**
+The core purpose: use the PAPER counterfactual corpus to score and tune HELM's entry/exit levers
+against live picks — selection skill, pass-cost, and the boundary/cell choices (`bias_to_strategy`
+thresholds, the neutral-sub-rich cell HELM-011 reserves for exactly this). Distinguish entry-lever
+from exit-lever learning; target the variance risk premium for premium-family strategies. Trigger:
+HELM-005 breadth landed **and** the PAPER book has closed trades to score. Gated by HELM-005 (the
+corpus must range wider than HELM's screening taste) and calendar time (positions must close).
+Sub-threads land here as the loop takes shape.
 
 ### Ops / enhancement
 
@@ -277,7 +296,18 @@ were unpopulated). Likely a prior partial/ad-hoc migration. Unresolved; not bloc
 
 ---
 
-## Carried handover threads (see latest `HELM_handover_sNN.md` for detail)
+## Parking lot
+_Future aspirations and enhancements, un-numbered until promoted. On promotion: assign the next free HELM-NNN and move to Active._
+
+- **HELM stages & workflow UI** — interactive graphic of HELM's development stages and operational loop (scan → decide → REAL/PAPER → manage → analyze). Productionize the s25 chat workflow diagram + dev-phase status into a navigable interface; build as standalone HTML (static file, or served at `helm.local`); doubles as onboarding. Why: at-a-glance orientation for where the system sits and how the loop runs.
+- **COVERED_CALL gradeability** — populate `stock_positions` (underlying cost basis) so covered calls stop being skipped as "no capital basis" in `analyze edge` (surfaced s25, BSX). Why: every covered call is currently ungradeable.
+- **`.gitignore` sweep** — ignore the working-dir pile (`*.bak.*`, `apply_*.py`, `helm*_fix.py`, `HELM_handover_*.md`, `ISSUES_*_additions.md`). Why: ~70 untracked files clutter every `git status`.
+- **Setup / onboarding flow** — first-run config (watchlist, broker pathway, account) per the original "built after core strategies" intent. Why: currently assumes a hand-built DB.
+- **`helm status` / `helm checkpoint` CLI** — `helm status` prints the Status block + active/parked counts (flag staleness when `_Last updated_` is old); `helm checkpoint` assists the close-out. Why: the chat triggers work today, the CLI verbs make them first-class.
+
+---
+
+## Carried threads · un-promoted follow-ups
 
 Not yet promoted to numbered issues; pull in as they get worked.
 
