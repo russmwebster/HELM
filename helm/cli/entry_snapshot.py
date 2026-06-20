@@ -216,7 +216,7 @@ def open_position_with_snapshot(
     if book == 'REAL':
         try:
             from helm.models.signal import Signal
-            Signal.link_position_opened(ticker, pos.id)
+            Signal.link_position_opened(ticker, strategy, pos.id)
         except Exception:
             pass
 
@@ -371,5 +371,16 @@ def open_multileg_with_snapshot(
             ),
             conn=conn,
         )
+
+    # Close the decision->position link on the originating scan signal, if one
+    # matches (latest unlinked signal for this ticker whose top_strategy equals
+    # the opened strategy). Best-effort, OUTSIDE the transaction: a real open
+    # must never fail or roll back because of this stamp.
+    if book == 'REAL':
+        try:
+            from helm.models.signal import Signal
+            Signal.link_position_opened(ticker, strategy, pos.id)
+        except Exception:
+            pass
 
     return pos.id, leg_ids, snap_ids

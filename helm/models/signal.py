@@ -218,39 +218,46 @@ class Signal:
         return self
 
     @classmethod
-    def link_position_opened(cls, ticker: str, position_id: str) -> Optional[Signal]:
+    def link_position_opened(cls, ticker: str, strategy: str,
+                             position_id: str) -> Optional[Signal]:
         """Stamp the originating scan signal when a real position is opened.
 
-        Resolves the most recent *unlinked* signal for `ticker` that Russ
-        marked russ_intent='OPEN', links the new position, and records the
-        action as actually opened. Returns the updated Signal, or None when
-        there is no OPEN-intent candidate (ad-hoc open with no first-cut mark,
-        or the candidate was already linked to an earlier open).
+        Resolves the latest *unlinked* signal for `ticker` (the most recent
+        scan's judgment) and links it ONLY when its top_strategy equals the
+        strategy actually opened -- so a deliberate exception (a structure HELM
+        did not flag, or a backfill) stays unlinked rather than inheriting an
+        unrelated judgment. On a match, wires BOTH sides in one transaction: the
+        signal (position_opened / position_id / russ_action='OPEN') and the
+        position (signal_id, which close_cmd reads for outcome back-prop).
+        Returns the linked Signal, or None when nothing matches.
         """
         conn = get_conn()
         try:
             row = conn.execute(
-                "SELECT * FROM signals WHERE ticker = ? AND russ_intent = 'OPEN' "
-                "AND position_id IS NULL ORDER BY generated_at DESC LIMIT 1",
+                "SELECT id, top_strategy FROM signals "
+                "WHERE ticker = ? AND position_id IS NULL "
+                "ORDER BY generated_at DESC LIMIT 1",
                 (ticker.upper(),)
             ).fetchone()
         finally:
             conn.close()
         if row is None:
             return None
-        sig = cls.from_row(row)
+        sig_id, sig_strategy = row[0], row[1]
+        if sig_strategy is None or sig_strategy != strategy:
+            return None
         now = datetime.now().isoformat()
-        sig.position_opened = 1
-        sig.position_id = position_id
-        sig.russ_action = 'OPEN'
-        sig.russ_action_at = now
         with transaction() as conn:
             conn.execute(
                 "UPDATE signals SET position_opened = 1, position_id = ?, "
                 "russ_action = 'OPEN', russ_action_at = ? WHERE id = ?",
-                (position_id, now, sig.id)
+                (position_id, now, sig_id)
             )
-        return sig
+            conn.execute(
+                "UPDATE positions SET signal_id = ? WHERE id = ?",
+                (sig_id, position_id)
+            )
+        return cls.get(sig_id)
 
     def record_outcome(self, pnl: float, result: str, notes: Optional[str] = None) -> Signal:
         if result not in OUTCOMES:
