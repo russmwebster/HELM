@@ -137,6 +137,16 @@ were unpopulated). Likely a prior partial/ad-hoc migration. Unresolved; not bloc
 
 ## Resolved log
 
+- **2026-06-20 (s25)** — **HELM-016 code landed** (Cluster D). Correction to the s24 entry
+  below: the `analyze edge` command (`cmd_edge` + `_edge_*` helpers, ~174 lines, `cli/analyze.py`)
+  was **never committed in s24** — it sat uncommitted in the working tree, and the "no code
+  change" resolution mistook on-disk state for shipped. Committed s25. Clean run verified: 20
+  graded closed trades; LONG_CALL mean **883.2%** reproduces (real, not a units bug); BSX
+  COVERED_CALL correctly flagged ungradeable (no `stock_positions` capital basis); selection
+  skill 0.0% as expected while PAPER has no closed trades. The median / EXPIRED / ungradeable-
+  audit / LONG_CALL-basis follow-ups were present as s24 described — just not on `origin/main`
+  until now. (Note: COVERED_CALL edge stays ungradeable until `stock_positions` is populated.)
+
 - **2026-06-20 (s25)** — **HELM-022** opened + resolved: `paper generate` now skips tickers
   already open in the **REAL** book (`_paper_generate.py`, `_open_real_tickers()` + skip-with-
   reason "live ticker - open in real book"). Keeps a name out of both books at once, so the

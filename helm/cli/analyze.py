@@ -455,6 +455,177 @@ def cmd_position(args):
 
 # -- Entry point --------------------------------------------------------------
 
+# -- Edge: selection skill & pass-cost (annualized return on capital) ----------
+
+_EDGE_SPREADS = {'BULL_PUT_SPREAD', 'BEAR_CALL_SPREAD', 'IRON_CONDOR',
+                 'BEAR_PUT_SPREAD', 'BULL_CALL_SPREAD', 'LONG_CONDOR'}
+_EDGE_LONGS = {'LONG_CALL', 'LONG_PUT', 'PERM', 'DIAGONAL', 'DIAGONAL_PUT', 'PMCC'}
+_EDGE_FLOOR_DAYS = 7
+_EDGE_THIN_N = 5
+
+
+def _edge_cash_tied_up(row, stock):
+    """Single source of truth for cash tied up per strategy.
+    Returns None when capital can't be determined (trade is then ungradeable)."""
+    s = row['strategy']
+    if s in _EDGE_SPREADS:
+        ml = row['max_loss']
+        return abs(ml) if ml else None
+    if s == 'CSP':
+        sk = row['leg_strike']
+        lc = row['leg_contracts'] or row['total_contracts'] or 1
+        return sk * lc * 100 if sk else None
+    if s == 'COVERED_CALL':
+        sc = stock.get(row['ticker'])
+        if sc and sc.get('shares'):
+            return (sc['cost_basis'] / sc['shares']) * 100 * (row['total_contracts'] or 1)
+        return None
+    if s in _EDGE_LONGS:
+        np_ = row['net_premium']
+        return abs(np_) if np_ else None
+    np_ = row['net_premium']
+    return abs(np_) if np_ else None
+
+
+def _edge_ann_return(row, capital):
+    if not capital or capital <= 0:
+        return None
+    d = _days_held(row['opened_at'], row['closed_at'])
+    if d is None:
+        return None
+    d = max(d, _EDGE_FLOOR_DAYS)
+    return (row['realized_pnl'] / capital) * (365.0 / d)
+
+
+def cmd_edge(args):
+    """Selection skill & pass-cost: annualized return on cash tied up.
+
+    Grades CLOSED (and EXPIRED, once they carry a realized P&L) trades as annualized
+    return on the cash each tied up, simple-averaged (every trade equal). Reports both
+    mean and median (the annualized-return distribution is right-skewed). Compares live
+    picks (REAL) against the whole field (REAL + PAPER), and shows what the names passed
+    on (PAPER) did.
+        selection skill = avg(picks) - avg(field)
+        pass-cost       = avg(passed)
+    Assignments / rolls are still excluded (no clean realized P&L).
+    """
+    conn = get_conn()
+    rows = conn.execute("""
+        SELECT p.id, p.ticker, p.strategy, p.book, p.realized_pnl,
+               MIN(p.opened_at) AS opened_at, p.closed_at,
+               p.total_contracts, p.net_premium, p.max_loss,
+               MAX(l.strike) AS leg_strike, SUM(l.contracts) AS leg_contracts
+        FROM positions p
+        LEFT JOIN legs l ON l.position_id = p.id AND l.direction = 'SHORT'
+        WHERE p.status IN ('CLOSED', 'EXPIRED') AND p.realized_pnl IS NOT NULL
+        GROUP BY p.id
+        ORDER BY p.closed_at DESC
+    """).fetchall()
+
+    stock = {}
+    for sr in conn.execute("SELECT ticker, shares, cost_basis FROM stock_positions"):
+        stock[sr['ticker']] = {'shares': sr['shares'], 'cost_basis': sr['cost_basis']}
+
+    graded, ungradeable = [], []
+    for r in rows:
+        cap = _edge_cash_tied_up(r, stock)
+        ann = _edge_ann_return(r, cap) if cap else None
+        if ann is None:
+            ungradeable.append({'ticker': r['ticker'], 'strategy': r['strategy'],
+                                'reason': 'no capital basis' if not cap else 'no days held'})
+        else:
+            graded.append({'strategy': r['strategy'], 'book': r['book'], 'ann': ann})
+
+    if not graded:
+        console.print()
+        console.print("[yellow]No gradeable closed trades yet - edge populates as trades close.[/yellow]")
+        if ungradeable:
+            console.print(f"[dim]({len(ungradeable)} closed trade(s) lacked a capital basis and were skipped.)[/dim]")
+        return
+
+    def _avg(items):
+        xs = [g['ann'] for g in items]
+        return (sum(xs) / len(xs)) if xs else None
+
+    def _median(items):
+        xs = sorted(g['ann'] for g in items)
+        n = len(xs)
+        if n == 0:
+            return None
+        m = n // 2
+        return xs[m] if n % 2 else (xs[m - 1] + xs[m]) / 2
+
+    def _pct(x):
+        return f"{x * 100:.1f}%" if x is not None else "--"
+
+    picks = [g for g in graded if g['book'] == 'REAL']
+    passed = [g for g in graded if g['book'] == 'PAPER']
+    field = graded
+
+    mp, npk = _avg(picks), len(picks)
+    mf, nf = _avg(field), len(field)
+    ma, na = _avg(passed), len(passed)
+    medp, medf, meda = _median(picks), _median(field), _median(passed)
+    sel = (mp - mf) if (mp is not None and mf is not None) else None
+    sel_med = (medp - medf) if (medp is not None and medf is not None) else None
+
+    def _thin(n):
+        return "  [yellow]thin[/yellow]" if n < _EDGE_THIN_N else ""
+
+    console.print()
+    console.print(Panel.fit(
+        "[bold]Edge[/bold]  annualized return on cash tied up  [dim](mean + median, closed trades)[/dim]",
+        border_style="cyan"))
+    console.print()
+
+    summ = Table(box=box.SIMPLE, show_header=True, header_style="bold dim")
+    summ.add_column("Bucket", style="bold", width=22)
+    summ.add_column("Mean ann.", justify="right", width=13)
+    summ.add_column("Median ann.", justify="right", width=13)
+    summ.add_column("Trades", justify="right", width=10)
+    summ.add_row("Picks (REAL)", _pct(mp), _pct(medp), str(npk) + _thin(npk))
+    summ.add_row("Field (REAL+PAPER)", _pct(mf), _pct(medf), str(nf) + _thin(nf))
+    summ.add_row("Passed (PAPER)", _pct(ma), _pct(meda), str(na) + _thin(na))
+    console.print(summ)
+    console.print()
+
+    _sc = "green" if (sel or 0) >= 0 else "red"
+    _scm = "green" if (sel_med or 0) >= 0 else "red"
+    _pc = "green" if (ma or 0) >= 0 else "red"
+    console.print(f"  Selection skill (mean,   picks - field):  [{_sc}]{_pct(sel)}[/{_sc}]")
+    console.print(f"  Selection skill (median, picks - field):  [{_scm}]{_pct(sel_med)}[/{_scm}]")
+    console.print(f"  Pass-cost (passed average):               [{_pc}]{_pct(ma)}[/{_pc}]")
+    if ungradeable:
+        console.print(f"  [dim]Ungradeable (skipped): {len(ungradeable)}[/dim]")
+        for u in ungradeable:
+            console.print(f"    [dim]- {u['ticker']} {u['strategy']}: {u['reason']}[/dim]")
+    console.print()
+
+    strats = sorted({g['strategy'] for g in graded})
+    bys = Table(box=box.SIMPLE, show_header=True, header_style="bold dim")
+    bys.add_column("Strategy", style="bold", width=18)
+    bys.add_column("Picks  mean/med", justify="right", width=22)
+    bys.add_column("Field  mean/med", justify="right", width=22)
+    bys.add_column("Passed mean/med", justify="right", width=22)
+
+    def _cell(items):
+        if not items:
+            return "[dim]--[/dim]"
+        tag = " [yellow]*[/yellow]" if len(items) < _EDGE_THIN_N else ""
+        return f"{_pct(_avg(items))} / {_pct(_median(items))} (n={len(items)}){tag}"
+
+    for st in strats:
+        bys.add_row(
+            st,
+            _cell([g for g in picks if g['strategy'] == st]),
+            _cell([g for g in field if g['strategy'] == st]),
+            _cell([g for g in passed if g['strategy'] == st]),
+        )
+    console.print(f"[bold]By strategy[/bold]  [dim](mean / median; * = thin, fewer than {_EDGE_THIN_N} trades)[/dim]")
+    console.print(bys)
+    console.print()
+
+
 def run():
     args = sys.argv[1:]
 
@@ -462,6 +633,7 @@ def run():
         console.print("\n[bold]Usage:[/bold]  helm analyze <command>\n")
         console.print("  (no command)          Overview: win rates and P&L by strategy")
         console.print("  trends                Trade-life trends across all positions")
+        console.print("  edge                  Selection skill & pass-cost (ann. return on capital)")
         console.print("  position <TICKER>     Full check history for one position\n")
         return
     if not args:
@@ -475,6 +647,8 @@ def run():
         cmd_trends(rest)
     elif cmd == 'position':
         cmd_position(rest)
+    elif cmd == 'edge':
+        cmd_edge(rest)
     else:
         # Default: treat first arg as potential ticker, or show overview
         if cmd.isupper() or (len(cmd) <= 5 and cmd.isalpha()):
