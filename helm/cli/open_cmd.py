@@ -2362,6 +2362,12 @@ def display_debit_spreads(ticker, strategy, config, spreads, spot, atr, account_
     console.print()
 
 
+# Strategies deliberately off-limits in this IRA (undefined-risk / not IRA-eligible).
+# Tokens stay load-bearing for import, check, risk classification & paper code;
+# they are refused at the open path only.
+OFF_LIMITS = {"SHORT_STRANGLE", "JADE_LIZARD"}
+
+
 def run():
     args = sys.argv[1:]
 
@@ -2397,6 +2403,12 @@ def run():
 
     ticker   = positional[0].upper()
     strategy = positional[1].upper()
+
+    if strategy in OFF_LIMITS:
+        console.print(f"[red]Off-limits in this IRA:[/red] {strategy}")
+        console.print("[dim]Undefined-risk structure, not IRA-eligible. "
+                      "Token kept for import & risk classification only.[/dim]")
+        return
 
     if strategy not in STRATEGY_CONFIG:
         console.print(f"[red]Unknown strategy:[/red] {strategy}")
