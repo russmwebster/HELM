@@ -28,6 +28,10 @@ import logging
 import warnings
 from pathlib import Path
 from datetime import datetime, date
+
+# HELM-006: IVR staleness tolerance in calendar days. iv_history updates daily
+# on trading days; >3 tolerates a normal weekend but flags a missed refresh.
+IVR_STALE_DAYS = 3
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
 
@@ -201,6 +205,8 @@ def fetch_technicals(ticker: str, ivr_record=None) -> dict:
         "atr_14": None,
         "iv_current": None,
         "iv_rank": None,
+        "ivr_date": None,
+        "ivr_stale": False,
         "iv_pct": None,
         "week_52_high": None,
         "week_52_low": None,
@@ -220,6 +226,13 @@ def fetch_technicals(ticker: str, ivr_record=None) -> dict:
         result["iv_rank"] = ivr_record.iv_rank
         result["iv_pct"]  = ivr_record.iv_percentile
         result["iv_current"] = ivr_record.iv_current
+        result["ivr_date"] = ivr_record.date
+        if ivr_record.date:
+            try:
+                _asof = datetime.strptime(ivr_record.date, "%Y-%m-%d").date()
+                result["ivr_stale"] = (date.today() - _asof).days > IVR_STALE_DAYS
+            except (ValueError, TypeError):
+                pass
 
     try:
         tk = yf.Ticker(ticker)
@@ -360,6 +373,8 @@ def fetch_technicals(ticker: str, ivr_record=None) -> dict:
             elif strategy == "LONG_CALL" and _ivr > 50:  # IV crush risk
                 result["bias_factors"].insert(0, f"⚠ IVR {_ivr:.0f} — buying expensive options")
 
+        if result.get("ivr_stale"):
+            result["bias_factors"].insert(0, f"⚠ IVR stale (as-of {result.get('ivr_date')}) — run helm ivr refresh")
         return result
 
     except Exception as e:
@@ -572,6 +587,11 @@ def run():
     console.print()
     console.print(t)
     console.print()
+
+    _stale_n = sum(1 for r in valid if r.get("ivr_stale"))
+    if _stale_n:
+        console.print(f"[yellow]⚠ {_stale_n} candidate(s) scored on IVR older than {IVR_STALE_DAYS}d — run [bold]helm ivr refresh[/bold] for current ranks.[/yellow]")
+        console.print()
 
     # Strategy summary
     from collections import Counter
