@@ -12,32 +12,23 @@ session where the issue was worked.
 - Status: `OPEN` · `DEFERRED` (deliberate, with a trigger) · `RESOLVED` · `WONTFIX`.
 - On resolution: move the line to the **Resolved log** with a one-line outcome + date.
 
-_Last updated: 2026-06-20 (s27)._
+_Last updated: 2026-06-21 (s28)._
 
 ---
 
 ## Status — where HELM is
 _Snapshot; refreshed each `helm checkpoint`, read via `helm status`._
 
-- **Phase:** scaffolding complete (live book · paper book · edge instrument). Watchlist is a deliberate 65-name `core_v1` universe; paper book clean-slated at the s26 regime-break. Learning loop still the frontier — corpus accumulating fresh on the clean universe, with the neutral long-vol (straddle) cell live and REAL opens now stamping their originating signal end-to-end.
-- **Next highest-leverage:** HELM-002 — the `schema.sql` constraints / defaults / FK pass (self-contained desk work, no live dependency). Quick-win alternatives: HELM-021 (gated live `positions` index pass) or HELM-007 (stale docstrings).
-- **Blocked (market/RTH):** `core_v1` IVR backfill (Mon RTH — the 12 new names); HELM-019 Fidelity reconcile; HELM-018 RTH P&L sweep; first paper straddle books on the next RTH scan (HELM-011); HELM-012 first live signal-link on the next RTH REAL open.
-- **Counts:** 9 active · 4 parked · last shipped s27 (HELM-026 `LONG_PUT` first-class + HELM-025 off-limits guard + `.gitignore` restore/sweep).
+- **Phase:** scaffolding complete (live · paper · edge). `schema.sql` is now a faithful builder of live including constraints / defaults / FKs (HELM-002), guarded by a standing `diag_schema_constraints.py`; the hot `positions` table is indexed live (HELM-021). Learning loop still the frontier — corpus accumulating on the clean `core_v1` universe, neutral long-vol (straddle) cell live, REAL opens stamping their originating signal (HELM-012 wired, pending first live fire).
+- **Next highest-leverage:** the OPEN desk-work backlog is largely cleared. Off-market options: HELM-009 (confirm + add the per-ticker timeout in `paper generate`) or HELM-008 (settle the `entry_snapshots` liquidity-column provenance question). HELM-006 (scan trusts stale IVR) and HELM-019 (stale frozen marks → multi-leg P&L) are the data-quality items, partly RTH-gated.
+- **Blocked (market/RTH):** `core_v1` IVR backfill for the 12 new names (Mon RTH); HELM-019 stale-marks reconcile vs Fidelity; first paper straddle books on the next RTH scan; HELM-012 first live signal-link fire on the next RTH REAL open.
+- **Counts:** 6 active · 4 parked · last shipped s28 (HELM-002 schema constraint pass + standing constraint gate · HELM-021 live `positions` indexes · HELM-007 docstring refresh).
 
 ---
 
 ## Active
 
 ### Tech debt
-
-**HELM-002 · `DEBT` · `OPEN` · `schema.sql` not yet a fully faithful builder of live**
-Additive table/column drift **reconciled s23** (see Resolved log): `schema.sql` now declares
-all 20 live tables and all live columns; a fresh `init_db` reproduces live (validated by
-executing the patched `schema.sql` into an in-memory DB and diffing to zero). **Remaining
-(keep `OPEN`):** a deeper pass on constraints / defaults / FKs beyond table+column+index
-presence. (Index drift + dead `shadow_*` drop reconciled s25; the live reverse-gap of 6 `positions` indexes is tracked as HELM-021.) Trigger: before any DB rebuild-from-schema, or when
-convenient. Keep the execute-and-rediff gate (`apply_schema_reconcile.py`) as the standing
-schema-change check.
 
 **HELM-004 · `DEBT` · `DEFERRED` · Multileg paper liquidity capture not wired**
 `_paper_open.py` leg dicts don't carry `oi`/`spread`/`spread_pct`, so multileg paper
@@ -46,15 +37,6 @@ are wired to accept them (s20); the remaining work is enriching each `_paper_ope
 builder from the per-strategy `evaluate_*` keys, plus deciding short-leg vs
 net-structure liquidity. Trigger: the thin-name thematic sleeve, where the signal
 stops being muted.
-
-**HELM-021 · `DEBT` · `OPEN` · Live `positions` table missing 6 declared secondary indexes**
-The builder declares six `positions` indexes (`idx_pos_account` / `ticker` / `strategy` /
-`status` / `opened` / `signal`) that the **live DB does not have** — surfaced s25 by diffing
-the live index set against a `/tmp` build of `schema.sql` (builder 34, live 30; the 6 are the
-reverse gap). `positions` is the hot table (every lookup, `reconcile`, `analyze edge`) and runs
-unindexed live. Not a builder bug — a live-DB deficiency. Fix: a **gated live `CREATE INDEX`
-pass** (read-only probe → `/tmp` validate → backup → live → verify baseline), not a `schema.sql`
-edit. Trigger: before scale, or when convenient.
 
 ### Design / sequencing
 
@@ -105,14 +87,6 @@ leg's `opt_source` as a market-state proxy (live / frozen / stale). Stamp per-le
 there when that loop is reworked; pairs with the carried "mid-only fast fetch for hedge
 legs" (HELM-018 follow-up)._
 
-### Docs
-
-**HELM-007 · `DOCS` · `OPEN` · Stale help / docstrings**
-`paper_cmd.py` help says "single-leg" but `_PAPER_BOOKERS` books multileg too;
-`workflow_cmd.py` is stale (missing `--manage` / paper, per handover). `_paper_generate.py`
-(L32–35) still describes `open_position_with_snapshot` as non-atomic — stale since the s24
-atomic-open fix (HELM-003). Pattern of docstrings lagging implementation.
-
 ### Open questions
 
 **HELM-008 · `QUESTION` · `OPEN` · Provenance of `entry_snapshots` liquidity columns**
@@ -123,6 +97,12 @@ were unpopulated). Likely a prior partial/ad-hoc migration. Unresolved; not bloc
 ---
 
 ## Resolved log
+
+- **2026-06-21 (s28)** — **HELM-002 RESOLVED — `schema.sql` is a faithful builder of live (constraints / defaults / FKs).** Built `diag_schema_constraints.py` to diff a fresh `schema.sql` build against live across CHECK / DEFAULT / NOT NULL / PK / FK / UNIQUE — the surface the presence-only `apply_schema_reconcile.py` never compared. Only drift: three CHECK token-lists lagging live's `writable_schema` widenings (`positions` + `strategy_settings` missing `LONG_PUT` / `LONG_STRADDLE`, `lifecycle_events` missing `PENDING`); no default / FK / UNIQUE drift. Back-ported additively in live token order (`706cdf7`); both gates now CLEAN / NO-OP. Diagnostic kept as a standing constraint companion gate (`9ce62c9`). Lesson: a `writable_schema` CHECK widening on live must be back-ported to `schema.sql` in the same step — the new gate guards it.
+
+- **2026-06-21 (s28)** — **HELM-021 RESOLVED — six `positions` secondary indexes created live.** `idx_pos_account` / `ticker` / `strategy` / `status` / `opened` / `signal` (verbatim from the builder) were absent live — only the autoindex present, on the hot table. Gated live pass: read-only probe → WAL-safe `/tmp` validate (`integrity_check` ok, all six present) → timestamped backup (`data/helm.db.bak.20260621-081710`) → `CREATE INDEX IF NOT EXISTS` on live → re-verify. Live-only change, no code / commit. Server picks up new indexes on next statement prepare.
+
+- **2026-06-21 (s28)** — **HELM-007 RESOLVED — stale paper-book docstrings refreshed (`c6bd777`).** `paper_cmd.py`: dropped the inaccurate `single-leg` qualifier (×2) — `_PAPER_BOOKERS` books single- and multi-leg. `_paper_generate.py`: removed `straddle` from the absent / skipped list (now booked via `paper_open_straddle_one`, HELM-011) and rewrote the not-atomic / orphan-PAPER-position block to reflect the atomic open (HELM-003). `workflow_cmd.py`: added the missing `helm paper generate` entry. Note: the issue's `--manage` was a phantom — `helm paper` exposes only `generate`, no paper-manage command exists.
 
 - **2026-06-20 (s27)** — **HELM-025 RESOLVED — off-limits guard at the open path.** `SHORT_STRANGLE` / `JADE_LIZARD` (undefined-risk, IRA-ineligible) were already un-openable — both absent from `STRATEGY_CONFIG`, so `helm open` hit the “Unknown strategy” gate — but that message was wrong (recognized-but-off-limits, not garbage) and the protection was incidental (adding either to `STRATEGY_CONFIG` later would silently re-enable it). Decided GUARD over DROP: the tokens are load-bearing (`import_cmd` classifies imports as `SHORT_STRANGLE`; `check_cmd` leg-count map; `position.py` risk class; `setup.py` defaults; `paper_manage` grouping), so dropping is unsafe. Added module-level `OFF_LIMITS = {SHORT_STRANGLE, JADE_LIZARD}` and an explicit refusal in `run()` before the `STRATEGY_CONFIG` gate — honest reason, robust even if a token later enters the config; tokens untouched. Code-only, one file, py_compile-gated; live-verified (both refuse, CSP/LONG_PUT proceed, unknown still rejected). Patch `apply_helm025_guard.py`. Commit `52bcda7`.
 - **2026-06-20 (s27)** — **HELM-026 RESOLVED — `LONG_PUT` first-class.** Code had outrun the register: `LONG_PUT` was fully wired (scan `'buy'` family, full `STRATEGY_CONFIG` entry, open path, `_PAPER_BOOKERS`, analyze, display) but missing from `STRATEGIES` and both CHECKs with no `strategy_settings` row — a `LONG_PUT` write was silently rejected. Shipped: `'LONG_PUT'` token in `STRATEGIES` (after `LONG_CALL`); `positions` + `strategy_settings` CHECK widened via `writable_schema`; a `strategy_settings` row cloned from `LONG_CALL` (inherits 0.75 PT / 21-DTE exit, id `default_LONG_PUT_<acct>`). DB migration `/tmp`-validated (both CHECKs allow it, integrity ok, a probe `LONG_PUT` position + the settings row both insert) before live behind a `.backup()`; enum patch py_compile-gated. `setup.py` skipped (straddle precedent — fresh-install seeder, not needed for live). Patches `apply_helm026_db.py` (gated), `apply_helm026_enum.py`. Commit `5445b61` (enum; live DB migration applied separately, gitignored).
