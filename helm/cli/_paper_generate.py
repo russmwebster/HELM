@@ -10,8 +10,7 @@ LONG_PUT) book via paper_open_one as one contract at a single bid/ask fill;
 credit verticals (BULL_PUT_SPREAD, BEAR_CALL_SPREAD) book via
 paper_open_spread_one, and the BEAR_PUT_SPREAD debit vertical books via
 paper_open_debit_spread_one, all as two conservatively-filled legs. Anything
-absent from the map -- straddle,
-PERM, and ANY future or unknown strategy -- is skipped with an explicit reason
+absent from the map -- PERM and ANY future or unknown strategy -- is skipped with an explicit reason
 and counted, never silently dropped, until its booker exists.
 Fail-closed is deliberate: an unrecognised strategy is excluded, not booked.
 
@@ -29,11 +28,11 @@ Guards:
 Passed-on field = the latest run's signals where russ_action is not 'OPEN'
 (i.e. Russ did not turn the candidate into a real position).
 
-Known limitation: open_position_with_snapshot is not atomic, so a mid-way
-failure can leave an orphan PAPER position. This orchestration CONTAINS such a
-failure (the batch continues and the error is reported) but does not clean up a
-partial open -- atomic open is a separate fix at the open_position_with_snapshot
-level, shared with the live path.
+open_position_with_snapshot is atomic (HELM-003): position, leg, and snapshot
+are written in one operation, so a mid-way failure rolls back rather than
+leaving an orphan PAPER position. This orchestration additionally wraps each
+ticker, so a per-ticker failure surfaces as a skip reason and the batch
+continues. The atomic open is shared with the live path.
 """
 from __future__ import annotations
 

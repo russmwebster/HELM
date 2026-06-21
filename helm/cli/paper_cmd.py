@@ -1,7 +1,7 @@
 """helm paper - HELM paper book commands.
 
 Subcommands:
-  generate   Paper-open HELM's top-ranked pick for each passed-on, single-leg
+  generate   Paper-open HELM's top-ranked pick for each passed-on
              candidate in the latest scan run (book='PAPER'). Gated on RTH; the
              live book is unaffected (HELM only advises there).
 
@@ -28,7 +28,7 @@ def run() -> None:
     console.print()
     console.print("[bold]Subcommands:[/bold]")
     console.print("  [cyan]generate[/cyan]   Paper-open HELM's picks for the latest run's "
-                  "passed-on, single-leg field")
+                  "passed-on field")
     console.print()
     if sub is not None:
         console.print(f"[yellow]Unknown subcommand:[/yellow] {sub}")

@@ -57,6 +57,10 @@ def run():
     cmd("helm ivr list",                 "IV rank summary across full watchlist")
     cmd("helm ivr show TICKER",          "IV rank detail for one ticker")
 
+    # Paper book
+    section("PAPER BOOK  (counterfactual -- live book unaffected)")
+    cmd("helm paper generate",           "Paper-open HELM's pick for each passed-on candidate (RTH-gated)")
+
     # ── Open a position ───────────────────────────────────────
     section("OPEN A POSITION")
     cmd("helm open TICKER CSP",          "Cash-secured put")
