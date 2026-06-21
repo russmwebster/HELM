@@ -37,6 +37,7 @@ COMMANDS = {
     'workflow':  ('helm.cli.workflow_cmd',  'run', 'Show trading workflow and command reference'),
     'stock':     ('helm.cli.stock_cmd',     'run', 'Manage stock positions for covered call sizing'),
     'status':    ('helm.cli.status_cmd',    'run', 'Portfolio dashboard — positions, P&L, activity'),
+    'restart':   ('helm.cli.server_cmd',   'run', 'Restart the HELM server (launchd com.helm.server)'),
 }
 
 def print_help():
