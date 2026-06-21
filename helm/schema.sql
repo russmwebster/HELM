@@ -737,6 +737,7 @@ ALTER TABLE checks ADD COLUMN buffer_dollars REAL;
 ALTER TABLE checks ADD COLUMN buffer_pct REAL;
 ALTER TABLE checks ADD COLUMN rth_flag TEXT;
 
+-- HELM-008: entry_snapshots liquidity columns (open_interest / bid_ask_spread / *_pct). Introduced in code at HELM-013 (6fd56bd, entry_snapshot.py writer); live carried them ahead of the builder; back-ported here at HELM-002 Cluster B (8a9a5c3).
 ALTER TABLE entry_snapshots ADD COLUMN open_interest INTEGER;
 ALTER TABLE entry_snapshots ADD COLUMN bid_ask_spread REAL;
 ALTER TABLE entry_snapshots ADD COLUMN bid_ask_spread_pct REAL;
