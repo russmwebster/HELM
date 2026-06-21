@@ -54,6 +54,28 @@ def parse_option_symbol(symbol: str) -> Optional[dict]:
         return None
 
 
+def _money(v):
+    """Parse a Fidelity dollar string ('+$1,696.49', '-$975.00') to float; None if blank."""
+    if v is None:
+        return None
+    s = str(v).replace("$", "").replace("+", "").replace(",", "").strip()
+    if not s or s in ("nan", "--", "n/a"):
+        return None
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
+def _fidpnl_cell(v):
+    """Render a Fidelity per-position P&L value as a colored Rich cell."""
+    if v is None:
+        return "[dim]—[/dim]"
+    color = "green" if v >= 0 else "red"
+    sign = "+" if v >= 0 else "-"
+    return f"[{color}]{sign}${abs(v):,.0f}[/{color}]"
+
+
 def parse_fidelity_positions(filepath: str) -> list:
     """
     Parse a Fidelity Portfolio_Positions CSV.
@@ -89,6 +111,8 @@ def parse_fidelity_positions(filepath: str) -> list:
                 "opt_type": None,
                 "contracts": None,
                 "symbol": symbol,
+                "value": _money(row.get("Last Price Change")),
+                "total_gl": _money(row.get("Today's Gain/Loss Percent")),
             })
             continue
 
@@ -107,6 +131,8 @@ def parse_fidelity_positions(filepath: str) -> list:
             "opt_type": parsed["opt_type"],
             "contracts": qty,
             "symbol": symbol,
+            "value": _money(row.get("Last Price Change")),
+            "total_gl": _money(row.get("Today's Gain/Loss Percent")),
         })
 
     return positions
@@ -163,19 +189,30 @@ def match_positions(helm_positions: list, fidelity_positions: list) -> dict:
         ticker = pos["ticker"]
         strategy = pos["strategy"]
         found = False
+        fid_pnl = 0.0
+        fid_hit = False
 
         for leg in legs:
             if leg["option_type"] == "STOCK":
                 # Stock leg -- check fid_stocks
                 if ticker in fid_stocks:
                     found = True
+                    _g = fid_stocks[ticker].get("total_gl")
+                    if _g is not None:
+                        fid_pnl += _g
+                        fid_hit = True
             else:
                 key = (ticker, leg["expiration"], leg["strike"], leg["option_type"])
                 if key in fid_index:
                     found = True
                     matched_fid_keys.add(key)  # Mark ALL option legs as matched
+                    _g = fid_index[key].get("total_gl")
+                    if _g is not None:
+                        fid_pnl += _g
+                        fid_hit = True
 
         if found:
+            hp["fid_pnl"] = fid_pnl if fid_hit else None
             matched.append(hp)
         else:
             helm_only.append(hp)
@@ -268,12 +305,13 @@ def run():
     fid_only   = result["fidelity_only"]
 
     # ── Results table ─────────────────────────────────────────────────────────
-    t = Table(box=box.SIMPLE_HEAD, show_header=True, padding=(0,1), width=120)
+    t = Table(box=box.SIMPLE_HEAD, show_header=True, padding=(0,1), width=135)
     t.add_column("Status",   width=12, no_wrap=True)
     t.add_column("Ticker",   style="bold cyan", width=7, no_wrap=True)
     t.add_column("Strategy", width=14, no_wrap=True)
     t.add_column("Legs",     width=30, no_wrap=True)
     t.add_column("Note",     width=40, no_wrap=True)
+    t.add_column("Fid P&L",  width=11, no_wrap=True, justify="right")
 
     # Matched
     for hp in matched:
@@ -290,7 +328,7 @@ def run():
             _pgc().execute("UPDATE positions SET status='OPEN' WHERE id=?", (pos["id"],))
             _pgc().commit()
         status_str = "[green]✓ MATCH[/green]"
-        t.add_row(status_str, pos["ticker"], pos["strategy"], legs_str, "")
+        t.add_row(status_str, pos["ticker"], pos["strategy"], legs_str, "", _fidpnl_cell(hp.get("fid_pnl")))
 
     # HELM only (not in Fidelity)
     for hp in helm_only:
