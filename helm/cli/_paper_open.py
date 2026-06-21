@@ -79,18 +79,30 @@ def paper_open_spread_one(ticker: str, strategy: str, spot: Optional[float],
         return None
 
     width = top["width"]
+    # HELM-004: short-leg liquidity for the multileg snapshot. oi from the evaluator's
+    # short-leg value; per-leg spread/spread_pct from bid/ask. evaluate_spreads does not
+    # expose long-leg oi, so the long leg carries spread only.
+    short_oi = top.get("oi")
+    _sb, _sa, _sm = top.get("short_bid"), top.get("short_ask"), top.get("short_mid")
+    short_spread = round(_sa - _sb, 2) if (_sb is not None and _sa is not None) else None
+    short_spread_pct = round(short_spread / _sm * 100, 1) if (short_spread is not None and _sm) else None
+    _lb, _la, _lm = top.get("long_bid"), top.get("long_ask"), top.get("long_mid")
+    long_spread = round(_la - _lb, 2) if (_lb is not None and _la is not None) else None
+    long_spread_pct = round(long_spread / _lm * 100, 1) if (long_spread is not None and _lm) else None
     legs = [
         {
             "direction": "SHORT", "opt_type": opt_type,
             "strike": top["short_strike"], "expiration": top["expiration"],
             "fill_price": short_fill, "delta": top.get("delta"),
             "iv": top.get("iv"), "dte": top.get("dte"), "spot": spot,
+            "oi": short_oi, "spread": short_spread, "spread_pct": short_spread_pct,
         },
         {
             "direction": "LONG", "opt_type": opt_type,
             "strike": top["long_strike"], "expiration": top["expiration"],
             "fill_price": long_fill, "delta": None,
             "iv": top.get("iv"), "dte": top.get("dte"), "spot": spot,
+            "oi": None, "spread": long_spread, "spread_pct": long_spread_pct,
         },
     ]
 
