@@ -12,7 +12,7 @@ session where the issue was worked.
 - Status: `OPEN` · `DEFERRED` (deliberate, with a trigger) · `RESOLVED` · `WONTFIX`.
 - On resolution: move the line to the **Resolved log** with a one-line outcome + date.
 
-_Last updated: 2026-06-21 (s28)._
+_Last updated: 2026-06-21 (s29)._
 
 ---
 
@@ -20,9 +20,9 @@ _Last updated: 2026-06-21 (s28)._
 _Snapshot; refreshed each `helm checkpoint`, read via `helm status`._
 
 - **Phase:** scaffolding complete (live · paper · edge). `schema.sql` is now a faithful builder of live including constraints / defaults / FKs (HELM-002), guarded by a standing `diag_schema_constraints.py`; the hot `positions` table is indexed live (HELM-021). Learning loop still the frontier — corpus accumulating on the clean `core_v1` universe, neutral long-vol (straddle) cell live, REAL opens stamping their originating signal (HELM-012 wired, pending first live fire).
-- **Next highest-leverage:** the OPEN desk-work backlog is largely cleared. Off-market options: HELM-009 (confirm + add the per-ticker timeout in `paper generate`) or HELM-008 (settle the `entry_snapshots` liquidity-column provenance question). HELM-006 (scan trusts stale IVR) and HELM-019 (stale frozen marks → multi-leg P&L) are the data-quality items, partly RTH-gated.
+- **Next highest-leverage:** the OPEN desk-work backlog is cleared. Remaining items are data-quality and partly RTH-gated: HELM-006 (scan trusts stale IVR) and HELM-019 (stale frozen marks → multi-leg P&L). HELM-012's first live signal-link fire is pending the next RTH REAL open.
 - **Blocked (market/RTH):** `core_v1` IVR backfill for the 12 new names (Mon RTH); HELM-019 stale-marks reconcile vs Fidelity; first paper straddle books on the next RTH scan; HELM-012 first live signal-link fire on the next RTH REAL open.
-- **Counts:** 6 active · 4 parked · last shipped s28 (HELM-002 schema constraint pass + standing constraint gate · HELM-021 live `positions` indexes · HELM-007 docstring refresh).
+- **Counts:** 4 active · 5 parked · last shipped s29 (HELM-008 entry_snapshots liquidity-column provenance documented · HELM-009 per-request IBKR timeout in `fetch_chain_from_ibkr` · `helm restart` command + launchd-managed server documented).
 
 ---
 
@@ -57,18 +57,6 @@ monoculture and a false NEE anomaly were both stale-IVR artifacts; both correcte
 after `helm ivr refresh`). Candidate enhancement: scan warns or refuses when IVR
 data is stale, so it can't silently mis-assign strategies.
 
-**HELM-009 · `OPS` · `OPEN` (suspected, unconfirmed) · No per-ticker timeout in paper generate**
-First `paper generate` run (2026-06-16) showed `entry_snapshots.created_at` in two bursts —
-AAPL→GE at 14:45:03–08, a ~45-min gap, then GOOGL→XOM at 15:30:17–59 — with the gap at the first
-IBKR single-leg fetch (GOOGL). Single-run-with-stall is the leading read (summary said "booked 20",
-exactly 20 rows exist, no dups), but run count could not be confirmed. If it's a stall, the
-orchestration's try/except catches exceptions but not hangs, so one slow IBKR chain blocks the
-batch. Candidate fix if confirmed: per-ticker fetch timeout → surface a stuck request as a skip,
-not a stall.
-_2026-06-17 (s22) — one RTH `helm paper generate` completed with no ~45-min single-leg stall in
-visible output. One clean data point, not conclusive; keep watching across runs before deciding
-on a per-ticker timeout._
-
 **HELM-019 · `OPS` · `OPEN` · Stale frozen marks → wrong multi-leg P&L when market closed**
 Outside RTH, `helm check` on multi-leg positions reads `ibkr-frozen` last-close marks that are
 stale/noisy on thin OTM wings, so net P&L and any profit-target/stop signal off it can be
@@ -87,17 +75,13 @@ leg's `opt_source` as a market-state proxy (live / frozen / stale). Stamp per-le
 there when that loop is reworked; pairs with the carried "mid-only fast fetch for hedge
 legs" (HELM-018 follow-up)._
 
-### Open questions
-
-**HELM-008 · `QUESTION` · `OPEN` · Provenance of `entry_snapshots` liquidity columns**
-`open_interest` + `bid_ask_spread` were found on live with no `schema.sql` or code
-ALTER trail; could not establish when/how they were added. Benign (correct types,
-were unpopulated). Likely a prior partial/ad-hoc migration. Unresolved; not blocking.
-
 ---
 
 ## Resolved log
 
+- **2026-06-21 (s29)** — **HELM-009 RESOLVED — per-request IBKR timeout in `fetch_chain_from_ibkr`.** The paper-generate booker call was guarded by `except Exception` (bad ticker → skip) but nothing bounded a hung `qualifyContracts`/`reqSecDefOptParams`, so one stuck IBKR chain stalled the whole batch (the 2026-06-16 ~45-min GOOGL gap). Set `ib.RequestTimeout = 45` after connect so a hung request raises/returns bounded and is caught upstream as a per-ticker skip. Shared with the live open path — strictly a guard for both. Verified live in the running server. (`1265f2f`)
+- **2026-06-21 (s29)** — **HELM-008 RESOLVED — `entry_snapshots` liquidity-column provenance.** `open_interest`/`bid_ask_spread`/`bid_ask_spread_pct` are the `entry_snapshot.py` liquidity-capture columns, introduced in code at HELM-013 (`6fd56bd`) and back-ported into `schema.sql` at HELM-002 Cluster B (`8a9a5c3`) without the provenance comment the adjacent index block got. Live carried them ahead of the builder; now declared (CREATE @242 + ALTER @740) so the HELM-002 builder reproduces them. Wired and functioning — 3/28 live rows populated, so the prior "unpopulated" note was stale. Added the documenting comment to `schema.sql`. (`036d8ba`)
+- **2026-06-21 (s29)** — **OPS — `helm restart` added; server is launchd-managed.** The server runs as launchd agent `com.helm.server` (KeepAlive, PPID 1), not the heredoc in `helm-servers.sh` — which conflicts on port 8766 and can never restart this agent (its `pkill -f "...8766"` can't match a heredoc whose port lives on stdin). Added `helm restart` wrapping `launchctl kickstart -k gui/<uid>/com.helm.server` (new `helm/cli/server_cmd.py` + dispatch entry). Canonical restart is now `helm restart`. (`1762cc2`)
 - **2026-06-21 (s28)** — **HELM-002 RESOLVED — `schema.sql` is a faithful builder of live (constraints / defaults / FKs).** Built `diag_schema_constraints.py` to diff a fresh `schema.sql` build against live across CHECK / DEFAULT / NOT NULL / PK / FK / UNIQUE — the surface the presence-only `apply_schema_reconcile.py` never compared. Only drift: three CHECK token-lists lagging live's `writable_schema` widenings (`positions` + `strategy_settings` missing `LONG_PUT` / `LONG_STRADDLE`, `lifecycle_events` missing `PENDING`); no default / FK / UNIQUE drift. Back-ported additively in live token order (`706cdf7`); both gates now CLEAN / NO-OP. Diagnostic kept as a standing constraint companion gate (`9ce62c9`). Lesson: a `writable_schema` CHECK widening on live must be back-ported to `schema.sql` in the same step — the new gate guards it.
 
 - **2026-06-21 (s28)** — **HELM-021 RESOLVED — six `positions` secondary indexes created live.** `idx_pos_account` / `ticker` / `strategy` / `status` / `opened` / `signal` (verbatim from the builder) were absent live — only the autoindex present, on the hot table. Gated live pass: read-only probe → WAL-safe `/tmp` validate (`integrity_check` ok, all six present) → timestamped backup (`data/helm.db.bak.20260621-081710`) → `CREATE INDEX IF NOT EXISTS` on live → re-verify. Live-only change, no code / commit. Server picks up new indexes on next statement prepare.
@@ -254,6 +238,7 @@ were unpopulated). Likely a prior partial/ad-hoc migration. Unresolved; not bloc
 ## Parking lot
 _Future aspirations and enhancements, un-numbered until promoted. On promotion: assign the next free HELM-NNN and move to Active._
 
+- **Retire / fix `helm-servers.sh`** — stale dev launcher that conflicts with the launchd-managed `com.helm.server` on port 8766. Its `pkill -f "python3.*8766"` can never match (the server is a heredoc, so the port is on stdin not argv), so it only ever throws a harmless Errno-48 traceback above a misleading `✅ ready`. Superseded by `helm restart`. Why: removes a misleading failure mode and a foot-gun.
 - **HELM stages & workflow UI** — interactive graphic of HELM's development stages and operational loop (scan → decide → REAL/PAPER → manage → analyze). Productionize the s25 chat workflow diagram + dev-phase status into a navigable interface; build as standalone HTML (static file, or served at `helm.local`); doubles as onboarding. Why: at-a-glance orientation for where the system sits and how the loop runs.
 - **COVERED_CALL gradeability** — populate `stock_positions` (underlying cost basis) so covered calls stop being skipped as "no capital basis" in `analyze edge` (surfaced s25, BSX). Why: every covered call is currently ungradeable.
 - **Setup / onboarding flow** — first-run config (watchlist, broker pathway, account) per the original "built after core strategies" intent. Why: currently assumes a hand-built DB.
