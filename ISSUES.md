@@ -12,7 +12,7 @@ session where the issue was worked.
 - Status: `OPEN` · `DEFERRED` (deliberate, with a trigger) · `RESOLVED` · `WONTFIX`.
 - On resolution: move the line to the **Resolved log** with a one-line outcome + date.
 
-_Last updated: 2026-06-21 (s30)._
+_Last updated: 2026-06-22 (s31)._
 
 ---
 
@@ -76,6 +76,7 @@ legs" (HELM-018 follow-up)._
 
 ## Resolved log
 
+- **2026-06-22 (s31)** — **Earnings awareness wired into the scan pipeline.** HELM was blind to earnings at entry: `watchlist.next_earnings` and the `signals` earnings fields were empty across the board, and `helm open` surfaced earnings only on PERM. Added `helm/earnings.py` (yfinance fetch plus `days_until`/`earnings_warning`, 45-day window). `helm scan` now refreshes `watchlist.next_earnings` for the active universe (per-scan cap of 12, oldest-first, stamped on success only — after an initial-burst yfinance throttle that the first run wrongly cached as fresh-but-null, fixed in 2b). Every `signals` row carries `earnings_date`/`days_to_earnings`/`earnings_warning`, and the scan table shows an Earnings column (MM-DD plus DTE, yellow inside window). The `helm open` precise-expiry line was deliberately deferred — earnings is now a visible factor at scan, which was judged sufficient. Caveat: yfinance occasionally returns a past date (COST), rendered as `--`. Patches 1/2/2b/3/4, helper plus scan_cmd plus _decision_capture.
 - **2026-06-21 (s30)** — **HELM-006 RESOLVED — scan warns on stale IVR.** `fetch_technicals` copied the IVR value but discarded the record's age, so scan scored stale ranks as fresh (s20 monoculture + false NEE anomaly). Added `IVR_STALE_DAYS=3`, plumbed `ivr_date`/`ivr_stale` from `ivr_record.date`, a leading `⚠ IVR stale (as-of …)` bias chip, and a footer count. Warn-only — strategy assignment untouched; missing IVR stays the existing `ivr_unknown` path. (`ceebcb3`)
 - **2026-06-21 (s30)** — **`helm-servers.sh` retired (parking lot).** The launchd-managed `com.helm.server` (KeepAlive) made the old heredoc launcher a foot-gun (Errno-48 + a fake ready line). Replaced its body with a deprecation wrapper that kickstarts the agent (same effect as `helm restart`); only touches `com.helm.server`. (`322ecc1`)
 - **2026-06-21 (s29)** — **HELM-009 RESOLVED — per-request IBKR timeout in `fetch_chain_from_ibkr`.** The paper-generate booker call was guarded by `except Exception` (bad ticker → skip) but nothing bounded a hung `qualifyContracts`/`reqSecDefOptParams`, so one stuck IBKR chain stalled the whole batch (the 2026-06-16 ~45-min GOOGL gap). Set `ib.RequestTimeout = 45` after connect so a hung request raises/returns bounded and is caught upstream as a per-ticker skip. Shared with the live open path — strictly a guard for both. Verified live in the running server. (`1265f2f`)

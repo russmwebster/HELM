@@ -458,6 +458,18 @@ def run():
     except Exception:
         _ivr_preload = {}
 
+    # --- earnings refresh (HELM-EARN-REFRESH-v1) ---
+    # Populate watchlist.next_earnings for the scanned names (7-day staleness gate)
+    # so each signal can carry earnings proximity. yfinance; independent of IBKR.
+    try:
+        from helm.earnings import refresh_watchlist_earnings
+        _esum = refresh_watchlist_earnings(get_conn(), tickers=tickers)
+        console.print(f"  [dim]earnings: {_esum['updated']} fetched, {_esum['cached']} cached[/dim]")
+        console.print()
+    except Exception as _ee:
+        console.print(f"  [yellow]![/yellow]  earnings refresh skipped: {_ee}")
+        console.print()
+
     results = []
     completed = 0
 
@@ -527,6 +539,7 @@ def run():
     t.add_column("Bias",     width=16, no_wrap=True)
     t.add_column("Strategy", width=16, no_wrap=True)
     t.add_column("Conviction",  width=10, no_wrap=True)
+    t.add_column("Earnings", width=12, no_wrap=True)  # HELM-EARN-DISPLAY-v1
     t.add_column("RSI",      justify="right", width=5, no_wrap=True)
     t.add_column("IV%",      justify="right", width=5, no_wrap=True)
     t.add_column("IVR",      justify="right", width=5, no_wrap=True)
@@ -553,6 +566,13 @@ def run():
     # Keep IVHistory for label formatting
     from helm.models.iv_history import IVHistory
     _ivr_data = IVHistory.for_tickers([r["ticker"] for r in valid])
+    # HELM-EARN-DISPLAY-v1: earnings proximity for the scan table
+    from helm.earnings import days_until, earnings_warning
+    try:
+        _earn_map = {row["ticker"]: row["next_earnings"] for row in get_conn().execute(
+            "SELECT ticker, next_earnings FROM watchlist").fetchall()}
+    except Exception:
+        _earn_map = {}
 
     for res in valid:
         score = res["bias_score"]
@@ -580,7 +600,14 @@ def run():
             _tk_str = f"{_tk}*"
             strat_str = strat_str + "[dim] open[/dim]"
 
-        t.add_row(_tk_str, price, bias_str, strat_str, conv_str,
+        _ed = _earn_map.get(_tk)
+        _d = days_until(_ed)
+        if _d is None or _d < 0:
+            _earn_str = "[dim]--[/dim]"
+        else:
+            _etxt = f"{_ed[5:]} {_d}d"
+            _earn_str = f"[yellow]{_etxt}[/yellow]" if earnings_warning(_d) else f"[dim]{_etxt}[/dim]"
+        t.add_row(_tk_str, price, bias_str, strat_str, conv_str, _earn_str,
                   rsi, iv, ivr_str, ivp_str, atr, s1, s2, top_factor)
 
     console.print(f"[bold]Scan Results — {len(valid)} candidates[/bold]")

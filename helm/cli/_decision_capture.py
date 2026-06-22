@@ -11,6 +11,8 @@ import dataclasses
 from datetime import datetime
 
 from helm.models.signal import Signal
+from helm.db import get_conn  # HELM-EARN-SIGNAL-v1
+from helm.earnings import days_until, earnings_warning
 
 _PASSTHROUGH = ("iv_current", "iv_rank", "ema_20", "sma_50", "sma_200",
                 "rsi_14", "atr_14", "price_vs_52wk_pct")
@@ -45,6 +47,12 @@ def persist_scan_signals(results, policy_version="v0", generated_at=None):
     if not results:
         return (0, 0)
     fields = {f.name for f in dataclasses.fields(Signal)}
+    # HELM-EARN-SIGNAL-v1: cache watchlist next_earnings for the scanned names
+    try:
+        _earn_rows = get_conn().execute("SELECT ticker, next_earnings FROM watchlist").fetchall()
+        _earn_map = {r["ticker"]: r["next_earnings"] for r in _earn_rows}
+    except Exception:
+        _earn_map = {}
     ts = generated_at or datetime.now().isoformat()
     saved = 0
     skipped = 0
@@ -62,6 +70,8 @@ def persist_scan_signals(results, policy_version="v0", generated_at=None):
             "conviction": res.get("conviction"),
             "rationale": res.get("strategy_rationale"),
         }]
+        _ed = _earn_map.get(res["ticker"])
+        _dte = days_until(_ed, ts)
         payload = {
             "spot_price": res.get("price"),
             "iv_percentile": res.get("iv_pct"),
@@ -69,6 +79,9 @@ def persist_scan_signals(results, policy_version="v0", generated_at=None):
             "auto_bias_score": score,
             "auto_bias_reasoning": reasoning,
             "helm_policy_version": policy_version,
+            "earnings_date": _ed,
+            "days_to_earnings": _dte,
+            "earnings_warning": earnings_warning(_dte),
         }
         for k in _PASSTHROUGH:
             if k in res:
