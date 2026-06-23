@@ -60,6 +60,8 @@ def call_claude(prompt: str, system: str = None, max_tokens: int = 2000,
     import urllib.request
     import urllib.error
 
+    from helm.secrets_loader import load_env
+    load_env()
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         console.print("[red]Error:[/red] ANTHROPIC_API_KEY environment variable not set.")
