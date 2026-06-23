@@ -44,7 +44,7 @@ from rich.panel import Panel
 from rich import box
 
 from helm.config import get_active_account
-from helm.db import get_conn
+from helm.db import get_conn, book_filter
 
 console = Console()
 
@@ -676,9 +676,10 @@ def cmd_check_all(args):
     """Check all open positions — summary table."""
     conn = get_conn()
     account_id = get_active_account()
+    bc, bp = book_filter(args)
     positions = [dict(r) for r in conn.execute(
-        "SELECT * FROM positions WHERE account_id = ? AND status = 'OPEN' ORDER BY strategy, ticker",
-        (account_id,)
+        "SELECT * FROM positions WHERE account_id = ? AND status = 'OPEN'" + bc + " ORDER BY strategy, ticker",
+        (account_id, *bp)
     ).fetchall()]
     conn.close()
 
@@ -1482,9 +1483,10 @@ def cmd_check_one(ticker: str, deep: bool = False):
     """Check a single position, with optional deep narrative."""
     conn = get_conn()
     account_id = get_active_account()
+    bc, bp = book_filter(sys.argv)
     pos = conn.execute(
-        "SELECT * FROM positions WHERE account_id = ? AND ticker = ? AND status = 'OPEN' ORDER BY opened_at DESC LIMIT 1",
-        (account_id, ticker.upper())
+        "SELECT * FROM positions WHERE account_id = ? AND ticker = ? AND status = 'OPEN'" + bc + " ORDER BY opened_at DESC LIMIT 1",
+        (account_id, ticker.upper(), *bp)
     ).fetchone()
     if not pos:
         console.print(f"[yellow]No open position found for {ticker}[/yellow]")
@@ -1783,8 +1785,9 @@ def run():
         # --deep with no ticker: run deep check on all open positions
         from helm.db import get_conn as _gc
         _conn = _gc()
+        _bc, _bp = book_filter(args)
         _open = _conn.execute(
-            "SELECT DISTINCT ticker FROM positions WHERE status='OPEN' ORDER BY ticker"
+            "SELECT DISTINCT ticker FROM positions WHERE status='OPEN'" + _bc + " ORDER BY ticker", _bp
         ).fetchall()
         for _row in _open:
             cmd_check_one(_row['ticker'], deep=True)
