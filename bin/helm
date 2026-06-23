@@ -1,0 +1,2 @@
+#!/bin/sh
+exec /opt/anaconda3/envs/helm/bin/python3 "$(dirname "$0")/../helm.py" "$@"

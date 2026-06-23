@@ -10,6 +10,12 @@ from pathlib import Path
 
 BASE = Path(__file__).parent.resolve()
 HOME = Path.home()
+
+# Make bridge-spawned (/exec) subprocesses resolve the helm-env interpreter
+# and the helm wrapper: the non-login /exec shell loads neither the conda env
+# nor the user shell alias. Children inherit this via env={**os.environ,...}.
+_ENV_BIN = "/opt/anaconda3/envs/helm/bin"
+os.environ["PATH"] = f"{BASE / 'bin'}:{_ENV_BIN}:" + os.environ.get("PATH", "")
 socketserver.TCPServer.allow_reuse_address = True
 
 ALLOWED_PREFIXES = [
