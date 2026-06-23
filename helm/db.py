@@ -122,6 +122,20 @@ def check_schema_version(db_path: Path = DB_PATH) -> dict:
 
 # ── Utilities ────────────────────────────────────────────────────────────────
 
+def book_filter(argv):
+    """Operational book filter for trader-facing views.
+
+    Default REAL only; '--all' => both books; '--paper' => paper only.
+    Returns (clause, params) to splice after an existing WHERE condition,
+    e.g.  "... AND status='OPEN'" + clause  with  (existing, *params).
+    """
+    if "--all" in argv:
+        return "", []
+    if "--paper" in argv:
+        return " AND book = ?", ["PAPER"]
+    return " AND book = ?", ["REAL"]
+
+
 def row_to_dict(row: sqlite3.Row) -> dict:
     """Convert a sqlite3.Row to a plain dict."""
     return dict(row) if row else {}

@@ -22,7 +22,7 @@ from rich.panel import Panel
 from rich import box
 
 from helm.config import get_active_account
-from helm.db import get_conn
+from helm.db import get_conn, book_filter
 
 console = Console()
 
@@ -111,6 +111,9 @@ def cmd_list(args):
     conn = get_conn()
     query = "SELECT * FROM positions WHERE account_id = ?"
     params = [get_active_account()]
+    bc, bp = book_filter(args)
+    query += bc
+    params.extend(bp)
 
     if status_filter:
         if "," in status_filter:

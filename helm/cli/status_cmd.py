@@ -20,7 +20,7 @@ from rich.columns import Columns
 from rich import box
 
 from helm.config import get_active_account
-from helm.db import get_conn
+from helm.db import get_conn, book_filter
 
 console = Console()
 
@@ -53,14 +53,15 @@ def run():
     acct = dict(acct)
 
     # ── Positions ─────────────────────────────────────────────────────────────
+    bc, bp = book_filter(sys.argv)
     open_pos = [dict(r) for r in conn.execute(
-        "SELECT * FROM positions WHERE account_id=? AND status='OPEN' ORDER BY ticker",
-        (account_id,)
+        "SELECT * FROM positions WHERE account_id=? AND status='OPEN'" + bc + " ORDER BY ticker",
+        (account_id, *bp)
     ).fetchall()]
 
     closed = conn.execute(
-        "SELECT COUNT(*), COALESCE(SUM(realized_pnl),0) FROM positions WHERE account_id=? AND status='CLOSED'",
-        (account_id,)
+        "SELECT COUNT(*), COALESCE(SUM(realized_pnl),0) FROM positions WHERE account_id=? AND status='CLOSED'" + bc,
+        (account_id, *bp)
     ).fetchone()
     closed_count   = closed[0]
     total_realized = closed[1] or 0
