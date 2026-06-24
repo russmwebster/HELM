@@ -13,6 +13,7 @@ DEFAULT_DTE_EXIT      = 21     # days
 CREDIT_FAMILY = 'CREDIT'
 LONG_DEBIT_FAMILY = 'LONG_DEBIT'
 LONG_VOL_FAMILY = 'LONG_VOL'
+DEBIT_SPREAD_FAMILY = 'DEBIT_SPREAD'
 
 
 def _family(strategy: str) -> str:
@@ -21,6 +22,8 @@ def _family(strategy: str) -> str:
         return LONG_VOL_FAMILY
     if strategy in ('LONG_CALL', 'LONG_PUT'):
         return LONG_DEBIT_FAMILY
+    if strategy in ('BEAR_PUT_SPREAD', 'BULL_CALL_SPREAD'):
+        return DEBIT_SPREAD_FAMILY
     return CREDIT_FAMILY
 
 
@@ -70,6 +73,11 @@ def evaluate(pos, legs, marks: dict):
         # Long single options: profit is % gain on premium paid; max loss is the
         # premium itself, so no credit-style stop. Otherwise exit on the calendar.
         if credit and (total_pnl / abs(credit)) >= pt:
+            reason = 'PROFIT_TARGET'
+    elif fam == DEBIT_SPREAD_FAMILY:
+        # Debit spreads are defined-reward: target a fraction of MAX PROFIT, not of
+        # the debit. No stop (max loss is the defined debit). Otherwise calendar.
+        if pos.max_profit and (total_pnl / pos.max_profit) >= pt:
             reason = 'PROFIT_TARGET'
     # LONG_VOL (straddle): calendar-only; no profit/stop branch (the convex tail
     # IS the edge, so a profit cap or premium stop would defeat the position).
