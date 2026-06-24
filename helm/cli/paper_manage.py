@@ -12,7 +12,8 @@ from helm.config import get_active_account
 from helm.db import get_conn
 from helm.models.position import Position
 from helm.models.leg import Leg
-from helm.cli.check_cmd import fetch_ibkr_option, fetch_yf_data, dte
+from helm.cli.check_cmd import fetch_ibkr_option, fetch_yf_data
+from helm.dates import dte
 from helm.cli.close_cmd import _finalize_close
 from helm.decision import evaluate
 

@@ -45,6 +45,7 @@ from rich import box
 
 from helm.config import get_active_account
 from helm.db import get_conn, book_filter
+from helm.dates import dte
 
 console = Console()
 
@@ -89,16 +90,7 @@ def market_status_label() -> str:
         return "[dim]market status unknown[/dim]"
 
 
-# ── DTE calculation ───────────────────────────────────────────────────────────
 
-def dte(expiration: str) -> Optional[int]:
-    if not expiration:
-        return None
-    try:
-        exp = datetime.strptime(expiration, "%Y-%m-%d").date()
-        return (exp - date.today()).days
-    except Exception:
-        return None
 
 
 def save_check(position_id: str, assessment: dict, pos: dict) -> None:

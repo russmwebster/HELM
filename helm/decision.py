@@ -3,7 +3,7 @@
 # Extracted from paper_manage (WS2, behaviour-preserving). Reads strategy_settings.
 
 from helm.db import get_conn
-from helm.cli.check_cmd import dte
+from helm.dates import dte
 
 DEFAULT_PROFIT_TARGET = 0.50   # fraction of credit captured
 DEFAULT_STOP_MULT     = 2.0    # loss = N x credit
