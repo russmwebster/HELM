@@ -12,7 +12,7 @@ session where the issue was worked.
 - Status: `OPEN` · `DEFERRED` (deliberate, with a trigger) · `RESOLVED` · `WONTFIX`.
 - On resolution: move the line to the **Resolved log** with a one-line outcome + date.
 
-_Last updated: 2026-06-23 (s31)._
+_Last updated: 2026-06-23 (s31 — decision-core plan checkpointed)._
 
 ---
 
@@ -20,10 +20,10 @@ _Last updated: 2026-06-23 (s31)._
 _Snapshot; refreshed each `helm checkpoint`, read via `helm status`._
 
 - **Phase:** scaffolding complete (live · paper · edge). `schema.sql` is now a faithful builder of live including constraints / defaults / FKs (HELM-002), guarded by a standing `diag_schema_constraints.py`; the hot `positions` table is indexed live (HELM-021). Learning loop still the frontier — corpus accumulating on the clean `core_v1` universe, neutral long-vol (straddle) cell live, REAL opens stamping their originating signal (HELM-012 wired, pending first live fire).
-- **Next highest-leverage:** the OPEN backlog is essentially drained — what remains is deferred-by-design or RTH-paired: HELM-019 Part 2 (HELM `assess_position` vs the Fidelity oracle, divergence delta, RTH), HELM-004's remaining multileg legs (thin-name trigger), HELM-023 learning layer (corpus-gated). Parking desk picks: COVERED_CALL gradeability and the `helm status`/`helm checkpoint` CLI.
+- **Next highest-leverage:** **HELM-027 decision core** (WS1 in progress) is the active build — guarded `strategy_settings` lever migration now, then `helm/decision.py` extraction (WS2) and coverage past premium-only (WS3). Beyond it the OPEN backlog is essentially drained — what remains is deferred-by-design or RTH-paired: HELM-019 Part 2 (HELM `assess_position` vs the Fidelity oracle, divergence delta, RTH), HELM-004's remaining multileg legs (thin-name trigger), HELM-023 learning layer (corpus-gated). Parking desk picks: COVERED_CALL gradeability and the `helm status`/`helm checkpoint` CLI.
 - **Last shipped (s31):** earnings awareness — `helm scan` refreshes `watchlist.next_earnings` (active universe, per-scan cap, stamp-on-success), every `signals` row carries `earnings_date`/`days_to_earnings`/`earnings_warning`, and the scan table shows an Earnings column. `helm open` precise-expiry line deferred by choice.
 - **Blocked (market/RTH):** `core_v1` IVR backfill for the 12 new names (Mon RTH); HELM-019 stale-marks reconcile vs Fidelity; first paper straddle books on the next RTH scan; HELM-012 first live signal-link fire on the next RTH REAL open.
-- **Counts:** 3 active · 4 parked · last shipped s30 (HELM-006 stale-IVR warn · HELM-004 credit-spread short-leg liquidity · HELM-019 Part 1 Fidelity-oracle column · `helm-servers.sh` retired).
+- **Counts:** 4 active · 4 parked · last shipped s30 (HELM-006 stale-IVR warn · HELM-004 credit-spread short-leg liquidity · HELM-019 Part 1 Fidelity-oracle column · `helm-servers.sh` retired).
 - **Monday RTH readiness:** no blockers; running server already has all s30 code. Run `helm ivr refresh` early to backfill the 12 new `core_v1` names (else they score `ivr_unknown`). First live exercise of HELM-009 `RequestTimeout` on real opens — watch. HELM-019 stale-mark P&L self-heals once live marks return; the s24 no-close-off-stale-marks guard stands.
 
 ---
@@ -42,6 +42,19 @@ net-structure liquidity. Trigger: the thin-name thematic sleeve, where the signa
 stops being muted.
 
 ### Design / sequencing
+
+**HELM-027 · `DESIGN` · `OPEN` · Decision core — unified verdict engine**
+_Locked s31, carried in memory + git; checkpointed here (the s31 close skipped writing it to the register). Goal: collapse the four divergent decision-logic copies — `paper_manage._evaluate` (the good, DB-driven prototype), `check.assess_position_health`, `check.generate_guidance` + per-strategy deep renderers, and `health.py`'s composite — into one book-agnostic verdict reading `strategy_settings` as the single source of truth._
+Sequence 0→1→2→3→(4,5,6)→7:
+- **WS0** [done · s31 `35838a6`] — `check` real/paper Phase-2 segregation (see Resolved log).
+- **WS1** [in progress] — guarded `strategy_settings` migration of three agreed levers + load-time validation. Levers: CSP `dte_exit_threshold` 7→21; `profit_target_pct` →0.25 on defined-risk credit (IRON_CONDOR · BULL_PUT_SPREAD · BEAR_CALL_SPREAD · JADE_LIZARD); `stop_loss_multiplier` kept 2.0 (earmarked first paper A/B: 2× vs 3× vs no-stop). Writes live `helm.db` → DB discipline.
+- **WS2** — extract `paper_manage._evaluate/_settings` into shared `helm/decision.py` (behaviour-preserving), point `paper_manage` at it.
+- **WS3** [biggest lever] — extend core past premium-only to LONG_CALL/PUT/STRADDLE, then diagonal/PMCC/covered-call; fixes the APLD no-verdict gap, unblocks both books.
+- **WS4** — `check` default → core verdict (replaces `assess_position_health`); `--deep` renderers demoted from deciders to evidence formatters.
+- **WS5** — `/health` GUI → core; repurpose `health.py` 8-indicator composite as deep/GUI evidence.
+- **WS6** — schedule `manage_paper_book()` on a launchd timer (today only fires on `helm check --manage`); confirm `_decision_capture` feeds the corpus.
+- **WS7** — mark-confidence (frozen/stale marks) as a first-class verdict input; gate CLOSE on frozen marks.
+Feeds HELM-023 (which grades core verdicts vs outcomes).
 
 **HELM-023 · `DESIGN` · `DEFERRED` · Learning / look-back layer (the endgame)**
 The core purpose: use the PAPER counterfactual corpus to score and tune HELM's entry/exit levers
