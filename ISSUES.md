@@ -12,7 +12,7 @@ session where the issue was worked.
 - Status: `OPEN` · `DEFERRED` (deliberate, with a trigger) · `RESOLVED` · `WONTFIX`.
 - On resolution: move the line to the **Resolved log** with a one-line outcome + date.
 
-_Last updated: 2026-06-24 (s32 — decision core extracted (WS2) + family coverage (WS3a/b))._
+_Last updated: 2026-06-24 (s33 — decision core WS3c: COVERED_CALL + diagonal family (PMCC/DIAGONAL/DIAGONAL_PUT))._
 
 ---
 
@@ -20,8 +20,8 @@ _Last updated: 2026-06-24 (s32 — decision core extracted (WS2) + family covera
 _Snapshot; refreshed each `helm checkpoint`, read via `helm status`._
 
 - **Phase:** scaffolding complete (live · paper · edge). `schema.sql` is now a faithful builder of live including constraints / defaults / FKs (HELM-002), guarded by a standing `diag_schema_constraints.py`; the hot `positions` table is indexed live (HELM-021). Learning loop still the frontier — corpus accumulating on the clean `core_v1` universe, neutral long-vol (straddle) cell live, REAL opens stamping their originating signal (HELM-012 wired, pending first live fire).
-- **Next highest-leverage:** **HELM-027 decision core** — WS0–WS3b shipped; next are **WS3c** (covered-call/PMCC/diagonal — none live yet) then **WS4** (wire real-book `check` to the core — fixes the APLD verdict gap; relocate `dte` out of `check_cmd` as prep). Beyond it the OPEN backlog is essentially drained — what remains is deferred-by-design or RTH-paired: HELM-019 Part 2 (HELM `assess_position` vs the Fidelity oracle, divergence delta, RTH), HELM-004's remaining multileg legs (thin-name trigger), HELM-023 learning layer (corpus-gated). Parking desk picks: COVERED_CALL gradeability and the `helm status`/`helm checkpoint` CLI.
-- **Last shipped (s32):** decision core — WS2 (`helm/decision.py` extraction) + WS3a/b (family routing: long options profit-on-premium, debit spreads profit-on-max). Earlier s32: WS1 levers + `_validate` guard. Prior (s31): earnings awareness — `helm scan` refreshes `watchlist.next_earnings` (active universe, per-scan cap, stamp-on-success), every `signals` row carries `earnings_date`/`days_to_earnings`/`earnings_warning`, and the scan table shows an Earnings column. `helm open` precise-expiry line deferred by choice.
+- **Next highest-leverage:** **HELM-027 decision core** — WS0–WS3c shipped; next is **WS4** (wire real-book `check` to the core — fixes the APLD verdict gap; relocate `dte` out of `check_cmd` as prep). Beyond it the OPEN backlog is essentially drained — what remains is deferred-by-design or RTH-paired: HELM-019 Part 2 (HELM `assess_position` vs the Fidelity oracle, divergence delta, RTH), HELM-004's remaining multileg legs (thin-name trigger), HELM-023 learning layer (corpus-gated). Parking desk picks: COVERED_CALL gradeability and the `helm status`/`helm checkpoint` CLI.
+- **Last shipped (s33):** decision core WS3c — COVERED family (profit-on-credit, no stop) + DIAGONAL family (PMCC/DIAGONAL/DIAGONAL_PUT, calendar-only off the back/long leg, no profit/stop); DIAGONAL_PUT settings row seeded; calendar tail made family-aware. Prior (s32): WS2 (`helm/decision.py`) + WS3a/b (long/debit family routing) + WS1 levers + `_validate` guard.
 - **Blocked (market/RTH):** `core_v1` IVR backfill for the 12 new names (Mon RTH); HELM-019 stale-marks reconcile vs Fidelity; first paper straddle books on the next RTH scan; HELM-012 first live signal-link fire on the next RTH REAL open.
 - **Counts:** 4 active · 4 parked · last shipped s30 (HELM-006 stale-IVR warn · HELM-004 credit-spread short-leg liquidity · HELM-019 Part 1 Fidelity-oracle column · `helm-servers.sh` retired).
 - **Monday RTH readiness:** no blockers; running server already has all s30 code. Run `helm ivr refresh` early to backfill the 12 new `core_v1` names (else they score `ivr_unknown`). First live exercise of HELM-009 `RequestTimeout` on real opens — watch. HELM-019 stale-mark P&L self-heals once live marks return; the s24 no-close-off-stale-marks guard stands.
@@ -49,12 +49,21 @@ Sequence 0→1→2→3→(4,5,6)→7:
 - **WS0** [done · s31 `35838a6`] — `check` real/paper Phase-2 segregation (see Resolved log).
 - **WS1** [done · s32] — guarded `strategy_settings` migration of three agreed levers + load-time validation (shipped: `_validate` in `models/settings.py`, fail-mode C — hard-fail trade-firing levers, warn advisory, NULL passes). Levers: CSP `dte_exit_threshold` 7→21; `profit_target_pct` →0.25 on defined-risk credit (IRON_CONDOR · BULL_PUT_SPREAD · BEAR_CALL_SPREAD · JADE_LIZARD); `stop_loss_multiplier` kept 2.0 (earmarked first paper A/B: 2× vs 3× vs no-stop). Writes live `helm.db` → DB discipline.
 - **WS2** [done · s32] — extract `paper_manage._evaluate/_settings` into shared `helm/decision.py` (behaviour-preserving), point `paper_manage` at it.
-- **WS3** [biggest lever · 3a+3b done · s32] — extend core past premium-only to LONG_CALL/PUT/STRADDLE, then diagonal/PMCC/covered-call; fixes the APLD no-verdict gap, unblocks both books. **3a** [done s32]: LONG_CALL/PUT family routing in `decision.py` (profit-on-premium, no stop; credit/straddle paths parity-verified unchanged). **3b** [done s32]: DEBIT_SPREAD family in `decision.py` (profit at 50% of max_profit, no stop; settings rows seeded for BEAR_PUT/BULL_CALL; other families parity-verified unchanged). Remaining: **3c** complex (covered-call/PMCC/diagonal). Long/debit verdicts reach the real book at WS4.
+- **WS3** [biggest lever · 3a+3b done · s32] — extend core past premium-only to LONG_CALL/PUT/STRADDLE, then diagonal/PMCC/covered-call; fixes the APLD no-verdict gap, unblocks both books. **3a** [done s32]: LONG_CALL/PUT family routing in `decision.py` (profit-on-premium, no stop; credit/straddle paths parity-verified unchanged). **3b** [done s32]: DEBIT_SPREAD family in `decision.py` (profit at 50% of max_profit, no stop; settings rows seeded for BEAR_PUT/BULL_CALL; other families parity-verified unchanged). **3c** [done s33]: COVERED family (profit-on-credit, no stop) + DIAGONAL family (PMCC/DIAGONAL/DIAGONAL_PUT) calendar-only off the back/long leg (no profit/stop — the income tail is the edge); DIAGONAL_PUT settings row seeded; calendar tail made family-aware (diagonal manages off the back leg, others off nearest). Front-leg roll deferred → HELM-028. All families' verdicts reach the real book at WS4.
 - **WS4** — `check` default → core verdict (replaces `assess_position_health`); `--deep` renderers demoted from deciders to evidence formatters.
 - **WS5** — `/health` GUI → core; repurpose `health.py` 8-indicator composite as deep/GUI evidence.
 - **WS6** — schedule `manage_paper_book()` on a launchd timer (today only fires on `helm check --manage`); confirm `_decision_capture` feeds the corpus.
 - **WS7** — mark-confidence (frozen/stale marks) as a first-class verdict input; gate CLOSE on frozen marks.
 Feeds HELM-023 (which grades core verdicts vs outcomes).
+
+**HELM-028 · `DESIGN` · `DEFERRED` · Diagonal front-leg roll + ITM-assignment flag**
+_Born of WS3c (s33). The diagonal family (PMCC/DIAGONAL/DIAGONAL_PUT) is managed calendar-only off the
+back (long) leg by design — the verdict engine speaks hold/close only and does not model the front-leg
+roll campaign. Consequence: when the short front leg is expiring in-the-money, the core emits no
+assignment-risk signal (the back leg keeps the structure "not near expiry"). Honest gap, not a bug:
+rolling the front is a third action class the close/hold contract can't express. Trigger: a roll executor
+(or a `ROLL_FRONT` advisory verdict) — the WS3-fork Option B we deferred. Until then, front-leg rolls +
+ITM assignment watch are manual._
 
 **HELM-023 · `DESIGN` · `DEFERRED` · Learning / look-back layer (the endgame)**
 The core purpose: use the PAPER counterfactual corpus to score and tune HELM's entry/exit levers

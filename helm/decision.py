@@ -14,6 +14,8 @@ CREDIT_FAMILY = 'CREDIT'
 LONG_DEBIT_FAMILY = 'LONG_DEBIT'
 LONG_VOL_FAMILY = 'LONG_VOL'
 DEBIT_SPREAD_FAMILY = 'DEBIT_SPREAD'
+COVERED_FAMILY = 'COVERED'
+DIAGONAL_FAMILY = 'DIAGONAL'
 
 
 def _family(strategy: str) -> str:
@@ -24,6 +26,10 @@ def _family(strategy: str) -> str:
         return LONG_DEBIT_FAMILY
     if strategy in ('BEAR_PUT_SPREAD', 'BULL_CALL_SPREAD'):
         return DEBIT_SPREAD_FAMILY
+    if strategy == 'COVERED_CALL':
+        return COVERED_FAMILY
+    if strategy in ('PMCC', 'DIAGONAL', 'DIAGONAL_PUT'):
+        return DIAGONAL_FAMILY
     return CREDIT_FAMILY
 
 
@@ -79,11 +85,22 @@ def evaluate(pos, legs, marks: dict):
         # the debit. No stop (max loss is the defined debit). Otherwise calendar.
         if pos.max_profit and (total_pnl / pos.max_profit) >= pt:
             reason = 'PROFIT_TARGET'
+    elif fam == COVERED_FAMILY:
+        # Covered call: only the short call is a tracked leg (stock is external).
+        # Take profit on the call credit; never stop (stock loss is invisible here,
+        # and a rally just means assignment at a capped gain). Otherwise calendar.
+        if credit and (total_pnl / abs(credit)) >= pt:
+            reason = 'PROFIT_TARGET'
     # LONG_VOL (straddle): calendar-only; no profit/stop branch (the convex tail
     # IS the edge, so a profit cap or premium stop would defeat the position).
-    if reason is None and dte_now is not None:
-        if dte_now <= 0:
+    # Diagonal family manages off the BACK (long) leg — the structure is only
+    # "near expiry" when the leg defining its lifespan is. Front-leg roll is out
+    # of scope (deferred roll layer). Others manage off the nearest leg.
+    dte_cal = (max([d for d in dtes if d is not None], default=None)
+               if fam == DIAGONAL_FAMILY else dte_now)
+    if reason is None and dte_cal is not None:
+        if dte_cal <= 0:
             reason = 'EXPIRY'
-        elif dte_now <= dte_exit:
+        elif dte_cal <= dte_exit:
             reason = 'DTE_MANAGE'
     return reason, total_pnl
