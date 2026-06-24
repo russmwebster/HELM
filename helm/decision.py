@@ -10,6 +10,20 @@ DEFAULT_STOP_MULT     = 2.0    # loss = N x credit
 DEFAULT_DTE_EXIT      = 21     # days
 
 
+CREDIT_FAMILY = 'CREDIT'
+LONG_DEBIT_FAMILY = 'LONG_DEBIT'
+LONG_VOL_FAMILY = 'LONG_VOL'
+
+
+def _family(strategy: str) -> str:
+    """Route a strategy to its management family."""
+    if strategy == 'LONG_STRADDLE':
+        return LONG_VOL_FAMILY
+    if strategy in ('LONG_CALL', 'LONG_PUT'):
+        return LONG_DEBIT_FAMILY
+    return CREDIT_FAMILY
+
+
 def _settings(account_id: str, strategy: str) -> dict:
     conn = get_conn()
     row = conn.execute(
@@ -40,19 +54,25 @@ def evaluate(pos, legs, marks: dict):
     dtes = [dte(l.expiration) for l in legs if l.expiration]
     dte_now = min([d for d in dtes if d is not None], default=None)
 
+    fam = _family(pos.strategy)
     reason = None
-    # Long straddle is a long-vol bet: the convex move/vol-pop tail IS the edge,
-    # so the credit-family profit target (which would cap winners) and the
-    # premium stop do not apply. It exits on the DTE/EXPIRY calendar rule only.
-    is_long_vol = pos.strategy == 'LONG_STRADDLE'
-    if not is_long_vol and credit and (total_pnl / abs(credit)) >= pt:
-        reason = 'PROFIT_TARGET'
-    elif not is_long_vol and credit:
-        stop_dollars = stop_mult * abs(credit)
-        if pos.max_loss:
-            stop_dollars = min(stop_dollars, abs(pos.max_loss))
-        if total_pnl <= -stop_dollars:
-            reason = 'STOP'
+    if fam == CREDIT_FAMILY:
+        # Premium-sellers: keep a fraction of credit; stop at a multiple of it.
+        if credit and (total_pnl / abs(credit)) >= pt:
+            reason = 'PROFIT_TARGET'
+        elif credit:
+            stop_dollars = stop_mult * abs(credit)
+            if pos.max_loss:
+                stop_dollars = min(stop_dollars, abs(pos.max_loss))
+            if total_pnl <= -stop_dollars:
+                reason = 'STOP'
+    elif fam == LONG_DEBIT_FAMILY:
+        # Long single options: profit is % gain on premium paid; max loss is the
+        # premium itself, so no credit-style stop. Otherwise exit on the calendar.
+        if credit and (total_pnl / abs(credit)) >= pt:
+            reason = 'PROFIT_TARGET'
+    # LONG_VOL (straddle): calendar-only; no profit/stop branch (the convex tail
+    # IS the edge, so a profit cap or premium stop would defeat the position).
     if reason is None and dte_now is not None:
         if dte_now <= 0:
             reason = 'EXPIRY'
