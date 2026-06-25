@@ -1492,107 +1492,44 @@ def cmd_check_deep(pos: dict, legs: list, assessment: dict, snap: dict):
     console.print()
 
 
+_GUIDANCE = {
+    "PROFIT_TARGET": "Profit target hit — consider closing to bank the gain.",
+    "STOP":          "Stop breached — close or roll to cap the loss.",
+    "DTE_MANAGE":    "In the management window — close or roll before expiry week.",
+    "EXPIRY":        "At or past expiry — act now to avoid assignment.",
+}
+
+
 def generate_guidance(pos: dict, primary: dict, assessment: dict, snap: dict,
                       days_left, pnl_pct, buffer_dollars, buffer_pct) -> list[str]:
-    """Generate actionable guidance text for a position."""
+    """Table-driven guidance: the core verdict decides, this only renders.
+
+    Headline is the band_for headline (assessment["reasons"][0]); the action line
+    is keyed off the core reason; the body is evidence facts. No thresholds here --
+    threshold logic was the drift that let this prose contradict the core verdict.
+    Gated positions (no core_reason) show their legacy headline + facts only.
+    """
+    flag = assessment.get("flag", "UNKNOWN")
+    reason = assessment.get("core_reason")
+    headline = (assessment.get("reasons") or [""])[0]
+    color = {"GREEN": "green", "YELLOW": "yellow", "RED": "red"}.get(flag, "dim")
+
     lines = []
-    flag     = assessment.get("flag", "UNKNOWN")
-    strategy = pos.get("strategy", "")
-    direction = primary.get("direction", "")
-    opt_type  = primary.get("option_type", "")
-    strike    = primary.get("strike", 0)
-    contracts = primary.get("contracts", 0)
-    open_price = primary.get("open_price", 0)
-    net_premium = pos.get("net_premium", 0)
-    expiration = primary.get("expiration", "")
-    ticker = pos.get("ticker", "")
+    if headline:
+        lines.append(f"[{color}]{headline}[/{color}]")
+    action = _GUIDANCE.get(reason)
+    if action:
+        lines.append(action)
 
-    dte_exit = 21
-
-    # ── GREEN guidance ────────────────────────────────────────────────────────
-    if flag == "GREEN":
-        if direction == "SHORT":
-            if pnl_pct is not None and pnl_pct >= 50:
-                lines.append("[green]Profit target reached.[/green] Consider closing now to lock in gains")
-                lines.append("and free up capital for the next trade.")
-                target_dollar = round(abs(net_premium) * 0.50, 0)
-                lines.append(f"Close at market for ~${target_dollar:.0f} total profit.")
-            elif pnl_pct is not None and pnl_pct >= 25:
-                lines.append("Position is tracking well. Let theta continue to work.")
-                if days_left is not None and days_left <= dte_exit + 7:
-                    if days_left <= dte_exit:
-                        lines.append(f"[yellow]AT {dte_exit} DTE threshold — consider closing now.[/yellow]")
-                    else:
-                        lines.append(f"[yellow]Approaching {dte_exit} DTE in ~{days_left - dte_exit} days.[/yellow]")
-                    lines.append("Plan your exit — don't let it slide into the final week.")
-                else:
-                    lines.append(f"No action needed. Re-evaluate at 50% profit or {dte_exit} DTE.")
-            else:
-                lines.append("Early in the trade — position is healthy. Hold.")
-        else:  # LONG
-            if pnl_pct is not None and pnl_pct > 0:
-                lines.append("Long position is profitable. Let it run.")
-                if days_left is not None and days_left <= 30:
-                    lines.append(f"[yellow]{days_left} DTE remaining — time decay accelerating.[/yellow]")
-                    lines.append("Consider taking profits or rolling to a later expiration.")
-            else:
-                lines.append("Position is healthy. Hold and monitor.")
-
-    # ── YELLOW guidance ───────────────────────────────────────────────────────
-    elif flag == "YELLOW":
-        if direction == "SHORT":
-            if days_left is not None and days_left <= dte_exit:
-                lines.append(f"[yellow]{days_left} DTE — at or near your {dte_exit}-day exit threshold.[/yellow]")
-                if pnl_pct is not None and pnl_pct > 0:
-                    lines.append(f"Position is profitable (+{pnl_pct:.0f}%). Close to lock in gains.")
-                elif pnl_pct is not None and pnl_pct < -30:
-                    lines.append("Position is a loss. Evaluate: close and move on, or roll out for credit.")
-                else:
-                    lines.append("Close or roll before the final week to avoid gamma risk.")
-            elif buffer_pct is not None and buffer_pct < 5:
-                lines.append(f"[yellow]Buffer is thin ({buffer_pct:.1f}% to strike).[/yellow]")
-                lines.append("Monitor closely. If underlying continues lower, consider closing")
-                lines.append("or rolling the strike down and out for additional credit.")
-            elif pnl_pct is not None and pnl_pct < -20:
-                lines.append(f"Position down {abs(pnl_pct):.0f}% — monitor closely.")
-                lines.append("If underlying breaks below 1-ATR, consider closing to limit losses.")
-            else:
-                lines.append("Monitor closely. No immediate action required.")
-        else:  # LONG
-            if days_left is not None and days_left <= 21:
-                lines.append(f"[yellow]{days_left} DTE — time decay is accelerating.[/yellow]")
-                if pnl_pct is not None and pnl_pct > 0:
-                    lines.append("Consider taking profits. Don't let a winner decay away.")
-                else:
-                    lines.append("Consider closing to limit further losses from time decay.")
-            elif pnl_pct is not None and pnl_pct < -30:
-                lines.append(f"Long position down {abs(pnl_pct):.0f}%. ")
-                lines.append("Evaluate whether your thesis is still intact.")
-                lines.append("If the underlying isn't moving in your direction, consider closing.")
-
-    # ── RED guidance ──────────────────────────────────────────────────────────
-    elif flag == "RED":
-        if direction == "SHORT":
-            if days_left is not None and days_left <= 7:
-                lines.append(f"[red]{days_left} DTE — expiration risk is high.[/red]")
-                lines.append("Close this position TODAY to avoid assignment risk.")
-                if pnl_pct is not None:
-                    lines.append(f"Current P&L: {pnl_pct:+.0f}%.")
-            elif buffer_pct is not None and buffer_pct < 0:
-                lines.append(f"[red]Position is ITM — underlying has breached your strike.[/red]")
-                lines.append("Immediate action required: close or roll.")
-                lines.append(f"Option: roll to ${strike - 5:.0f} or lower at a later expiration for credit.")
-            else:
-                lines.append("[red]Position requires attention.[/red]")
-                lines.append("Review buffer and DTE. Consider closing or rolling.")
-        else:  # LONG
-            if days_left is not None and days_left <= 7:
-                lines.append(f"[red]{days_left} DTE — close or exercise decision needed.[/red]")
-            else:
-                lines.append("[red]Long position in RED.[/red] Review thesis and consider closing.")
-
-    if not lines:
-        lines.append("Monitor position. No specific action needed at this time.")
+    facts = []
+    if pnl_pct is not None:
+        facts.append(f"P&L {pnl_pct:+.0f}%")
+    if buffer_pct is not None:
+        facts.append(f"buffer {buffer_pct:+.1f}%" + (" (ITM)" if buffer_pct < 0 else ""))
+    if days_left is not None:
+        facts.append(f"{days_left} DTE")
+    if facts:
+        lines.append("[dim]" + " · ".join(facts) + "[/dim]")
 
     return lines
 
