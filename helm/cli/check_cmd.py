@@ -380,17 +380,48 @@ def fetch_yf_data(ticker: str, expiration: str, strike: float,
 # paper_manage would auto-close, so every non-None reason is actionable.
 # Distress (STOP/EXPIRY) -> RED; orderly management (PROFIT_TARGET/DTE_MANAGE)
 # -> YELLOW. Unknown reasons default to YELLOW (surface, don't hide).
-_REASON_BAND = {
-    None:            "GREEN",
-    "PROFIT_TARGET": "YELLOW",
-    "DTE_MANAGE":    "YELLOW",
-    "STOP":          "RED",
-    "EXPIRY":        "RED",
+_REASON_HEADLINE = {
+    "PROFIT_TARGET": ("YELLOW", "Profit target — consider closing"),
+    "STOP":          ("RED",    "Stop breached — close or roll"),
+    "EXPIRY":        ("RED",    "Expiring — act now"),
+    "DTE_MANAGE":    ("YELLOW", "In management window"),
 }
+_FLAG_STYLE = {"GREEN": "bold green", "YELLOW": "bold yellow", "RED": "bold red"}
 
-def band_for(reason):
-    """Map a decision-core reason to a HELM flag band."""
-    return _REASON_BAND.get(reason, "YELLOW")
+def band_for(reason, evidence=None):
+    """Map a decision-core (reason, evidence) to {flag, flag_style, headline}.
+
+    reason owns RED and every action state. On HOLD (reason is None) the position
+    is GREEN unless evidence lifts it to YELLOW (attention without action): thin
+    buffer / ITM (short single-leg) or an underwater P&L past the legacy
+    thresholds. Evidence never escalates to RED -- that stays verdict-only.
+
+    Stale/frozen marks do NOT change the band -- they only append a confirm-at-RTH
+    caveat, so an after-hours board (everything frozen) still triages by state.
+    """
+    ev = evidence or {}
+    if reason is not None:
+        flag, headline = _REASON_HEADLINE.get(reason, ("YELLOW", "Manage"))
+    else:
+        direction = ev.get("direction")
+        buf = ev.get("intrinsic_buffer")
+        pct_buf = ev.get("pct_buffer")
+        _short_single = (direction == "SHORT" and not ev.get("is_multileg")
+                         and buf is not None)
+        if _short_single and buf < 0:
+            flag, headline = "YELLOW", "Holding — ITM, assignment risk"
+        elif _short_single and pct_buf is not None and pct_buf < 3:
+            flag, headline = "YELLOW", "Holding — thin buffer to strike"
+        elif (ev.get("pnl_pct") is not None
+              and ev["pnl_pct"] < (-15 if direction == "SHORT" else -25)):
+            flag, headline = "YELLOW", "Holding — underwater, watch"
+        else:
+            flag, headline = "GREEN", "Holding — healthy"
+
+    mc = ev.get("mark_confidence")
+    if mc in ("frozen", "stale"):
+        headline = f"{headline} · {mc}, confirm at RTH"
+    return {"flag": flag, "flag_style": _FLAG_STYLE[flag], "headline": headline}
 
 def _ns_pos(pos):
     """Wrap a check-side pos dict in the attribute surface evaluate() reads."""
@@ -438,7 +469,7 @@ def core_verdict(pos, legs, opt_legs, primary, opt_data, leg_marks):
     reason, total_pnl = _core_evaluate(
         _ns_pos(pos), [_ns_leg(l) for l in opt_legs], marks
     )
-    return {"flag": band_for(reason), "reason": reason, "core_pnl": total_pnl}
+    return {"reason": reason, "core_pnl": total_pnl}
 
 
 def assess_position(pos: dict, legs: list, underlying_price: Optional[float],
@@ -732,9 +763,22 @@ def check_one(pos: dict, legs: list, deep: bool = False) -> dict:
     try:
         _cv = core_verdict(pos, legs, opt_legs, primary, opt_data, leg_marks)
         if _cv is not None:
-            assessment["core_flag"] = _cv["flag"]
             assessment["core_reason"] = _cv["reason"]
             assessment["core_pnl"] = _cv["core_pnl"]
+            _ib = assessment.get("intrinsic_buffer")
+            _ev = {
+                "pnl_pct": assessment.get("pnl_pct"),
+                "intrinsic_buffer": _ib,
+                "pct_buffer": (_ib / underlying_price * 100)
+                              if _ib is not None and underlying_price else None,
+                "mark_confidence": mark_confidence,
+                "direction": (primary or {}).get("direction"),
+                "is_multileg": len(opt_legs) > 1,
+            }
+            _b = band_for(_cv["reason"], _ev)
+            assessment["flag"] = _b["flag"]
+            assessment["flag_style"] = _b["flag_style"]
+            assessment["reasons"] = [_b["headline"]] + assessment.get("reasons", [])
     except Exception as _e:
         logging.getLogger("helm.check").warning(
             "core_verdict failed for %s: %s", pos.get("ticker"), _e
