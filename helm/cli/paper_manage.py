@@ -15,7 +15,7 @@ from helm.models.leg import Leg
 from helm.cli.check_cmd import fetch_ibkr_option, fetch_yf_data
 from helm.dates import dte
 from helm.cli.close_cmd import _finalize_close
-from helm.decision import evaluate
+from helm.decision import evaluate, evaluate_arms, _stop_ab_active
 
 console = Console()
 
@@ -90,6 +90,10 @@ def manage_paper_book(account_id: Optional[str] = None) -> dict:
             continue
 
         reason, total_pnl = evaluate(pos, legs, marks)
+
+        ab_on = book_live and _stop_ab_active()
+        if ab_on:
+            _record_arms(pos, total_pnl)
         if reason is None:
             held += 1
             console.print(f"  [green]HOLD[/green]  {pos.ticker:<6} {pos.strategy:<16} P&L ${total_pnl:>8,.0f}")
@@ -101,6 +105,8 @@ def manage_paper_book(account_id: Optional[str] = None) -> dict:
             continue
 
         res = _finalize_close(pos, legs, marks, reason=reason)
+        if ab_on:
+            _close_arms(pos.id, res['realized_pnl'])
         closed += 1
         console.print(f"  [bold magenta]CLOSE[/bold magenta] {pos.ticker:<6} {pos.strategy:<16} [{reason}]  Realized ${res['realized_pnl']:>8,.0f}")
 
@@ -108,3 +114,56 @@ def manage_paper_book(account_id: Optional[str] = None) -> dict:
     console.print(f"  closed {closed} · held {held} · deferred {deferred} · skipped {skipped}")
     console.print()
     return {'closed': closed, 'held': held, 'deferred': deferred, 'skipped': skipped}
+
+
+# ---------------------------------------------------------------------------
+# HELM-030  -  counterfactual stop-arm capture (the only writers to
+# stop_arm_events). evaluate_arms() in decision.py stays pure; persistence
+# lives here with the rest of the paper-book side effects.
+# ---------------------------------------------------------------------------
+
+def _record_arms(pos, total_pnl):
+    """Upsert arm rows for one LIVE tick: seed on first sight (freezing
+    threshold_dollars), stamp first-touch trigger. No-op off-experiment
+    (evaluate_arms returns [])."""
+    arms = evaluate_arms(pos, total_pnl)
+    if not arms:
+        return
+    conn = get_conn()
+    try:
+        for a in arms:
+            rid = f"{pos.id}:{a['arm']}"
+            conn.execute(
+                "INSERT OR IGNORE INTO stop_arm_events "
+                "(id, position_id, arm, basis, threshold_dollars, status) "
+                "VALUES (?, ?, ?, ?, ?, 'ACTIVE')",
+                (rid, pos.id, a['arm'], a['basis'], a['threshold_dollars']),
+            )
+            if a['would_trigger']:
+                conn.execute(
+                    "UPDATE stop_arm_events "
+                    "SET triggered_ts = datetime('now'), pnl_at_trigger = ?, "
+                    "    updated_at = datetime('now') "
+                    "WHERE id = ? AND triggered_ts IS NULL",
+                    (total_pnl, rid),
+                )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _close_arms(position_id, realized_pnl):
+    """Stamp the natural (no-stop) exit across a position's still-ACTIVE arm
+    rows - the baseline each candidate arm is graded against."""
+    conn = get_conn()
+    try:
+        conn.execute(
+            "UPDATE stop_arm_events "
+            "SET natural_exit_ts = datetime('now'), natural_exit_pnl = ?, "
+            "    status = 'CLOSED', updated_at = datetime('now') "
+            "WHERE position_id = ? AND status = 'ACTIVE'",
+            (realized_pnl, position_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()

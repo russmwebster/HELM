@@ -73,7 +73,7 @@ def evaluate(pos, legs, marks: dict):
             stop_dollars = stop_mult * abs(credit)
             if pos.max_loss:
                 stop_dollars = min(stop_dollars, abs(pos.max_loss))
-            if total_pnl <= -stop_dollars:
+            if total_pnl <= -stop_dollars and not _ab_suppresses_stop(pos):
                 reason = 'STOP'
     elif fam == LONG_DEBIT_FAMILY:
         # Long single options: profit is % gain on premium paid; max loss is the
@@ -104,3 +104,70 @@ def evaluate(pos, legs, marks: dict):
         elif dte_cal <= dte_exit:
             reason = 'DTE_MANAGE'
     return reason, total_pnl
+
+
+# ---------------------------------------------------------------------------
+# HELM-030  -  stop-loss A/B counterfactual capture
+# ---------------------------------------------------------------------------
+# Basis is per-family: defined-risk credit spreads grade stops as a fraction of
+# MAX LOSS; naked credit (incl. JADE_LIZARD, by design) grades as a multiple of
+# CREDIT. PERM is excluded (not a premium-spine trade). While the A/B is active
+# the ACTING paper verdict runs no-stop (see _ab_suppresses_stop) so looser arms
+# aren't censored; evaluate_arms reports each arm's counterfactual trigger/tick.
+
+DEFINED_RISK_SPREADS = ('BULL_PUT_SPREAD', 'BEAR_CALL_SPREAD', 'IRON_CONDOR')
+NAKED_CREDIT         = ('CSP', 'SHORT_STRANGLE', 'JADE_LIZARD')
+
+
+def _stop_ab_active():
+    """True iff the HELM-030 stop A/B is switched on (helm_meta flag)."""
+    row = get_conn().execute(
+        "SELECT value FROM helm_meta WHERE key = 'stop_ab_active'"
+    ).fetchone()
+    return bool(row) and row[0] == '1'
+
+
+def _ab_suppresses_stop(pos):
+    """During the A/B, paper credit positions (PERM excluded) run no-stop as the
+    acting verdict so looser candidate arms aren't censored. REAL book and PERM
+    are never suppressed; off-experiment this is a no-op."""
+    if getattr(pos, 'book', 'REAL') != 'PAPER':
+        return False
+    if pos.strategy == 'PERM':
+        return False
+    return _stop_ab_active()
+
+
+def evaluate_arms(pos, total_pnl):
+    """HELM-030 counterfactual arm capture (pure; no DB writes).
+
+    Returns one dict per candidate stop arm for a credit-family paper position
+    (PERM excluded):  {arm, basis, threshold_dollars, would_trigger}.
+    threshold_dollars is the dollar loss bar (None for no_stop), derived from
+    entry-static fields (max_loss / net_premium) so it equals its frozen value
+    barring manual position edits. would_trigger is True once total_pnl has
+    reached -threshold at the current marks. Returns [] off-experiment."""
+    credit = pos.net_premium or 0.0
+    if not credit:
+        return []
+
+    if pos.strategy in DEFINED_RISK_SPREADS:
+        if pos.max_loss is None:
+            return []
+        ml = abs(pos.max_loss)
+        arms = [('no_stop', 'MAX_LOSS', None),
+                ('ml_50',   'MAX_LOSS', 0.50 * ml),
+                ('ml_75',   'MAX_LOSS', 0.75 * ml)]
+    elif pos.strategy in NAKED_CREDIT:
+        c = abs(credit)
+        arms = [('no_stop', 'CREDIT_MULT', None),
+                ('cr_2x',   'CREDIT_MULT', 2.0 * c),
+                ('cr_3x',   'CREDIT_MULT', 3.0 * c)]
+    else:
+        return []
+
+    return [
+        {'arm': a, 'basis': b, 'threshold_dollars': t,
+         'would_trigger': (t is not None and total_pnl <= -t)}
+        for (a, b, t) in arms
+    ]
