@@ -12,7 +12,7 @@ session where the issue was worked.
 - Status: `OPEN` · `DEFERRED` (deliberate, with a trigger) · `RESOLVED` · `WONTFIX`.
 - On resolution: move the line to the **Resolved log** with a one-line outcome + date.
 
-_Last updated: 2026-06-25 (s36 - WS6 timer shipped: `helm paper manage` subcommand + `com.helm.paper.manage` launchd agent (10:00/12:30/15:45 EDT Mon-Fri, loaded). Next: HELM-030 %-of-max-loss stop A/B design. WS6 code commit local/unpushed)._
+_Last updated: 2026-06-25 (s36 - WS6 paper-manage timer + WS7 close-on-frozen-marks gate shipped. `manage_paper_book` DEFERs closes when marks aren't IBKR-live. Next: HELM-030 %-of-max-loss stop A/B design. WS6+WS7 commits local/unpushed)._
 
 ---
 
@@ -20,10 +20,10 @@ _Last updated: 2026-06-25 (s36 - WS6 timer shipped: `helm paper manage` subcomma
 _Snapshot; refreshed each `helm checkpoint`, read via `helm status`._
 
 - **Phase:** scaffolding complete (live · paper · edge). `schema.sql` is now a faithful builder of live including constraints / defaults / FKs (HELM-002), guarded by a standing `diag_schema_constraints.py`; the hot `positions` table is indexed live (HELM-021). Learning loop still the frontier — corpus accumulating on the clean `core_v1` universe, neutral long-vol (straddle) cell live, REAL opens stamping their originating signal (HELM-012 wired, pending first live fire).
-- **Next highest-leverage:** **WS6 paper-manage timer - shipped (s36).** `manage_paper_book()` now runs unattended via `helm paper manage` on a launchd agent (`com.helm.paper.manage`, 10:00/12:30/15:45 EDT Mon-Fri); schedule is RTH-only so no in-code clock gate, and the marks-completeness skip-gate no-ops holidays. The corpus clock is running. **Next: the HELM-030 stop A/B design** - add a %-of-max-loss arm alongside the 2×credit basis (inert at real sizes but it fired at paper size on the first run), so `evaluate` computes a defined-risk stop and the corpus stamps which arm each position is under. Downstream: WS5 (`/health`→core), WS7 (mark-confidence gates CLOSE - HD closed pre-open through the freshness seam on the first `manage`, the concrete motivating instance).
-- **Last shipped (s36):** WS6 the paper-manage timer - `helm paper manage` subcommand (ws6a, `paper_cmd.py`) + `com.helm.paper.manage` launchd agent (ws6b, 3-shot RTH, no API key, loaded & lint-clean). First dry-fire: 44 HOLD · 1 CLOSE (HD IC on STOP, pre-open marks) · 1 SKIP (SBUX bear-put, off-spine). Code commit local/unpushed; plist lives outside the repo.
+- **Next highest-leverage:** **WS6 + WS7 shipped (s36) - the paper auto-manager is now safe to run unattended.** WS6: `manage_paper_book()` runs via `helm paper manage` on a launchd agent (`com.helm.paper.manage`, 10:00/12:30/15:45 EDT Mon-Fri). WS7: closes are gated on mark freshness - `_leg_mark` surfaces a per-leg live signal (IBKR-live only), book-level weakest-link, and any close reason on a non-live book DEFERs instead of finalizing (pairs with the completeness skip-gate). Corpus integrity protected. **Next: the HELM-030 stop A/B design** - add a %-of-max-loss arm alongside the 2×credit basis (basis-per-family: %-max-loss for defined-risk spreads, credit-multiple for CSP/naked), acting arm = no-stop so looser arms aren't censored, counterfactual trigger recorded per (position, arm). Remaining downstream: WS5 (`/health`→core).
+- **Last shipped (s36):** WS6 paper-manage timer (ws6a subcommand + ws6b launchd agent) and WS7 close-on-frozen-marks gate (`paper_manage.py`: `_leg_mark`→(mid, is_live), book-level weakest-link, DEFER on non-live close). WS7 dry-fire 10:11 EDT on live marks: 4 CLOSE · 38 HOLD · 0 DEFER · 1 SKIP - live path non-regressive (defer activates only when marks aren't IBKR-live). Both commits local/unpushed.
 - **Blocked (market/RTH):** `core_v1` IVR backfill for the 12 new names (Mon RTH); HELM-019 stale-marks reconcile vs Fidelity; first paper straddle books on the next RTH scan; HELM-012 first live signal-link fire on the next RTH REAL open.
-- **Counts:** 9 active · 5 parked · last shipped s36 (WS6 paper-manage timer).
+- **Counts:** 9 active · 5 parked · last shipped s36 (WS6 timer + WS7 close-gate).
 - **Monday RTH readiness:** no blockers; running server already has all s30 code. Run `helm ivr refresh` early to backfill the 12 new `core_v1` names (else they score `ivr_unknown`). First live exercise of HELM-009 `RequestTimeout` on real opens — watch. HELM-019 stale-mark P&L self-heals once live marks return; the s24 no-close-off-stale-marks guard stands.
 
 ---
@@ -112,6 +112,8 @@ legs" (HELM-018 follow-up)._
 ---
 
 ## Resolved log
+
+- **2026-06-25 (s36)** - **WS7 gate paper auto-manage CLOSE on non-live marks.** `_leg_mark` now returns (mid, is_live) - live iff IBKR-live (source==ibkr and live); ibkr-frozen / yfinance / no-data → not live. `manage_paper_book` carries book-level `book_live` (weakest-link across legs); any `evaluate` close reason on a non-live book DEFERs (logged + counted) instead of `_finalize_close`. Pairs with the completeness skip-gate (skip=missing data, defer=unverified data). `evaluate` untouched - the action gate lives in the manager; `helm check --manage` inherits it. Closes the freshness seam HD walked through pre-open this morning. Dry-fire on live marks non-regressive: 4 CLOSE · 0 DEFER. Code: `paper_manage.py` (hash at checkpoint).
 
 - **2026-06-25 (s36)** - **WS6 paper-book auto-manage on a launchd timer.** Added `helm paper manage` (manage-only entrypoint; `helm check --manage` left intact) and installed `com.helm.paper.manage` firing 10:00/12:30/15:45 EDT Mon-Fri → `logs/paper_manage.log`. Pure-rules, no API key. RTH-only by schedule; holidays no-op via the incomplete-marks skip-gate. Verified loaded (`launchctl print`, state=not running, runs=0) and dry-fired clean (44 HOLD · 1 CLOSE · 1 SKIP). Starts the corpus clock toward HELM-030/031 and HELM-023. Code: `paper_cmd.py` (hash at checkpoint); plist outside the repo.
 

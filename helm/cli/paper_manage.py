@@ -27,13 +27,13 @@ PREMIUM_STRATEGIES = {
 }
 
 
-def _leg_mark(ticker: str, leg) -> Optional[float]:
+def _leg_mark(ticker: str, leg) -> tuple:
     """Current mid for one option leg: IBKR first, yfinance fallback. None if no data."""
     ib = fetch_ibkr_option(ticker, leg.expiration, leg.strike, leg.option_type)
     if ib.get('mid'):
-        return ib['mid']
+        return ib['mid'], bool(ib.get('source') == 'ibkr' and ib.get('live'))
     yf = fetch_yf_data(ticker, leg.expiration, leg.strike, leg.option_type)
-    return yf.get('mid')
+    return yf.get('mid'), False
 
 
 def manage_paper_book(account_id: Optional[str] = None) -> dict:
@@ -48,7 +48,7 @@ def manage_paper_book(account_id: Optional[str] = None) -> dict:
 
     if not ids:
         console.print("[dim]Paper auto-manage: no open paper positions.[/dim]")
-        return {'closed': 0, 'held': 0, 'skipped': 0}
+        return {'closed': 0, 'held': 0, 'deferred': 0, 'skipped': 0}
 
     console.print()
     console.print(Panel.fit(
@@ -56,7 +56,7 @@ def manage_paper_book(account_id: Optional[str] = None) -> dict:
         border_style="cyan",
     ))
 
-    closed = held = skipped = 0
+    closed = held = skipped = deferred = 0
     for pid in ids:
         pos = Position.get(pid)
         if pos is None:
@@ -76,12 +76,14 @@ def manage_paper_book(account_id: Optional[str] = None) -> dict:
 
         marks = {}
         incomplete = False
+        book_live = True
         for leg in legs:
-            m = _leg_mark(pos.ticker, leg)
+            m, is_live = _leg_mark(pos.ticker, leg)
             if m is None:
                 incomplete = True
                 break
             marks[leg.id] = m
+            book_live = book_live and is_live
         if incomplete:
             console.print(f"  [yellow]SKIP[/yellow] {pos.ticker} {pos.strategy} — incomplete marks (never close on bad data)")
             skipped += 1
@@ -93,11 +95,16 @@ def manage_paper_book(account_id: Optional[str] = None) -> dict:
             console.print(f"  [green]HOLD[/green]  {pos.ticker:<6} {pos.strategy:<16} P&L ${total_pnl:>8,.0f}")
             continue
 
+        if not book_live:
+            deferred += 1
+            console.print(f"  [yellow]DEFER[/yellow] {pos.ticker:<6} {pos.strategy:<16} [{reason}]  marks not live - hold for confirm")
+            continue
+
         res = _finalize_close(pos, legs, marks, reason=reason)
         closed += 1
         console.print(f"  [bold magenta]CLOSE[/bold magenta] {pos.ticker:<6} {pos.strategy:<16} [{reason}]  Realized ${res['realized_pnl']:>8,.0f}")
 
     console.print()
-    console.print(f"  closed {closed} · held {held} · skipped {skipped}")
+    console.print(f"  closed {closed} · held {held} · deferred {deferred} · skipped {skipped}")
     console.print()
-    return {'closed': closed, 'held': held, 'skipped': skipped}
+    return {'closed': closed, 'held': held, 'deferred': deferred, 'skipped': skipped}
