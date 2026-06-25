@@ -24,11 +24,17 @@ def run() -> None:
         paper_generate()
         return
 
+    if sub == "manage":
+        from helm.cli.paper_manage import manage_paper_book
+        manage_paper_book()
+        return
+
     console.print("[bold cyan]helm paper[/bold cyan] [dim]- HELM paper book[/dim]")
     console.print()
     console.print("[bold]Subcommands:[/bold]")
     console.print("  [cyan]generate[/cyan]   Paper-open HELM's picks for the latest run's "
                   "passed-on field")
+    console.print("  [cyan]manage[/cyan]     Auto-manage open paper positions (eval -> HOLD/CLOSE)")
     console.print()
     if sub is not None:
         console.print(f"[yellow]Unknown subcommand:[/yellow] {sub}")

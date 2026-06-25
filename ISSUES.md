@@ -12,7 +12,7 @@ session where the issue was worked.
 - Status: `OPEN` · `DEFERRED` (deliberate, with a trigger) · `RESOLVED` · `WONTFIX`.
 - On resolution: move the line to the **Resolved log** with a one-line outcome + date.
 
-_Last updated: 2026-06-25 (s35 — WS4 complete: core verdict authoritative in `check_one` via `band_for(reason, evidence)` — YELLOW-on-hold texture, `mark_confidence` annotates not masks; `generate_guidance` table-driven, drift removed. Patch 3 deferred as gated-fallback. 3 commits local/unpushed)._
+_Last updated: 2026-06-25 (s36 - WS6 timer shipped: `helm paper manage` subcommand + `com.helm.paper.manage` launchd agent (10:00/12:30/15:45 EDT Mon-Fri, loaded). Next: HELM-030 %-of-max-loss stop A/B design. WS6 code commit local/unpushed)._
 
 ---
 
@@ -20,10 +20,10 @@ _Last updated: 2026-06-25 (s35 — WS4 complete: core verdict authoritative in `
 _Snapshot; refreshed each `helm checkpoint`, read via `helm status`._
 
 - **Phase:** scaffolding complete (live · paper · edge). `schema.sql` is now a faithful builder of live including constraints / defaults / FKs (HELM-002), guarded by a standing `diag_schema_constraints.py`; the hot `positions` table is indexed live (HELM-021). Learning loop still the frontier — corpus accumulating on the clean `core_v1` universe, neutral long-vol (straddle) cell live, REAL opens stamping their originating signal (HELM-012 wired, pending first live fire).
-- **Next highest-leverage:** **HELM-027 decision core — WS4 complete.** Core verdict is the authoritative flag across `check`: `evaluate` → `(reason, pnl)`, `band_for(reason, evidence)` sets band + headline (reason owns RED/action; evidence lifts HOLD→YELLOW on underwater/thin-buffer/ITM; `mark_confidence` annotates, never masks), `generate_guidance` table-driven (105-line threshold tree gone). Patch 3 (strip legacy `assess_position` flag) deferred — it is the gated-fallback for covered/PMCC/unmarked positions until covered-call core coverage. Next leverage: **WS6 (paper book on a launchd timer) paired with the stop A/B design** (add a %-of-max-loss arm per HELM-030) — starts the corpus clock toward the 030/031 lifecycle calls and HELM-023. Downstream: WS5 (`/health`→core), WS7 (mark-confidence gates CLOSE).
-- **Last shipped (s35):** WS4 the flip — Patch 1+1b (additive core verdict + try/except guard, `1ed26c5`), Patch 2a (core verdict authoritative + `band_for(reason, evidence)` YELLOW-on-hold + annotate-don't-mask, `71678b3`), Patch 2b (`generate_guidance` table-driven, `819b7f3`). All three **local, unpushed**.
+- **Next highest-leverage:** **WS6 paper-manage timer - shipped (s36).** `manage_paper_book()` now runs unattended via `helm paper manage` on a launchd agent (`com.helm.paper.manage`, 10:00/12:30/15:45 EDT Mon-Fri); schedule is RTH-only so no in-code clock gate, and the marks-completeness skip-gate no-ops holidays. The corpus clock is running. **Next: the HELM-030 stop A/B design** - add a %-of-max-loss arm alongside the 2×credit basis (inert at real sizes but it fired at paper size on the first run), so `evaluate` computes a defined-risk stop and the corpus stamps which arm each position is under. Downstream: WS5 (`/health`→core), WS7 (mark-confidence gates CLOSE - HD closed pre-open through the freshness seam on the first `manage`, the concrete motivating instance).
+- **Last shipped (s36):** WS6 the paper-manage timer - `helm paper manage` subcommand (ws6a, `paper_cmd.py`) + `com.helm.paper.manage` launchd agent (ws6b, 3-shot RTH, no API key, loaded & lint-clean). First dry-fire: 44 HOLD · 1 CLOSE (HD IC on STOP, pre-open marks) · 1 SKIP (SBUX bear-put, off-spine). Code commit local/unpushed; plist lives outside the repo.
 - **Blocked (market/RTH):** `core_v1` IVR backfill for the 12 new names (Mon RTH); HELM-019 stale-marks reconcile vs Fidelity; first paper straddle books on the next RTH scan; HELM-012 first live signal-link fire on the next RTH REAL open.
-- **Counts:** 9 active · 4 parked · last shipped s35 (WS4 the flip — 2a + 2b).
+- **Counts:** 9 active · 5 parked · last shipped s36 (WS6 paper-manage timer).
 - **Monday RTH readiness:** no blockers; running server already has all s30 code. Run `helm ivr refresh` early to backfill the 12 new `core_v1` names (else they score `ivr_unknown`). First live exercise of HELM-009 `RequestTimeout` on real opens — watch. HELM-019 stale-mark P&L self-heals once live marks return; the s24 no-close-off-stale-marks guard stands.
 
 ---
@@ -112,6 +112,8 @@ legs" (HELM-018 follow-up)._
 ---
 
 ## Resolved log
+
+- **2026-06-25 (s36)** - **WS6 paper-book auto-manage on a launchd timer.** Added `helm paper manage` (manage-only entrypoint; `helm check --manage` left intact) and installed `com.helm.paper.manage` firing 10:00/12:30/15:45 EDT Mon-Fri → `logs/paper_manage.log`. Pure-rules, no API key. RTH-only by schedule; holidays no-op via the incomplete-marks skip-gate. Verified loaded (`launchctl print`, state=not running, runs=0) and dry-fired clean (44 HOLD · 1 CLOSE · 1 SKIP). Starts the corpus clock toward HELM-030/031 and HELM-023. Code: `paper_cmd.py` (hash at checkpoint); plist outside the repo.
 
 - **2026-06-23 (s31)** — **Real/paper segregation, Phase 2 (`check`).** Filtered the `helm check` display paths to real-by-default via `db.book_filter`, completing the view segregation begun in Phase 1: `cmd_check_all` (has `args`), `cmd_check_one` (no `args` param — reads `sys.argv`), and the `--deep` all-ticker scan. Routing already supported `--all`/`--paper` through the `else: cmd_check_all(args)` branch, so no control-flow change was needed. `cmd_check_integrity`'s all-book P&L/leg-recompute audits left unfiltered by design. Verified: `helm check` reads 19 real, `--all` sweeps 65, `--paper` runs the paper book alone.
 
@@ -283,6 +285,7 @@ legs" (HELM-018 follow-up)._
 ## Parking lot
 _Future aspirations and enhancements, un-numbered until promoted. On promotion: assign the next free HELM-NNN and move to Active._
 
+- **Mirror launchd plists in-repo** - keep canonical copies of the `com.helm.*` agent plists under a repo `launchd/` dir (today they live only in `~/Library/LaunchAgents`, un-versioned). Why: provenance + reproducibility; a machine rebuild currently loses the schedule definitions. Surfaced s36 installing `com.helm.paper.manage`.
 - **HELM stages & workflow UI** — interactive graphic of HELM's development stages and operational loop (scan → decide → REAL/PAPER → manage → analyze). Productionize the s25 chat workflow diagram + dev-phase status into a navigable interface; build as standalone HTML (static file, or served at `helm.local`); doubles as onboarding. Why: at-a-glance orientation for where the system sits and how the loop runs.
 - **COVERED_CALL gradeability** — populate `stock_positions` (underlying cost basis) so covered calls stop being skipped as "no capital basis" in `analyze edge` (surfaced s25, BSX). Why: every covered call is currently ungradeable.
 - **Setup / onboarding flow** — first-run config (watchlist, broker pathway, account) per the original "built after core strategies" intent. Why: currently assumes a hand-built DB.
