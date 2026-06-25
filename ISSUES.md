@@ -12,7 +12,7 @@ session where the issue was worked.
 - Status: `OPEN` · `DEFERRED` (deliberate, with a trigger) · `RESOLVED` · `WONTFIX`.
 - On resolution: move the line to the **Resolved log** with a one-line outcome + date.
 
-_Last updated: 2026-06-25 (s37 — HELM-030 stop A/B apparatus shipped across three guarded patches: migration (`stop_arm_events` + `stop_ab_active` flag), `decision.evaluate_arms` + flag-gated acting-STOP suppression, `paper_manage` per-tick recorder + natural-exit stamp. Flag OFF — dormant, zero regression. Next: flip the flag at next session open + first managed pass under live marks. P1–P3 source edits + s36 WS6/WS7 commits all local/unpushed)._
+_Last updated: 2026-06-25 (s37 close — HELM-030 stop A/B apparatus shipped, committed 66869db, pushed; flag-gated OFF / dormant. Logged two session findings: HELM-033 (/health is CSP-only + book-blind, should adopt check's REAL-default book_filter) and HELM-034 (SHORT_STRANGLE/JADE_LIZARD guarded at open vs present in the 030 naked arm set — verify arm coverage). Next: flip stop_ab_active at next session open + first managed pass under live marks)._
 
 ---
 
@@ -23,7 +23,7 @@ _Snapshot; refreshed each `helm checkpoint`, read via `helm status`._
 - **Next highest-leverage:** **HELM-030 stop A/B apparatus shipped (s37) — flag-gated, dormant.** Migration: `stop_arm_events` (one row per (position, arm); frozen threshold, first-touch trigger, natural-exit baseline) + `helm_meta['stop_ab_active']='0'`. `decision.evaluate_arms` is pure; basis-per-family — defined-risk spreads on %-of-max-loss (`ml_50`/`ml_75`), naked + JADE_LIZARD on credit-multiple (`cr_2x`/`cr_3x`), PERM excluded; acting arm = no-stop so looser arms aren't censored. `paper_manage` records each live tick under the WS7 freshness gate and stamps the natural exit on close. **Next: flip `stop_ab_active` (guarded `helm_meta` write) at next session open and run the first managed pass under live marks to begin seeding the 39 open paper credit positions.** Downstream: grade arms (HELM-023), then apply the winning stop shape to the REAL acting stop and resolve HELM-032.
 - **Last shipped (s36):** WS6 paper-manage timer (ws6a subcommand + ws6b launchd agent) and WS7 close-on-frozen-marks gate (`paper_manage.py`: `_leg_mark`→(mid, is_live), book-level weakest-link, DEFER on non-live close). WS7 dry-fire 10:11 EDT on live marks: 4 CLOSE · 38 HOLD · 0 DEFER · 1 SKIP - live path non-regressive (defer activates only when marks aren't IBKR-live). Both commits local/unpushed.
 - **Blocked (market/RTH):** `core_v1` IVR backfill for the 12 new names (Mon RTH); HELM-019 stale-marks reconcile vs Fidelity; first paper straddle books on the next RTH scan; HELM-012 first live signal-link fire on the next RTH REAL open.
-- **Counts:** 9 active · 5 parked · last shipped s37 (HELM-030 stop A/B apparatus, flag-gated off).
+- **Counts:** 11 active · 5 parked · last shipped s37 (HELM-030 stop A/B apparatus, flag-gated off; HELM-033/034 logged at s37 close).
 - **Monday RTH readiness:** no blockers; running server already has all s30 code. Run `helm ivr refresh` early to backfill the 12 new `core_v1` names (else they score `ivr_unknown`). First live exercise of HELM-009 `RequestTimeout` on real opens — watch. HELM-019 stale-mark P&L self-heals once live marks return; the s24 no-close-off-stale-marks guard stands.
 
 ---
@@ -42,6 +42,9 @@ net-structure liquidity. Trigger: the thin-name thematic sleeve, where the signa
 stops being muted.
 
 ### Design / sequencing
+
+**HELM-034 · `QUESTION` · `OPEN` · SHORT_STRANGLE / JADE_LIZARD in the HELM-030 naked arm set but guarded off-limits at open**
+_Surfaced s37. `helm open` refuses SHORT_STRANGLE and JADE_LIZARD by design (per the CLI reference), yet `decision.evaluate_arms` includes both in the naked-credit arm set (`cr_2x`/`cr_3x`). Those arms can therefore only receive data from legacy/imported positions, if any — otherwise they are dead branches in the A/B. Verify next session whether any open paper SHORT_STRANGLE/JADE_LIZARD positions exist; if not, drop the arms or document them as import-only. Bears on whether part of the s37 build is exercised._
 
 **HELM-027 · `DESIGN` · `OPEN` · Decision core — unified verdict engine**
 _Locked s31, carried in memory + git; checkpointed here (the s31 close skipped writing it to the register). Goal: collapse the four divergent decision-logic copies — `paper_manage._evaluate` (the good, DB-driven prototype), `check.assess_position_health`, `check.generate_guidance` + per-strategy deep renderers, and `health.py`'s composite — into one book-agnostic verdict reading `strategy_settings` as the single source of truth._
@@ -87,6 +90,9 @@ _Narrowed s37: A/B measurement apparatus shipped — P1 migration (`stop_arm_eve
 _Surfaced s34 by the WS4 Patch-1 probe. The long-debit branch (LONG_CALL/PUT) has no stop by design (max loss is the premium paid), so the only exits are PROFIT_TARGET or the calendar. Live consequence: 4 long calls deep underwater all read HOLD/GREEN (AAPL -2451, APLD -2408, GOOG -2062, TSLA -1493). Decide intended stance: ride to thesis/calendar (current), or add a thesis-break / loss-fraction trigger to the long-debit branch. Gates the WS4 Patch-2 flip._
 
 ### Ops / enhancement
+
+**HELM-033 · `DEBT` · `OPEN` · `/health` map is CSP-only and book-blind (commingles REAL + PAPER)**
+_Surfaced s37. `helm health` opens `/health`, whose `gather_csp` query filters `status='OPEN' AND strategy='CSP'` with no book filter — so the browser map mixes REAL and PAPER CSPs, and the noise worsens as the paper book grows. `helm check` already defaults to REAL via `book_filter` (`--paper`/`--all` to widen); bring `/health` up to the same default (REAL, opt-in for paper). Also CSP-only, so it is not a whole-book health view regardless. Pairs with the WS5 work that wired /health to the core verdict._
 
 **HELM-032 · `DEBT` · `OPEN` · Deep-view "Break-even & Stop" block uses a 1x-credit stop, disagrees with the core 2x verdict**
 _Surfaced s35 in `helm check RKLB --deep`. The "Break-even & Stop" evidence block computes its own 1×-credit stop ("1× Stop loss $4,140 · 148% used") and reads as blown right beside a core verdict of YELLOW/HOLD — correct, because the core uses the 2×-credit stop (HELM-030). Same drift species 2b removed from `generate_guidance`, in a deep-renderer block 2b didn't touch. Render the stop on the same basis as the authoritative verdict (or label it explicitly as 1× reference). Resolve with HELM-030 (the stop-shape decision)._
