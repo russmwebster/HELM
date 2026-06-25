@@ -29,6 +29,8 @@ from pathlib import Path
 from datetime import date, datetime, time
 from typing import Optional
 import math
+from types import SimpleNamespace
+from helm.decision import evaluate as _core_evaluate
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 logging.getLogger("ib_insync").setLevel(logging.CRITICAL)
@@ -372,6 +374,73 @@ def fetch_yf_data(ticker: str, expiration: str, strike: float,
 
 # ── Health assessment logic ───────────────────────────────────────────────────
 
+
+# -- WS4: decision-core verdict adapter (additive) -----------------------------
+# reason -> flag band. None is the only HOLD; a non-None reason is exactly when
+# paper_manage would auto-close, so every non-None reason is actionable.
+# Distress (STOP/EXPIRY) -> RED; orderly management (PROFIT_TARGET/DTE_MANAGE)
+# -> YELLOW. Unknown reasons default to YELLOW (surface, don't hide).
+_REASON_BAND = {
+    None:            "GREEN",
+    "PROFIT_TARGET": "YELLOW",
+    "DTE_MANAGE":    "YELLOW",
+    "STOP":          "RED",
+    "EXPIRY":        "RED",
+}
+
+def band_for(reason):
+    """Map a decision-core reason to a HELM flag band."""
+    return _REASON_BAND.get(reason, "YELLOW")
+
+def _ns_pos(pos):
+    """Wrap a check-side pos dict in the attribute surface evaluate() reads."""
+    return SimpleNamespace(
+        account_id=pos.get("account_id"),
+        strategy=pos.get("strategy"),
+        net_premium=pos.get("net_premium"),
+        max_profit=pos.get("max_profit"),
+        max_loss=pos.get("max_loss"),
+    )
+
+def _ns_leg(leg):
+    """Wrap a check-side leg dict in the attribute surface evaluate() reads."""
+    return SimpleNamespace(
+        id=leg.get("id"),
+        direction=leg.get("direction"),
+        open_price=leg.get("open_price"),
+        contracts=leg.get("contracts"),
+        multiplier=leg.get("multiplier"),
+        expiration=leg.get("expiration"),
+    )
+
+def core_verdict(pos, legs, opt_legs, primary, opt_data, leg_marks):
+    """Decision-core verdict for a check-side position, or None if the core
+    can't be applied (stock leg present, or any option leg unmarked) -- mirrors
+    paper_manage's gate so we never emit a verdict off incomplete marks.
+    Marks are derived from prices check_one already fetched (opt_data['mid'] for
+    the primary, leg_marks for the rest), so core P&L agrees with displayed P&L.
+    Returns {flag, reason, core_pnl}."""
+    if not opt_legs:
+        return None
+    if any(l.get("option_type") in (None, "STOCK") for l in legs):
+        return None  # covered/PMCC stock leg: deferred (COVERED_CALL gradeability)
+    marks = {}
+    if primary is not None and opt_data.get("mid") is not None:
+        marks[primary["id"]] = opt_data["mid"]
+    for lg in opt_legs:
+        if lg["id"] in marks:
+            continue
+        key = (lg.get("option_type"), lg.get("strike"))
+        if key in leg_marks:
+            marks[lg["id"]] = leg_marks[key]
+    if any(lg["id"] not in marks for lg in opt_legs):
+        return None  # incomplete marks -> no verdict (mirrors paper_manage)
+    reason, total_pnl = _core_evaluate(
+        _ns_pos(pos), [_ns_leg(l) for l in opt_legs], marks
+    )
+    return {"flag": band_for(reason), "reason": reason, "core_pnl": total_pnl}
+
+
 def assess_position(pos: dict, legs: list, underlying_price: Optional[float],
                     opt_data: dict, strategy_settings: dict,
                     leg_marks: Optional[dict] = None,
@@ -657,6 +726,19 @@ def check_one(pos: dict, legs: list, deep: bool = False) -> dict:
         "pos": pos,
         "legs": legs,
     })
+
+    # WS4: decision-core verdict (additive; legacy flag retained for diff).
+    # Guarded: a core failure must never break the legacy check (zero-regression).
+    try:
+        _cv = core_verdict(pos, legs, opt_legs, primary, opt_data, leg_marks)
+        if _cv is not None:
+            assessment["core_flag"] = _cv["flag"]
+            assessment["core_reason"] = _cv["reason"]
+            assessment["core_pnl"] = _cv["core_pnl"]
+    except Exception as _e:
+        logging.getLogger("helm.check").warning(
+            "core_verdict failed for %s: %s", pos.get("ticker"), _e
+        )
 
     # Save check to DB silently
     save_check(pos["id"], assessment, pos)
