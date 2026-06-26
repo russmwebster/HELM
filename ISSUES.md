@@ -12,7 +12,7 @@ session where the issue was worked.
 - Status: `OPEN` · `DEFERRED` (deliberate, with a trigger) · `RESOLVED` · `WONTFIX`.
 - On resolution: move the line to the **Resolved log** with a one-line outcome + date.
 
-_Last updated: 2026-06-25 (s37 close — HELM-030 stop A/B apparatus shipped, committed 66869db, pushed; flag-gated OFF / dormant. Logged two session findings: HELM-033 (/health is CSP-only + book-blind, should adopt check's REAL-default book_filter) and HELM-034 (SHORT_STRANGLE/JADE_LIZARD guarded at open vs present in the 030 naked arm set — verify arm coverage). Next: flip stop_ab_active at next session open + first managed pass under live marks)._
+_Last updated: 2026-06-25 (s38 close — analysis/education session, no code shipped. Pulled MCD/WELL trajectories from the `checks` table (80 / 37 snapshots) and charted them; found + logged HELM-035 (pre-6/18 `pnl_pct` basis discontinuity on MCD, early rows >100% of max profit). Prototyped in-chat trade visuals (IC health-ladder, price-vs-zone trajectory) → parked as candidate `helm` deep-views. STILL PENDING from s37: flip `stop_ab_active` → '1' + first managed pass. Next session = 21-DTE morning for MCD/WELL: live re-pull → HELM-035 sweep → build price/P&L/IV story strip + theta-gamma crossover → price WELL call-roll)._
 
 ---
 
@@ -23,7 +23,7 @@ _Snapshot; refreshed each `helm checkpoint`, read via `helm status`._
 - **Next highest-leverage:** **HELM-030 stop A/B apparatus shipped (s37) — flag-gated, dormant.** Migration: `stop_arm_events` (one row per (position, arm); frozen threshold, first-touch trigger, natural-exit baseline) + `helm_meta['stop_ab_active']='0'`. `decision.evaluate_arms` is pure; basis-per-family — defined-risk spreads on %-of-max-loss (`ml_50`/`ml_75`), naked + JADE_LIZARD on credit-multiple (`cr_2x`/`cr_3x`), PERM excluded; acting arm = no-stop so looser arms aren't censored. `paper_manage` records each live tick under the WS7 freshness gate and stamps the natural exit on close. **Next: flip `stop_ab_active` (guarded `helm_meta` write) at next session open and run the first managed pass under live marks to begin seeding the 39 open paper credit positions.** Downstream: grade arms (HELM-023), then apply the winning stop shape to the REAL acting stop and resolve HELM-032.
 - **Last shipped (s36):** WS6 paper-manage timer (ws6a subcommand + ws6b launchd agent) and WS7 close-on-frozen-marks gate (`paper_manage.py`: `_leg_mark`→(mid, is_live), book-level weakest-link, DEFER on non-live close). WS7 dry-fire 10:11 EDT on live marks: 4 CLOSE · 38 HOLD · 0 DEFER · 1 SKIP - live path non-regressive (defer activates only when marks aren't IBKR-live). Both commits local/unpushed.
 - **Blocked (market/RTH):** `core_v1` IVR backfill for the 12 new names (Mon RTH); HELM-019 stale-marks reconcile vs Fidelity; first paper straddle books on the next RTH scan; HELM-012 first live signal-link fire on the next RTH REAL open.
-- **Counts:** 11 active · 5 parked · last shipped s37 (HELM-030 stop A/B apparatus, flag-gated off; HELM-033/034 logged at s37 close).
+- **Counts:** 12 active · 6 parked · last shipped s37 (no s38 ship — analysis session; HELM-035 logged at s38 close).
 - **Monday RTH readiness:** no blockers; running server already has all s30 code. Run `helm ivr refresh` early to backfill the 12 new `core_v1` names (else they score `ivr_unknown`). First live exercise of HELM-009 `RequestTimeout` on real opens — watch. HELM-019 stale-mark P&L self-heals once live marks return; the s24 no-close-off-stale-marks guard stands.
 
 ---
@@ -117,6 +117,9 @@ there when that loop is reworked; pairs with the carried "mid-only fast fetch fo
 legs" (HELM-018 follow-up)._
 
 ---
+
+**HELM-035 · `DATA` · `OPEN` · Check-history `pnl_pct` mis-scaled before a per-position basis flip (MCD pre-2026-06-18)**
+_Found s38 while charting MCD/WELL trajectories from `checks`. MCD (`MCD-IC-20260609-MANUAL`) checks before 2026-06-18 carry `pnl_pct` of 560–1420% and `pnl_unrealized` peaks (~$3,720) that exceed the position's max profit (~$3,186); from 2026-06-18 on, the basis normalizes to a correct % of max profit (−1020 → −31.5% etc.). Smells like a re-mark / re-import on the 18th. WELL (opened 6/17) shows no break — basis consistent throughout. Risk: HELM-023's learning layer correlates entry features against historical outcome `pnl_pct`; mis-scaled early rows would poison it. Action: systemic sweep — isolated to MCD (pre-fix import artifact) or across all positions opened before some date? Promotes the s24 carried invariant (persisted `pnl_pct` > 100% on a credit structure → FAIL) from hypothetical to observed; that invariant is the natural guard + detector. Blocks nothing today; gating consideration for HELM-023._
 
 ## Resolved log
 
@@ -302,6 +305,8 @@ _Future aspirations and enhancements, un-numbered until promoted. On promotion: 
 
 ---
 
+- **Trade-story visualization deep-views** — prototyped in-chat s38: (a) IC health "ladder" (profit/cushion/losing/max-loss zones + live-price marker); (b) price-vs-zone trajectory from `checks`; (c) planned price/P&L/IV three-panel story strip + a theta-vs-gamma crossover risk view (gamma climbing on a tested short as DTE shrinks). Why: turns the read-only `checks` corpus into a position narrative the trader can scan. Today they're ad-hoc bridge/chat renders; candidate to promote into real `helm` deep-view output.
+
 ## Carried threads · un-promoted follow-ups
 
 Not yet promoted to numbered issues; pull in as they get worked.
@@ -335,9 +340,15 @@ trust-handover staging model.
 **s26:**
 - Monday RTH: `helm ivr refresh` to backfill IVR on the 12 `core_v1` adds (they scan via the `ivr_unknown` score-only path until then).
 - `helm ivr refresh` churns all 206 watchlist names, not just the active 65 — harmless, but scoping it to `active` is a small OPS nicety worth a future ticket.
-- Uncommitted after this checkpoint: `patch_issues_s26.py` + `ISSUES.md` — commit on the usual explicit-named-files step; push separate. (Cull/fix landed in commit `469c3cc`.)
 
 **s27:**
 - WELL half-link cleanup — its signal is `russ_action=OPEN` but `position_id` NULL (the s24 backfill flipped the action without stamping the position side). One-line data fix to complete or reset the link; HELM-012 prevents recurrence going forward.
 - Conviction not stored — `signals` has no `conviction` column; the scan's Low/Mod/High is derived at display (off `top_fit`/fit_score). HELM-023 will need a real source when it scores conviction.
-- Uncommitted after this checkpoint: `ISSUES.md` (this register update) — commit on the usual explicit-named-files step. Unpushed: `5445b61` (HELM-026 enum) + `52bcda7` (HELM-025 guard) + this `ISSUES.md` commit; origin/main is at `315f4a1` — push together.
+
+**s38:**
+- Live re-pull (RTH) of MCD + WELL — extends the s24 HELM-018 thread; today's frozen check P&L (MCD −1020, WELL −4080) still diverges from live Fidelity (MCD −1934, WELL −6292), so the convergence gap is open.
+- HELM-035 systemic sweep — scan all positions for persisted `pnl_pct` > 100% on credit structures; decide isolated-vs-systemic before any HELM-023 corpus use.
+- Story-strip build — price/P&L/IV three-panel (from `checks`, no live marks needed) + theta-gamma crossover (needs live greeks). Anchor the IV panel on entry IV from `entry_snapshots` (`checks.iv_vs_entry` is NULL).
+- WELL call-roll pricing on live quotes (roll tested 220/230 up/out) at the 21-DTE decision point.
+- STILL PENDING (s37): flip `stop_ab_active` → '1' (guarded `helm_meta` write) + first managed pass — deferred through s38, not dropped.
+- Workflow HTML check (s38 open, unresolved) — locate via `git ls-files '*.html'` / targeted `ls`; confirm whether it needs updating. Bridge hung on a repo-wide `find`; use targeted reads.
