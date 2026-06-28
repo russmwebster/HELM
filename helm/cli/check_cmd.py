@@ -199,6 +199,12 @@ def save_check(position_id: str, assessment: dict, pos: dict) -> None:
     now = datetime.now().isoformat()
     has_option_data = opt.get("bid") is not None or opt.get("mid") is not None
     dq = "GOOD" if ("live" in source and has_option_data) else "PARTIAL"
+    # HELM-037 live-only persistence gate: only GOOD (live + complete) marks are
+    # written. Frozen / partial / yfinance reads are still computed and displayed
+    # (the caller renders the returned assessment) but never persisted, keeping the
+    # checks table a clean live record. Skipping the INSERT here has no display effect.
+    if dq != "GOOD":
+        return
 
     try:
         with _tx() as conn:
