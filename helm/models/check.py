@@ -99,6 +99,35 @@ class Check:
             conn.close()
 
     @classmethod
+    def latest_good(cls, position_id: str) -> Optional[Check]:
+        conn = get_conn()
+        try:
+            row = conn.execute(
+                "SELECT * FROM checks WHERE position_id = ? AND data_quality = 'GOOD' "
+                "ORDER BY checked_at DESC LIMIT 1",
+                (position_id,)
+            ).fetchone()
+            return cls.from_row(row) if row else None
+        finally:
+            conn.close()
+
+    @classmethod
+    def daily_good_series(cls, position_id: str, limit: int = 90) -> list[Check]:
+        # Last GOOD check per calendar day, oldest -> newest (trend input).
+        conn = get_conn()
+        try:
+            rows = conn.execute(
+                "SELECT * FROM checks WHERE position_id = ? AND data_quality = 'GOOD' "
+                "AND checked_at IN (SELECT MAX(checked_at) FROM checks "
+                "WHERE position_id = ? AND data_quality = 'GOOD' GROUP BY date(checked_at)) "
+                "ORDER BY checked_at ASC LIMIT ?",
+                (position_id, position_id, limit)
+            ).fetchall()
+            return [cls.from_row(r) for r in rows]
+        finally:
+            conn.close()
+
+    @classmethod
     def flagged(cls, flag: str = 'RED', account_id: Optional[str] = None) -> list[Check]:
         conn = get_conn()
         try:
@@ -166,3 +195,36 @@ class Check:
 
     def __str__(self) -> str:
         return f'[{self.health_flag}] {self.action_signal} @ {self.checked_at[:10]} — {self.narrative or "no narrative"}'
+
+
+# --- HELM-036: shared GOOD-check P&L bound -----------------------------------
+# Exact copy of health.py _pnl_pick so the Stage-4 swap is behaviorally a no-op.
+# health's local copy is retired in Stage 4.
+def _pnl_pick(greeks_source, recorded, bs, max_loss, max_profit):
+    gs = (greeks_source or "").lower()
+    lo = -(abs(max_loss) + 1.0) if max_loss is not None else None
+    hi = (abs(max_profit) + 1.0) if max_profit is not None else None
+    def ok(v):
+        if v is None:
+            return False
+        if lo is not None and v < lo:
+            return False
+        if hi is not None and v > hi:
+            return False
+        return True
+    if gs.startswith("ibkr") and ok(recorded):
+        return recorded, ("IBKR frozen" if "frozen" in gs else "IBKR")
+    if gs.startswith("yfinance") and ok(recorded):
+        return recorded, "yfinance"
+    if bs is not None:
+        return bs, "BS est"
+    if ok(recorded):
+        return recorded, "recorded"
+    return None, "n/a"
+
+
+def bounded_pnl(check, max_loss, max_profit, bs=None):
+    # Clamp a check's P&L via _pnl_pick. Returns (pnl, source).
+    return _pnl_pick(getattr(check, "greeks_source", None),
+                     getattr(check, "pnl_unrealized", None),
+                     bs, max_loss, max_profit)
