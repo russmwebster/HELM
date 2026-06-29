@@ -14,6 +14,7 @@
 # is missing so it stays weighted.
 
 from __future__ import annotations
+from helm.models.check import _pnl_pick
 
 # ── Cell colour stops (per individual 0-10 score) ────────────────────────────
 # Each: bg, border, label-text, value-text
@@ -206,7 +207,7 @@ def gather_csp(conn, ticker=None):
         FROM positions p
         JOIN legs l ON l.position_id = p.id AND l.leg_role = 'SHORT_PUT'
         LEFT JOIN checks c ON c.id = (
-            SELECT id FROM checks WHERE position_id = p.id
+            SELECT id FROM checks WHERE position_id = p.id AND data_quality = 'GOOD'
             ORDER BY checked_at DESC LIMIT 1
         )
         WHERE p.status = 'OPEN' AND p.strategy = 'CSP'
@@ -837,7 +838,7 @@ def gather_longcall(conn, ticker=None):
         FROM positions p
         JOIN legs l ON l.position_id = p.id AND l.leg_role = 'LONG_CALL'
         LEFT JOIN checks c ON c.id = (
-            SELECT id FROM checks WHERE position_id = p.id
+            SELECT id FROM checks WHERE position_id = p.id AND data_quality = 'GOOD'
             ORDER BY checked_at DESC LIMIT 1
         )
         WHERE p.status = 'OPEN' AND p.strategy = 'LONG_CALL'
@@ -1208,7 +1209,7 @@ def gather_icondor(conn, ticker=None):
                c.pnl_unrealized, c.iv_current, c.iv_vs_entry, c.checked_at, c.greeks_source, c.data_quality
         FROM positions p
         LEFT JOIN checks c ON c.id = (
-            SELECT id FROM checks WHERE position_id = p.id
+            SELECT id FROM checks WHERE position_id = p.id AND data_quality = 'GOOD'
             ORDER BY checked_at DESC LIMIT 1
         )
         WHERE p.status = 'OPEN' AND p.strategy = 'IRON_CONDOR'
@@ -1665,7 +1666,7 @@ def s_bps_max_profit(p):
     return 0
 
 def gather_bearput(conn, ticker=None):
-    sql = """SELECT p.id,p.ticker,p.company_name,p.net_premium,p.total_contracts,p.max_loss,p.max_profit,p.earnings_date,c.spot_price,c.delta,c.theta,c.dte_now,c.pnl_unrealized,c.iv_current,c.checked_at,c.greeks_source,c.data_quality FROM positions p LEFT JOIN checks c ON c.id=(SELECT id FROM checks WHERE position_id=p.id ORDER BY checked_at DESC LIMIT 1) WHERE p.status='OPEN' AND p.strategy='BEAR_PUT_SPREAD'"""
+    sql = """SELECT p.id,p.ticker,p.company_name,p.net_premium,p.total_contracts,p.max_loss,p.max_profit,p.earnings_date,c.spot_price,c.delta,c.theta,c.dte_now,c.pnl_unrealized,c.iv_current,c.checked_at,c.greeks_source,c.data_quality FROM positions p LEFT JOIN checks c ON c.id=(SELECT id FROM checks WHERE position_id=p.id AND data_quality='GOOD' ORDER BY checked_at DESC LIMIT 1) WHERE p.status='OPEN' AND p.strategy='BEAR_PUT_SPREAD'"""
     args = []
     if ticker:
         sql += " AND p.ticker=?"
@@ -1839,27 +1840,3 @@ def _legend_bps():
         + "<span class='keyitem'><span class='sqr' style='background:#b9b7ae'></span>no data</span>"
         + "<span class='sep'>\u00b7</span><span class='keynote'>cell size = variable weight</span></div>")
     return keyline + "<div class='vardefs-title'>Bear Put Spread \u2014 variable definitions &amp; scoring</div>" + "<div class='vgrid'>" + ''.join(cards) + "</div>"
-
-
-
-def _pnl_pick(greeks_source, recorded, bs, max_loss, max_profit):
-    gs = (greeks_source or "").lower()
-    lo = -(abs(max_loss) + 1.0) if max_loss is not None else None
-    hi = (abs(max_profit) + 1.0) if max_profit is not None else None
-    def ok(v):
-        if v is None:
-            return False
-        if lo is not None and v < lo:
-            return False
-        if hi is not None and v > hi:
-            return False
-        return True
-    if gs.startswith("ibkr") and ok(recorded):
-        return recorded, ("IBKR frozen" if "frozen" in gs else "IBKR")
-    if gs.startswith("yfinance") and ok(recorded):
-        return recorded, "yfinance"
-    if bs is not None:
-        return bs, "BS est"
-    if ok(recorded):
-        return recorded, "recorded"
-    return None, "n/a"
