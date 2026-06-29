@@ -230,7 +230,12 @@ def gather_csp(conn, ticker=None):
         r["be_buffer_pct"] = (spot - be) / spot * 100 if (spot and be) else None
         r["strike_buffer_pct"] = (spot - strike) / spot * 100 if (spot and strike) else None
         nprem = r["net_premium"]
-        pnl = r["pnl_unrealized"]
+        # HELM-036 4b: bound recorded P&L to structural limits (DB max_loss/max_profit are NULL for CSP -> compute in-loop)
+        _ctr = r["contracts"] or 1
+        _mp = nprem
+        _ml = (strike * 100 * _ctr - nprem) if (strike is not None and nprem is not None) else None
+        pnl, r["pnl_source"] = _pnl_pick(None, r["pnl_unrealized"], None, _ml, _mp)
+        r["pnl_display"] = pnl
         r["stop_used_pct"] = (max(0.0, -pnl) / nprem * 100) if (nprem and pnl is not None) else None
         # theta recovery days: loss / daily theta income
         theta = r["theta"]
@@ -512,7 +517,7 @@ def _earnings_chip(earnings_date, expiration=None):
 
 def _summary_facts(r):
     spot = r["spot_price"]
-    pnl = r["pnl_unrealized"]
+    pnl = r.get("pnl_display", r["pnl_unrealized"])
     pill_cls = "pill-g" if (pnl is not None and pnl >= 0) else "pill-r"
     pill = f'<span class="pill {pill_cls} mono">{_money(pnl)}</span>' if pnl is not None else ""
     itm = '<span class="badge-itm">ITM</span>' if r["itm"] else ""
@@ -870,8 +875,10 @@ def gather_longcall(conn, ticker=None):
         else:
             r["theta_decay_pct"] = None
         # stop used (premium paid = max loss for a long)
-        pnl = r["pnl_unrealized"]
         nprem = r["net_premium"]
+        # HELM-036 4b: bound recorded P&L; long-call max loss = premium paid, upside uncapped
+        pnl, r["pnl_source"] = _pnl_pick(None, r["pnl_unrealized"], None, (abs(nprem) if nprem else None), None)
+        r["pnl_display"] = pnl
         r["stop_used_pct"] = (max(0.0, -pnl) / abs(nprem) * 100) if (nprem and pnl is not None) else None
         # itm flag (for long call: spot > strike = ITM = good)
         r["itm"] = (spot is not None and strike is not None and spot > strike)
@@ -1004,7 +1011,7 @@ def _render_map_lc(r, sc):
 
 def _summary_facts_lc(r):
     spot = r["spot_price"]
-    pnl = r["pnl_unrealized"]
+    pnl = r.get("pnl_display", r["pnl_unrealized"])
     strike = r["strike"]
     itm = r["itm"]
     spot_str = f"{spot:.2f}" if spot is not None else "\u2014"
