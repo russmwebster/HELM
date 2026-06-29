@@ -20,6 +20,7 @@ from rich import box
 
 from helm.db import get_conn
 from helm.config import get_active_account
+from helm.models.check import _pnl_pick
 
 console = Console()
 
@@ -222,7 +223,7 @@ def cmd_trends(args):
     # Get all positions with check history
     positions = conn.execute("""
         SELECT p.id, p.ticker, p.strategy, p.status, p.realized_pnl,
-               p.opened_at, p.closed_at, p.net_premium
+               p.opened_at, p.closed_at, p.net_premium, p.max_loss, p.max_profit
         FROM positions p
         WHERE EXISTS (SELECT 1 FROM checks c WHERE c.position_id = p.id AND c.data_quality = 'GOOD')
         ORDER BY p.opened_at DESC
@@ -254,7 +255,7 @@ def cmd_trends(args):
     for pos in positions:
         checks_raw = conn.execute("""
             SELECT checked_at, delta, iv_current, iv_rank, pnl_unrealized,
-                   delta_vs_entry, iv_vs_entry, health_flag, rth_flag
+                   delta_vs_entry, iv_vs_entry, health_flag, rth_flag, greeks_source
             FROM checks
             WHERE position_id = ? AND data_quality = 'GOOD'
             ORDER BY checked_at ASC
@@ -295,7 +296,7 @@ def cmd_trends(args):
 
         latest_health = latest['health_flag'] or '--'
         health_color  = {'GREEN': 'green', 'YELLOW': 'yellow', 'RED': 'red'}.get(latest_health, 'dim')
-        pnl = latest['pnl_unrealized'] if pos['status'] == 'OPEN' else pos['realized_pnl']
+        pnl = _pnl_pick(latest['greeks_source'], latest['pnl_unrealized'], None, pos['max_loss'], pos['max_profit'])[0] if pos['status'] == 'OPEN' else pos['realized_pnl']
 
         drift_str = "--"
         if delta_drift_per_day is not None:
@@ -420,7 +421,7 @@ def cmd_position(args):
             ch_tbl.add_row(
                 c['checked_at'][:10],
                 f"${c['spot_price']:.2f}" if c['spot_price'] else "--",
-                _fmt_pnl(c['pnl_unrealized']),
+                _fmt_pnl(_pnl_pick(c['greeks_source'], c['pnl_unrealized'], None, pos['max_loss'], pos['max_profit'])[0]),
                 f"{c['delta']:.3f}" if c['delta'] else "[dim]--[/dim]",
                 f"{c['iv_current']:.1f}%" if c['iv_current'] else "[dim]--[/dim]",
                 _fmt_ivr(c['iv_rank']),
@@ -444,8 +445,10 @@ def cmd_position(args):
                     iv_move = float(last_c['iv_current']) - float(first_c['iv_current'])
                     sign = "+" if iv_move >= 0 else ""
                     console.print(f"    IV movement:  {sign}{iv_move:.1f}%")
-                if first_c['pnl_unrealized'] and last_c['pnl_unrealized']:
-                    pnl_move = float(last_c['pnl_unrealized']) - float(first_c['pnl_unrealized'])
+                _fp = _pnl_pick(first_c['greeks_source'], first_c['pnl_unrealized'], None, pos['max_loss'], pos['max_profit'])[0]
+                _lp = _pnl_pick(last_c['greeks_source'], last_c['pnl_unrealized'], None, pos['max_loss'], pos['max_profit'])[0]
+                if _fp is not None and _lp is not None:
+                    pnl_move = float(_lp) - float(_fp)
                     sign = "+" if pnl_move >= 0 else ""
                     console.print(f"    P&L movement: {sign}${pnl_move:,.0f}")
             except Exception:
