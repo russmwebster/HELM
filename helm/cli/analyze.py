@@ -224,7 +224,7 @@ def cmd_trends(args):
         SELECT p.id, p.ticker, p.strategy, p.status, p.realized_pnl,
                p.opened_at, p.closed_at, p.net_premium
         FROM positions p
-        WHERE EXISTS (SELECT 1 FROM checks c WHERE c.position_id = p.id)
+        WHERE EXISTS (SELECT 1 FROM checks c WHERE c.position_id = p.id AND c.data_quality = 'GOOD')
         ORDER BY p.opened_at DESC
     """).fetchall()
 
@@ -256,7 +256,7 @@ def cmd_trends(args):
             SELECT checked_at, delta, iv_current, iv_rank, pnl_unrealized,
                    delta_vs_entry, iv_vs_entry, health_flag, rth_flag
             FROM checks
-            WHERE position_id = ?
+            WHERE position_id = ? AND data_quality = 'GOOD'
             ORDER BY checked_at ASC
         """, (pos['id'],)).fetchall()
         seen_days2 = {}
@@ -355,7 +355,7 @@ def cmd_position(args):
 
     for pos in positions:
         checks_raw = conn.execute("""
-            SELECT * FROM checks WHERE position_id = ?
+            SELECT * FROM checks WHERE position_id = ? AND data_quality = 'GOOD'
             ORDER BY checked_at ASC
         """, (pos['id'],)).fetchall()
         # Keep only the last check per calendar day
