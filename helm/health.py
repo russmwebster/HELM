@@ -15,6 +15,8 @@
 
 from __future__ import annotations
 from helm.models.check import _pnl_pick
+from helm.verdict import band_for, _ns_pos, _ns_leg
+from helm.decision import evaluate as _core_evaluate
 
 # ── Cell colour stops (per individual 0-10 score) ────────────────────────────
 # Each: bg, border, label-text, value-text
@@ -200,17 +202,17 @@ def _fmt(x, suffix="", dash="—", nd=1):
 def gather_csp(conn, ticker=None):
     sql = """
         SELECT p.id, p.ticker, p.company_name, p.net_premium, p.total_contracts,
-               p.breakeven_low, p.earnings_date,
+               p.breakeven_low, p.earnings_date, p.account_id,
                l.strike, l.open_price, l.contracts, l.expiration,
                c.spot_price, c.pnl_unrealized, c.delta, c.delta_vs_entry,
-               c.dte_now, c.theta, c.iv_rank, c.checked_at
+               c.dte_now, c.theta, c.iv_rank, c.checked_at, c.current_price, c.greeks_source, c.pnl_pct
         FROM positions p
         JOIN legs l ON l.position_id = p.id AND l.leg_role = 'SHORT_PUT'
         LEFT JOIN checks c ON c.id = (
             SELECT id FROM checks WHERE position_id = p.id AND data_quality = 'GOOD'
             ORDER BY checked_at DESC LIMIT 1
         )
-        WHERE p.status = 'OPEN' AND p.strategy = 'CSP'
+        WHERE p.status = 'OPEN' AND p.strategy = 'CSP' AND p.book = 'REAL'
     """
     args = []
     if ticker:
@@ -249,6 +251,41 @@ def gather_csp(conn, ticker=None):
         r["itm"] = (spot is not None and strike is not None and spot < strike)
         r["below_be"] = (spot is not None and be is not None and spot < be)
     return rows
+
+def _core_band(r):
+    """Decision-core verdict band for a single-option-leg /health CSP row.
+
+    Mirrors check_cmd.core_verdict but off stored data: the short put is the only
+    leg, so marks are keyed by the position id and the leg is always SHORT x100.
+    Returns band_for(reason, evidence) -> {flag, flag_style, headline}, or None
+    when there is no live mark (current_price is None) -- the page then shows
+    UNKNOWN rather than falling back to the composite (one engine, no divergence).
+    NULL max_loss/max_profit are fine for the CSP credit path (max_loss only
+    tightens the stop)."""
+    cp = r.get("current_price")
+    if cp is None:
+        return None
+    leg_id = r["id"]
+    pos = {"account_id": r.get("account_id"), "strategy": "CSP",
+           "net_premium": r.get("net_premium"), "max_loss": None, "max_profit": None}
+    leg = {"id": leg_id, "direction": "SHORT", "open_price": r.get("open_price"),
+           "contracts": r.get("contracts") or 1, "multiplier": 100,
+           "expiration": r.get("expiration")}
+    reason, _pnl = _core_evaluate(_ns_pos(pos), [_ns_leg(leg)], {leg_id: cp})
+    spot, strike = r.get("spot_price"), r.get("strike")
+    intrinsic_buffer = (round(spot - strike, 2)
+                        if (spot is not None and strike is not None) else None)
+    credit = r.get("net_premium")
+    pnl = r.get("pnl_display", r.get("pnl_unrealized"))
+    pnl_pct = ((pnl / abs(credit) * 100) if (pnl is not None and credit)
+               else r.get("pnl_pct"))
+    gs = (r.get("greeks_source") or "").lower()
+    mc = "frozen" if "frozen" in gs else ("stale" if "stale" in gs else "live")
+    ev = {"direction": "SHORT", "is_multileg": False,
+          "intrinsic_buffer": intrinsic_buffer,
+          "pct_buffer": r.get("strike_buffer_pct"),
+          "pnl_pct": pnl_pct, "mark_confidence": mc}
+    return band_for(reason, ev)
 
 
 def score_position(r):
@@ -537,14 +574,19 @@ def _summary_facts(r):
 
 def _comp_badge(sc):
     comp = sc["composite"]
-    c = CELL[sc["band_color"]]
+    c = CELL["gray"]  # neutral: composite score is evidence, not the verdict
     val = f"{comp:.0f}" if comp is not None else "—"
     style = f"background:{c['bg']};border-color:{c['bd']};color:{c['vl']};"
     return f'<span class="comp mono" style="{style}">{val}<span class="of"> /100</span></span>'
 
 
 def _card(r, sc, link=True):
-    g_color, g_text = guidance(r, sc)
+    cv = sc.get("core")
+    if cv is not None:
+        g_color = {"GREEN": "green", "YELLOW": "amber", "RED": "red"}.get(cv["flag"], "gray")
+        g_text = cv["headline"]
+    else:
+        g_color, g_text = "gray", "No live mark — refresh to score"
     co = _esc(r["company_name"] or "")
     head = (
         '<div class="hrow">'
@@ -642,6 +684,7 @@ def render(conn, ticker=None):
             return _page(f"HELM Health \u00b7 {ticker.upper()}", body)
         r = rows[0]
         sc = score_position(r)
+        sc["core"] = _core_band(r)
         asof = (r["checked_at"] or "")[:16].replace("T", " ")
         body = (
             f"<a class='back' href='/health'>← all positions</a>"
@@ -653,14 +696,20 @@ def render(conn, ticker=None):
         return _page(f"HELM Health · {r['ticker']}", body)
 
     # portfolio view
-    scored = [(r, score_position(r)) for r in rows]
-    scored.sort(key=lambda t: (t[1]["composite"] is None, t[1]["composite"] or 0))
+    scored = []
+    for r in rows:
+        sc = score_position(r)
+        sc["core"] = _core_band(r)
+        scored.append((r, sc))
+    _sev = {"RED": 0, "YELLOW": 1, "GREEN": 2}
+    scored.sort(key=lambda t: (_sev.get((t[1]["core"] or {}).get("flag"), 3),
+                               t[1]["composite"] is None, t[1]["composite"] or 0))
     n = len(scored)
     comps = [t[1]["composite"] for t in scored if t[1]["composite"] is not None]
     avg = (sum(comps) / len(comps)) if comps else None
-    nh = sum(1 for _, s in scored if s["band_color"] == "green")
-    nw = sum(1 for _, s in scored if s["band_color"] == "amber")
-    nr = sum(1 for _, s in scored if s["band_color"] == "red")
+    nh = sum(1 for _, s in scored if (s["core"] or {}).get("flag") == "GREEN")
+    nw = sum(1 for _, s in scored if (s["core"] or {}).get("flag") == "YELLOW")
+    nr = sum(1 for _, s in scored if (s["core"] or {}).get("flag") == "RED")
     asof = ""
     for r, _ in scored:
         if r["checked_at"]:
