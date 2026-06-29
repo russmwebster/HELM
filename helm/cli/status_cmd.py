@@ -89,7 +89,7 @@ def run():
     latest_checks = {}
     for p in open_pos:
         chk = conn.execute(
-            "SELECT health_flag, pnl_pct, checked_at FROM checks WHERE position_id=? ORDER BY checked_at DESC LIMIT 1",
+            "SELECT health_flag, pnl_pct, checked_at FROM checks WHERE position_id=? AND data_quality = 'GOOD' ORDER BY checked_at DESC LIMIT 1",
             (p["id"],)
         ).fetchone()
         if chk:
@@ -107,7 +107,7 @@ def run():
     themes_count    = conn.execute("SELECT COUNT(*) FROM themes").fetchone()[0]
 
     # Last activity times
-    last_check     = conn.execute("SELECT MAX(checked_at) FROM checks").fetchone()[0]
+    last_check     = conn.execute("SELECT MAX(checked_at) FROM checks WHERE data_quality = 'GOOD'").fetchone()[0]
     last_reconcile = conn.execute(
         "SELECT MAX(occurred_at) FROM helm_events WHERE event_type='RECONCILE_RUN'"
     ).fetchone()[0]
