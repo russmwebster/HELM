@@ -890,14 +890,112 @@ def confirm_and_log(ticker: str, strategy: str, contracts: list, config: dict,
 
 
 def confirm_spread(ticker: str, strategy: str, spreads: list, config: dict,
-                   spot: float, args: list):
+                   spot: float, args: list, best: dict = None, suggested: int = 1):
     """Interactive confirm flow for spread positions."""
     from rich.prompt import Prompt, Confirm
-    # For now, spreads log as a single position with notes about both legs
-    # Full multi-leg logging will be built in a future session
+    from rich.panel import Panel
+    # HELM-038 wired: spread --confirm persists via the proven multi-leg writer
+    # (open_multileg_with_snapshot), mirroring the iron-condor confirm flow:
+    # select rank -> number of contracts -> actual NET credit. Credit verticals
+    # only for now; other spread families get the not-wired notice below.
+    if not spreads:
+        console.print("[yellow]No spreads to open.[/yellow]")
+        console.print()
+        return
+    if strategy not in ("BEAR_CALL_SPREAD", "BULL_PUT_SPREAD"):
+        console.print()
+        console.print(f"[yellow]Note:[/yellow] --confirm logging for {strategy} is not wired yet.")
+        console.print("[dim]Only BEAR_CALL_SPREAD / BULL_PUT_SPREAD record via --confirm today. Do not use helm activity for spreads (it misclassifies the legs).[/dim]")
+        console.print()
+        return
+    pretty = strategy.replace("_", " ").title()
     console.print()
-    console.print("[yellow]Note:[/yellow] Spread --confirm logging is coming soon.")
-    console.print("[dim]For now, log via helm activity after executing in Fidelity.[/dim]")
+    console.print(f"[bold]Open a {pretty}?[/bold]")
+    console.print("[dim]Enter rank number to select, or 'n' to exit.[/dim]")
+    console.print()
+    while True:
+        choice = Prompt.ask("Select spread", default="1", choices=[str(i + 1) for i in range(len(spreads))] + ["n"], show_choices=False)
+        if choice.lower() == "n":
+            console.print("[dim]No position opened.[/dim]")
+            console.print()
+            return
+        try:
+            idx = int(choice) - 1
+            if 0 <= idx < len(spreads):
+                b = spreads[idx]
+                break
+        except ValueError:
+            pass
+        console.print("[yellow]Invalid choice. Enter a rank number or 'n'.[/yellow]")
+    opt_type = b["opt_type"]
+    ss = b["short_strike"]
+    lstk = b["long_strike"]
+    exp = b["expiration"]
+    width = b["width"]
+    nc_model = b["net_credit"]
+    ml_con = b["max_loss"]
+    dte_v = b.get("dte", 0)
+    cwp = b.get("credit_to_width_pct", b.get("cw_pct", 0)) or 0
+    console.print()
+    console.print(Panel.fit(f"[bold]Selected:[/bold] {ticker} {pretty} {exp} ({dte_v}d)\n  Short ${ss:.0f} {opt_type} / Long ${lstk:.0f} {opt_type}\n  Modeled net credit: ${nc_model:.2f}/contract  |  Max loss: ${ml_con:.2f}/contract\n  Width: ${width:.0f}  |  Credit/width: {cwp:.0f}%", border_style="cyan", title=f"Confirm {pretty}"))
+    console.print()
+    suggested_n = suggested or 1
+    try:
+        from helm.db import get_conn as _gcv
+        _cv = _gcv()
+        acctv = _cv.execute("SELECT portfolio_value FROM accounts WHERE id = ?", (get_active_account(),)).fetchone()
+        _cv.close()
+        if acctv and acctv[0] and ml_con:
+            suggested_n = max(1, min(20, int((acctv[0] * 0.05) / (ml_con * 100))))
+    except Exception:
+        pass
+    contracts_str = Prompt.ask("  Number of contracts", default=str(suggested_n))
+    try:
+        num_contracts = int(contracts_str)
+    except ValueError:
+        num_contracts = suggested_n
+    short_bid = float(b["short_bid"])
+    long_ask = float(b["long_ask"])
+    modeled_net = round(short_bid - long_ask, 2)
+    fill_str = Prompt.ask("  Actual NET credit received", default=f"{modeled_net:.2f}")
+    try:
+        net_credit = float(fill_str.replace("$", "").strip())
+    except ValueError:
+        console.print("[red]Invalid net credit. Aborting.[/red]")
+        console.print()
+        return
+    # Absorb the net override into the short leg (long stays at ask) so the
+    # writer-derived net_premium equals the actual fill.
+    short_fill = round(net_credit + long_ask, 2)
+    long_fill = round(long_ask, 2)
+    total_credit_amt = round(net_credit * 100 * num_contracts, 2)
+    max_risk = round((width - net_credit) * 100 * num_contracts, 2)
+    console.print()
+    if not Confirm.ask(f"  Open [bold]{num_contracts}x {ticker} {pretty} ${ss:.0f}/${lstk:.0f} {opt_type} {exp}[/bold] @ net ${net_credit:.2f} (collect ${total_credit_amt:.0f})?", default=True):
+        console.print("[dim]Cancelled.[/dim]")
+        console.print()
+        return
+    legs = [
+        {"direction": "SHORT", "opt_type": opt_type, "strike": ss, "expiration": exp, "fill_price": short_fill, "delta": b.get("delta"), "iv": b.get("iv"), "dte": dte_v, "spot": spot, "oi": b.get("short_oi")},
+        {"direction": "LONG", "opt_type": opt_type, "strike": lstk, "expiration": exp, "fill_price": long_fill, "delta": b.get("long_delta"), "iv": b.get("iv"), "dte": dte_v, "spot": spot, "oi": b.get("long_oi")},
+    ]
+    pf = {"spread_width": width, "max_profit": total_credit_amt, "max_loss": max_risk, "credit_to_width_ratio": round(net_credit / width, 3) if width else None}
+    if opt_type == "CALL":
+        pf["breakeven_high"] = round(ss + net_credit, 2)
+    else:
+        pf["breakeven_low"] = round(ss - net_credit, 2)
+    console.print()
+    console.print("[dim]Recording position...[/dim]")
+    try:
+        from helm.cli.entry_snapshot import open_multileg_with_snapshot
+        pos_id, leg_ids, snap_id = open_multileg_with_snapshot(ticker=ticker, strategy=strategy, legs=legs, contracts=num_contracts, spot=spot, scan_data=None, book="REAL", position_fields=pf, pricing_source="ibkr")
+    except Exception as e:
+        console.print(f"[red]Failed to record position:[/red] {e}")
+        import traceback
+        traceback.print_exc()
+        return
+    console.print()
+    console.print(Panel(f"[bold green]Position Opened[/bold green]\n\n  Ticker:   [bold cyan]{ticker}[/bold cyan]  {pretty}\n  Legs:     SHORT ${ss:.0f} / LONG ${lstk:.0f} {opt_type}  exp {exp}\n  Net credit: ${net_credit:.2f}/contract  (collected ${total_credit_amt:.0f})\n  Size:     {num_contracts} spread(s)  max risk ${max_risk:.0f}\n  Position: [dim]{pos_id}[/dim]", border_style="green"))
     console.print()
 
 
@@ -1017,7 +1115,7 @@ def display_spreads(ticker: str, strategy: str, config: dict, spreads: list,
 
     # --confirm flow for spreads
     if "--confirm" in args:
-        confirm_spread(ticker, strategy, spreads, config, spot, args)
+        confirm_spread(ticker, strategy, spreads, config, spot, args, best=best, suggested=suggested_best)
 
 
 
