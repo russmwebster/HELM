@@ -638,6 +638,39 @@ ALTER TABLE signals ADD COLUMN spec_delta TEXT;
 ALTER TABLE signals ADD COLUMN helm_policy_version TEXT;
 ALTER TABLE checks ADD COLUMN policy_version TEXT;
 
+-- HELM-041 - per-leg mark store. Leg-grain sibling of `checks`: one row per
+-- leg per check, so multi-leg /health cards build marks = {leg.id: price}
+-- off stored data (read-only display, HELM-037) and feed decision.evaluate
+-- (WS5c). data_quality mirrors `checks` so the HELM-036 GOOD filter applies
+-- unchanged (_leg_mark is_live -> 'GOOD'; frozen/partial -> 'STALE'/'PARTIAL').
+CREATE TABLE IF NOT EXISTS leg_checks (
+    id              TEXT PRIMARY KEY,
+    check_id        TEXT REFERENCES checks(id) ON DELETE CASCADE,
+    position_id     TEXT NOT NULL REFERENCES positions(id) ON DELETE CASCADE,
+    leg_id          TEXT NOT NULL REFERENCES legs(id) ON DELETE CASCADE,
+    checked_at      TEXT NOT NULL,
+
+    current_bid     REAL,
+    current_ask     REAL,
+    current_price   REAL,
+
+    delta           REAL,
+    gamma           REAL,
+    theta           REAL,
+    vega            REAL,
+    iv_current      REAL,
+
+    greeks_source   TEXT,
+    data_quality    TEXT DEFAULT 'GOOD',
+
+    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+
+    CHECK (data_quality IN ('GOOD','PARTIAL','STALE'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_leg_checks_leg_time ON leg_checks(leg_id, checked_at);
+CREATE INDEX IF NOT EXISTS idx_leg_checks_pos_time ON leg_checks(position_id, checked_at);
+
 CREATE TABLE market_context (
     id TEXT PRIMARY KEY,
     as_of_date TEXT NOT NULL,

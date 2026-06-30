@@ -43,6 +43,9 @@ stops being muted.
 
 ### Design / sequencing
 
+**HELM-041 · `DESIGN` · `OPEN` · Per-leg mark store (`leg_checks`) — WS5c prerequisite**
+_Split from the HELM-029 conflation (s43). `decision.evaluate(pos, legs, marks)` is already fully multi-leg (loops legs, P&L from `marks[leg.id]`), and `_leg_mark` already produces per-leg marks for `paper_manage` — but per-leg current marks are persisted nowhere: `legs` holds only open/close price, `checks` is per-position (one `current_price`). The single-leg `/health` bands work only because the lone leg's mark IS the per-position `checks.current_price`; multi-leg has N legs, one stored value. Per HELM-037, `/health` computes off stored data (no live IB at render), so WS5c needs a leg-grain store. Plan: (1) `leg_checks` table (leg-grain sibling of `checks`; `data_quality` mirrors the HELM-036 GOOD filter); (2) extend the RTH writer + `paper_manage` to persist each leg's `_leg_mark`; (3) `_core_band_ml` in `health.py` reads latest-GOOD per leg, builds `marks`, calls `evaluate` (UNKNOWN if any leg lacks a live mark). Distinct from HELM-029 (the `Position`/`Leg` dataclass refactor), which step 3 may trigger as the third `evaluate` consumer._
+
 **HELM-027 · `DESIGN` · `OPEN` · Decision core — unified verdict engine**
 _Locked s31, carried in memory + git; checkpointed here (the s31 close skipped writing it to the register). Goal: collapse the four divergent decision-logic copies — `paper_manage._evaluate` (the good, DB-driven prototype), `check.assess_position_health`, `check.generate_guidance` + per-strategy deep renderers, and `health.py`'s composite — into one book-agnostic verdict reading `strategy_settings` as the single source of truth._
 Sequence 0→1→2→3→(4,5,6)→7:
