@@ -288,6 +288,37 @@ def _core_band(r):
     return band_for(reason, ev)
 
 
+def _core_band_lc(r):
+    """Decision-core verdict band for a single-leg /health LONG_CALL row.
+
+    Sibling of _core_band: the long call is the only leg (LONG x100), so marks
+    are keyed by the position id. Returns band_for(reason, evidence) ->
+    {flag, flag_style, headline}, or None when there is no live mark
+    (current_price is None) -- the page then shows UNKNOWN rather than falling
+    back to the composite (one engine, no divergence). Max loss is the premium
+    itself (no stop); profit is a % gain on the premium paid."""
+    cp = r.get("current_price")
+    if cp is None:
+        return None
+    leg_id = r["id"]
+    pos = {"account_id": r.get("account_id"), "strategy": "LONG_CALL",
+           "net_premium": r.get("net_premium"), "max_loss": None, "max_profit": None}
+    leg = {"id": leg_id, "direction": "LONG", "open_price": r.get("open_price"),
+           "contracts": r.get("contracts") or 1, "multiplier": 100,
+           "expiration": r.get("expiration")}
+    reason, _pnl = _core_evaluate(_ns_pos(pos), [_ns_leg(leg)], {leg_id: cp})
+    debit = r.get("net_premium")
+    pnl = r.get("pnl_display", r.get("pnl_unrealized"))
+    pnl_pct = ((pnl / abs(debit) * 100) if (pnl is not None and debit)
+               else r.get("pnl_pct"))
+    gs = (r.get("greeks_source") or "").lower()
+    mc = "frozen" if "frozen" in gs else ("stale" if "stale" in gs else "live")
+    ev = {"direction": "LONG", "is_multileg": False,
+          "intrinsic_buffer": None, "pct_buffer": None,
+          "pnl_pct": pnl_pct, "mark_confidence": mc}
+    return band_for(reason, ev)
+
+
 def score_position(r):
     scores = {
         "be_buffer": s_be_buffer(r["be_buffer_pct"]),
@@ -655,6 +686,7 @@ def render(conn, ticker=None):
             if lc_rows:
                 r = lc_rows[0]
                 sc = score_longcall(r)
+                sc["core"] = _core_band_lc(r)
                 asof = (r["checked_at"] or "")[:16].replace("T", " ")
                 body = (
                     "<a class='back' href='/health'>\u2190 all positions</a>"
@@ -732,8 +764,13 @@ def render(conn, ticker=None):
     )
     cards = "<div class='cards'>" + "".join(_card(r, sc) for r, sc in scored) + "</div>"
     # Long Call section (if any)
-    lc_scored = [(r, score_longcall(r)) for r in lc_rows]
-    lc_scored.sort(key=lambda t: (t[1]["composite"] is None, t[1]["composite"] or 0))
+    lc_scored = []
+    for r in lc_rows:
+        sc = score_longcall(r)
+        sc["core"] = _core_band_lc(r)
+        lc_scored.append((r, sc))
+    lc_scored.sort(key=lambda t: (_sev.get((t[1]["core"] or {}).get("flag"), 3),
+                                  t[1]["composite"] is None, t[1]["composite"] or 0))
     lc_section = ""
     if lc_scored:
         lc_section = (
@@ -884,11 +921,11 @@ def s_lc_iv_change(chg):
 def gather_longcall(conn, ticker=None):
     sql = """
         SELECT p.id, p.ticker, p.company_name, p.net_premium, p.total_contracts,
-               p.earnings_date,
+               p.earnings_date, p.account_id,
                l.strike, l.open_price, l.contracts, l.expiration,
                c.spot_price, c.pnl_unrealized, c.delta, c.theta,
                c.iv_current, c.iv_vs_entry, c.dte_now, c.current_price,
-               c.checked_at
+               c.checked_at, c.greeks_source
         FROM positions p
         JOIN legs l ON l.position_id = p.id AND l.leg_role = 'LONG_CALL'
         LEFT JOIN checks c ON c.id = (
@@ -1081,7 +1118,12 @@ def _summary_facts_lc(r):
 
 
 def _card_lc(r, sc, link=True):
-    g_color, g_text = guidance_longcall(r, sc)
+    cv = sc.get("core")
+    if cv is not None:
+        g_color = {"GREEN": "green", "YELLOW": "amber", "RED": "red"}.get(cv["flag"], "gray")
+        g_text = cv["headline"]
+    else:
+        g_color, g_text = "gray", "No live mark — refresh to score"
     co = _esc(r["company_name"] or "")
     head = (
         '<div class="hrow">'
