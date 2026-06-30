@@ -993,30 +993,6 @@ def score_longcall(r):
             "band_color": band_color}
 
 
-def guidance_longcall(r, scored):
-    c = scored["composite"]
-    buf = r["buffer_to_strike_pct"]
-    dte = r["dte_now"]
-    if c is None:
-        return ("gray", "Insufficient data \u2014 run a fresh check.")
-    # Gamma danger zone: near-ATM + low DTE = binary outcome territory
-    if buf is not None and abs(buf) < 5 and dte is not None and dte < 21:
-        return ("red", "Binary territory — near the strike with under 21 days left. "
-                "The option needs a sharp move soon or expires worthless. "
-                "Decide: hold with conviction or close to preserve remaining value.")
-    if c >= 70:
-        if r["itm"]:
-            return ("green", "Healthy and ITM \u2014 stock on your side. Monitor theta and consider rolling up to lock in gains.")
-        return ("green", "Healthy \u2014 stock tracking well. Hold and let the position develop.")
-    if c >= 40:
-        if buf is not None and buf > 10:
-            return ("amber", "Watch \u2014 stock still needs to move. Theta working against you daily.")
-        return ("amber", "Watch \u2014 manageable but monitor theta decay and IV closely.")
-    if dte is not None and dte < 21:
-        return ("red", "At risk \u2014 limited time remaining. Consider closing or rolling to avoid full premium loss.")
-    return ("red", "At risk \u2014 multiple stress signals. Review for defensive action.")
-
-
 def _render_map_lc(r, sc):
     s = sc["scores"]
     delta = r["delta"]
