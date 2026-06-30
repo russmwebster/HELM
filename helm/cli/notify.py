@@ -78,6 +78,7 @@ def build_summary() -> dict:
         FROM positions p
         JOIN checks c ON c.position_id = p.id
         WHERE p.status = 'OPEN'
+          AND p.book = 'REAL'
           AND c.data_quality = 'GOOD'
           AND c.checked_at = (
               SELECT MAX(c2.checked_at) FROM checks c2
