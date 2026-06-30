@@ -17,6 +17,29 @@ from helm.db import get_conn
 TRIGGER_FILE = '/tmp/helm_notify_trigger.txt'
 NOTIFIER    = '/opt/homebrew/bin/terminal-notifier'
 
+
+# HELM-039: bound credit-strategy unrealized P&L at max credit (net_premium) so
+# HELM-035 corruption (pnl_unrealized > max_profit, GOOD-stamped) can't inflate
+# the notify summary. Credit strategies only, upper bound only; debit positions
+# (long call/put, diagonal, PMCC, bear put) are untouched, so a mislabeled long
+# call with positive net_premium is never clamped.
+CREDIT_STRATEGIES = {
+    "CSP", "COVERED_CALL", "BULL_PUT_SPREAD", "BEAR_CALL_SPREAD",
+    "IRON_CONDOR", "JADE_LIZARD", "SHORT_STRANGLE",
+}
+
+
+def _bound_credit_pnl(strategy, net_premium, pnl) -> float:
+    """Clamp credit-strategy unrealized P&L at net_premium (max profit kept)."""
+    if pnl is None:
+        return 0.0
+    pnl = float(pnl)
+    if strategy in CREDIT_STRATEGIES:
+        mp = float(net_premium or 0)
+        if mp > 0 and pnl > mp:
+            return mp
+    return pnl
+
 def send_notification(title: str, message: str, subtitle: str = "") -> bool:
     """
     Send notification via two methods:
@@ -67,7 +90,7 @@ def build_summary() -> dict:
     if not rows:
         return {'n': 0, 'total_pnl': 0, 'reds': [], 'yellows': [], 'greens': []}
 
-    total_pnl = sum(float(r['pnl_unrealized'] or 0) for r in rows)
+    total_pnl = sum(_bound_credit_pnl(r['strategy'], r['net_premium'], r['pnl_unrealized']) for r in rows)
     reds    = [r for r in rows if r['health_flag'] == 'RED']
     yellows = [r for r in rows if r['health_flag'] == 'YELLOW']
     greens  = [r for r in rows if r['health_flag'] == 'GREEN']
@@ -78,7 +101,7 @@ def build_summary() -> dict:
     take_profit = []
     stop_loss   = []
     for r in rows:
-        pnl  = float(r['pnl_unrealized'] or 0)
+        pnl  = _bound_credit_pnl(r['strategy'], r['net_premium'], r['pnl_unrealized'])
         prem = abs(float(r['net_premium'] or 0))
         if prem > 0:
             if pnl >= prem * 0.50:
