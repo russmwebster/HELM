@@ -36,6 +36,35 @@ def _leg_mark(ticker: str, leg) -> tuple:
     return yf.get('mid'), False
 
 
+def _persist_leg_marks(pos, legs, marks):
+    """HELM-041: persist one GOOD leg_checks row per leg of a paper position.
+
+    Called only when book_live (every leg marked live this pass), so the set
+    is temporally coherent and uniformly GOOD. check_id is NULL (manage writes
+    no parent checks row). Paper-only, live-only - within HELM-037.
+    """
+    import uuid as _uuid
+    from datetime import datetime
+    now = datetime.now().isoformat()
+    conn = get_conn()
+    try:
+        for leg in legs:
+            cp = marks.get(leg.id)
+            if cp is None:
+                continue
+            conn.execute(
+                "INSERT INTO leg_checks "
+                "(id, check_id, position_id, leg_id, checked_at, "
+                "current_price, data_quality, created_at) "
+                "VALUES (?, NULL, ?, ?, ?, ?, 'GOOD', ?)",
+                ("LCHK-" + _uuid.uuid4().hex[:8].upper(),
+                 pos.id, leg.id, now, cp, now),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def manage_paper_book(account_id: Optional[str] = None) -> dict:
     """Walk the open PAPER book; hold or close each premium position. Returns a tally."""
     account_id = account_id or get_active_account()
@@ -88,6 +117,9 @@ def manage_paper_book(account_id: Optional[str] = None) -> dict:
             console.print(f"  [yellow]SKIP[/yellow] {pos.ticker} {pos.strategy} — incomplete marks (never close on bad data)")
             skipped += 1
             continue
+
+        if book_live:
+            _persist_leg_marks(pos, legs, marks)
 
         reason, total_pnl = evaluate(pos, legs, marks)
 
