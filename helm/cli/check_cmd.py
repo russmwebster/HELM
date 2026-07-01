@@ -31,6 +31,7 @@ from typing import Optional
 import math
 from types import SimpleNamespace
 from helm.decision import evaluate as _core_evaluate, DEFAULT_STOP_MULT
+from helm.models.settings import StrategySettings
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 logging.getLogger("ib_insync").setLevel(logging.CRITICAL)
@@ -1122,7 +1123,8 @@ def cmd_check_deep_csp(pos: dict, legs: list, assessment: dict, snap: dict):
         console.print(f"  Buffer to b/e:    [{_be_clr}]${_buf_be:.2f}  ({_buf_be_pct:.1f}%)[/{_be_clr}]")
         if _buf_be < 0:
             console.print(f"  [bold red]⚠  Stock ${abs(_buf_be):.2f} BELOW break-even — real loss at expiry if held[/bold red]")
-        _stop_mult = strategy_settings.get('stop_loss_multiplier') or DEFAULT_STOP_MULT
+        _ss = StrategySettings.get(pos["account_id"], pos["strategy"])
+        _stop_mult = (_ss.stop_loss_multiplier if _ss else None) or DEFAULT_STOP_MULT
         _stop_level = (net_premium or 0) * _stop_mult
         _pnl = pnl_mtm if pnl_mtm is not None else 0
         _stop_pct = round(abs(min(_pnl, 0)) / _stop_level * 100, 0) if _stop_level else 0
