@@ -30,7 +30,7 @@ from datetime import date, datetime, time
 from typing import Optional
 import math
 from types import SimpleNamespace
-from helm.decision import evaluate as _core_evaluate
+from helm.decision import evaluate as _core_evaluate, DEFAULT_STOP_MULT
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 logging.getLogger("ib_insync").setLevel(logging.CRITICAL)
@@ -1122,12 +1122,13 @@ def cmd_check_deep_csp(pos: dict, legs: list, assessment: dict, snap: dict):
         console.print(f"  Buffer to b/e:    [{_be_clr}]${_buf_be:.2f}  ({_buf_be_pct:.1f}%)[/{_be_clr}]")
         if _buf_be < 0:
             console.print(f"  [bold red]⚠  Stock ${abs(_buf_be):.2f} BELOW break-even — real loss at expiry if held[/bold red]")
-        _stop1x = net_premium if net_premium else 0
+        _stop_mult = strategy_settings.get('stop_loss_multiplier') or DEFAULT_STOP_MULT
+        _stop_level = (net_premium or 0) * _stop_mult
         _pnl = pnl_mtm if pnl_mtm is not None else 0
-        _stop_pct = round(abs(min(_pnl, 0)) / _stop1x * 100, 0) if _stop1x else 0
-        _stop_rem = round(_stop1x - abs(min(_pnl, 0)), 0) if _stop1x else 0
+        _stop_pct = round(abs(min(_pnl, 0)) / _stop_level * 100, 0) if _stop_level else 0
+        _stop_rem = round(_stop_level - abs(min(_pnl, 0)), 0) if _stop_level else 0
         _sc = "green" if _stop_pct < 50 else "yellow" if _stop_pct < 80 else "red"
-        console.print(f"  1x Stop loss:     ${_stop1x:,.0f}   [{_sc}]{_stop_pct:.0f}% used[/{_sc}]  (${_stop_rem:,.0f} remaining)")
+        console.print(f"  {_stop_mult:g}x Stop loss:     ${_stop_level:,.0f}   [{_sc}]{_stop_pct:.0f}% used[/{_sc}]  (${_stop_rem:,.0f} remaining)")
 
     # ── Entry Context ─────────────────────────────────────────────────────────
     if entry_spot or entry_rsi or entry_bias is not None:
