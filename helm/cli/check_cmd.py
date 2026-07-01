@@ -95,7 +95,39 @@ def market_status_label() -> str:
 
 
 
-def save_check(position_id: str, assessment: dict, pos: dict) -> None:
+def _persist_real_leg_marks(conn, check_id, position_id, leg_marks_by_id):
+    # HELM-041: one GOOD leg_checks row per leg on the REAL book. Sibling to
+    # paper_manage._persist_leg_marks; here check_id is populated (the paper
+    # writer writes NULL). All-or-nothing live gate mirrors the paper writer's
+    # book_live contract: rows are written only when every leg has a live mark.
+    # Runs inside save_check's _tx() and does NOT commit -- the parent
+    # transaction owns the commit, so parent + child rows stay atomic.
+    import uuid as _uuid
+    from datetime import datetime
+    if not leg_marks_by_id:
+        return
+    for _m in leg_marks_by_id:
+        if (not _m.get("leg_id") or _m.get("current_price") is None
+                or not _m.get("is_live")):
+            return
+    _now = datetime.now().isoformat()
+    _seen = set()
+    for _m in leg_marks_by_id:
+        _lid = _m["leg_id"]
+        if _lid in _seen:
+            continue
+        _seen.add(_lid)
+        conn.execute(
+            "INSERT INTO leg_checks "
+            "(id, check_id, position_id, leg_id, checked_at, "
+            "current_price, data_quality, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, 'GOOD', ?)",
+            ("LCHK-" + _uuid.uuid4().hex[:8].upper(),
+             check_id, position_id, _lid, _now, _m["current_price"], _now),
+        )
+
+
+def save_check(position_id: str, assessment: dict, pos: dict, leg_marks_by_id: Optional[list] = None) -> None:
     """Save a check run to the checks table with full IVR, RTH flag, and narrative."""
     import uuid as _uuid
     from helm.db import transaction as _tx
@@ -238,6 +270,7 @@ def save_check(position_id: str, assessment: dict, pos: dict) -> None:
                 narrative,
                 now,
             ))
+            _persist_real_leg_marks(conn, check_id, position_id, leg_marks_by_id)
     except Exception:
         import traceback; traceback.print_exc()
 
@@ -650,6 +683,19 @@ def check_one(pos: dict, legs: list, deep: bool = False) -> dict:
     # HELM-018: mark every leg for multi-leg P&L. The single opt_data above only
     # prices the primary leg; netting all legs needs a quote per leg.
     leg_marks = {}
+    # HELM-041: sibling per-leg store keyed by leg_id, carrying liveness, for
+    # the real-book leg_checks writer. Does NOT alter the (option_type, strike)
+    # -> mid netting dict above. Primary is seeded from opt_data/opt_source;
+    # non-primary legs are captured inside the existing fetch loop (no second
+    # IBKR round-trip). Liveness == a market-open live IBKR mark, matching the
+    # opt_source == "ibkr-live" semantics used for the primary leg.
+    leg_marks_by_id = []
+    if primary is not None:
+        leg_marks_by_id.append({
+            "leg_id": primary.get("id"),
+            "current_price": opt_data.get("mid"),
+            "is_live": (opt_source == "ibkr-live"),
+        })
     if len(opt_legs) > 1:
         if primary is not None and opt_data.get("mid") is not None:
             leg_marks[(primary["option_type"], primary["strike"])] = opt_data.get("mid")
@@ -659,10 +705,17 @@ def check_one(pos: dict, legs: list, deep: bool = False) -> dict:
                 continue
             _q = fetch_ibkr_option(ticker, _lg["expiration"], _lg["strike"], _lg["option_type"])
             _mid = _q.get("mid")
+            _leg_live = bool(is_market_open() and _mid is not None)
             if _mid is None:
                 _yq = fetch_yf_data(ticker, _lg["expiration"], _lg["strike"], _lg["option_type"])
                 _mid = _yq.get("mid")
             leg_marks[_key] = _mid
+            if _lg.get("id") != (primary.get("id") if primary is not None else None):
+                leg_marks_by_id.append({
+                    "leg_id": _lg.get("id"),
+                    "current_price": _mid,
+                    "is_live": _leg_live,
+                })
 
     # Get strategy settings
     conn = get_conn()
@@ -725,7 +778,7 @@ def check_one(pos: dict, legs: list, deep: bool = False) -> dict:
         )
 
     # Save check to DB silently
-    save_check(pos["id"], assessment, pos)
+    save_check(pos["id"], assessment, pos, leg_marks_by_id)
 
     return assessment
 

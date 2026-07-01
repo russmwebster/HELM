@@ -319,6 +319,68 @@ def _core_band_lc(r):
     return band_for(reason, ev)
 
 
+def _core_band_ml(r, conn):
+    # HELM-041 (WS5c): decision-core verdict band for a MULTI-LEG /health row
+    # (iron condor, bear put spread, ...). Sibling of _core_band / _core_band_lc.
+    # Marks come per-leg from leg_checks, not a single current_price on r; the
+    # position economics come straight from positions (the gathers do not SELECT
+    # all of them). Returns band_for(reason, ev), or None when there is no
+    # coherent live per-leg mark set -- the page then shows UNKNOWN rather than
+    # falling back to the composite (one engine, no divergence).
+    pid = r["id"]
+    prow = conn.execute(
+        "SELECT account_id, strategy, net_premium, max_profit, max_loss "
+        "FROM positions WHERE id = ?", (pid,)
+    ).fetchone()
+    if prow is None:
+        return None
+    legs = [dict(l) for l in conn.execute(
+        "SELECT id, direction, open_price, contracts, multiplier, expiration "
+        "FROM legs WHERE position_id = ? ORDER BY strike", (pid,)
+    ).fetchall()]
+    if not legs:
+        return None
+    # Coherent pass: the leg_checks writers stamp every leg of a pass with one
+    # checked_at, so the latest checked_at yields a temporally consistent set.
+    latest = conn.execute(
+        "SELECT MAX(checked_at) FROM leg_checks WHERE position_id = ?", (pid,)
+    ).fetchone()
+    latest_at = latest[0] if latest else None
+    if latest_at is None:
+        return None
+    marks = {}
+    for lg in legs:
+        m = conn.execute(
+            "SELECT current_price FROM leg_checks "
+            "WHERE position_id = ? AND leg_id = ? AND checked_at = ? "
+            "AND data_quality = 'GOOD' ORDER BY id DESC LIMIT 1",
+            (pid, lg["id"], latest_at)
+        ).fetchone()
+        cp = m["current_price"] if m else None
+        if cp is None:
+            return None
+        marks[lg["id"]] = cp
+    pos = {"account_id": prow["account_id"], "strategy": prow["strategy"],
+           "net_premium": prow["net_premium"],
+           "max_profit": prow["max_profit"], "max_loss": prow["max_loss"]}
+    ns_legs = [_ns_leg({"id": lg["id"], "direction": lg["direction"],
+                        "open_price": lg["open_price"],
+                        "contracts": lg["contracts"] or 1,
+                        "multiplier": lg["multiplier"] or 100,
+                        "expiration": lg["expiration"]}) for lg in legs]
+    reason, _pnl = _core_evaluate(_ns_pos(pos), ns_legs, marks)
+    debit = prow["net_premium"]
+    pnl = r.get("pnl_display", r.get("pnl_unrealized"))
+    pnl_pct = ((pnl / abs(debit) * 100) if (pnl is not None and debit)
+               else r.get("pnl_pct"))
+    gs = (r.get("greeks_source") or "").lower()
+    mc = "frozen" if "frozen" in gs else ("stale" if "stale" in gs else "live")
+    ev = {"direction": None, "is_multileg": True,
+          "intrinsic_buffer": None, "pct_buffer": None,
+          "pnl_pct": pnl_pct, "mark_confidence": mc}
+    return band_for(reason, ev)
+
+
 def score_position(r):
     scores = {
         "be_buffer": s_be_buffer(r["be_buffer_pct"]),
@@ -698,6 +760,7 @@ def render(conn, ticker=None):
                 return _page(f"HELM Health \u00b7 {r['ticker']}", body)
         if bps_rows:
             ic_r = bps_rows[0]; ic_sc = score_bearput(ic_r)
+            ic_sc["core"] = _core_band_ml(ic_r, conn)
             body = (f"<a class='back' href='/health'>\u2190 all positions</a>"
                     + _card_bps(ic_r, ic_sc, link=False)
                     + _legend_bps())
@@ -707,6 +770,7 @@ def render(conn, ticker=None):
             return _page(f"HELM Health \u00b7 {ticker.upper()}", body)
         if ic_rows:
             ic_r = ic_rows[0]; ic_sc = score_icondor(ic_r)
+            ic_sc["core"] = _core_band_ml(ic_r, conn)
             body = (f"<a class='back' href='/health'>\u2190 all positions</a>"
                     + _card_ic(ic_r, ic_sc, link=False)
                     + _legend_ic())
@@ -780,7 +844,7 @@ def render(conn, ticker=None):
             "<div class='cards'>" + "".join(_card_lc(r, sc) for r, sc in lc_scored) + "</div>"
             + _legend_lc()
         )
-    ic_scored = [(r, score_icondor(r)) for r in ic_rows]
+    ic_scored = [(r, {**score_icondor(r), "core": _core_band_ml(r, conn)}) for r in ic_rows]
     ic_scored.sort(key=lambda t: (t[1]["composite"] is None, -(t[1]["composite"] or 0)))
     ic_section = ""
     if ic_scored:
@@ -792,7 +856,7 @@ def render(conn, ticker=None):
             + "</div>"
             + _legend_ic()
         )
-    bps_scored = [(r, score_bearput(r)) for r in bps_rows]
+    bps_scored = [(r, {**score_bearput(r), "core": _core_band_ml(r, conn)}) for r in bps_rows]
     bps_scored.sort(key=lambda t: (t[1]["composite"] is None, -(t[1]["composite"] or 0)))
     bps_section = ""
     if bps_scored:
@@ -1503,7 +1567,12 @@ def _render_map_ic(r, sc):
 
 
 def _card_ic(r, sc, link=True):
-    g_color, g_text = guidance_icondor(r, sc)
+    cv = sc.get("core")
+    if cv is not None:
+        g_color = {"GREEN": "green", "YELLOW": "amber", "RED": "red"}.get(cv["flag"], "gray")
+        g_text = cv["headline"]
+    else:
+        g_color, g_text = "gray", "No live mark — refresh to score"
     co   = _esc(r["company_name"] or "")
     head = (
         '<div class="hrow">'
@@ -1877,7 +1946,12 @@ def _render_map_bps(r, sc):
     return "<div class='map'>" + row1 + row2 + row3 + "</div>"
 
 def _card_bps(r, sc, link=True):
-    g_color, g_text = guidance_bearput(r, sc)
+    cv = sc.get("core")
+    if cv is not None:
+        g_color = {"GREEN": "green", "YELLOW": "amber", "RED": "red"}.get(cv["flag"], "gray")
+        g_text = cv["headline"]
+    else:
+        g_color, g_text = "gray", "No live mark — refresh to score"
     co = _esc(r['company_name'] or '')
     head = ("<div class='hrow'><span class='tk'>" + _esc(r['ticker']) + "</span><span class='co'>" + co + "</span><span class='spacer'></span>" + _comp_badge(sc) + "</div>")
     body = _summary_facts_bps(r) + _render_map_bps(r, sc)
