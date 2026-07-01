@@ -932,7 +932,7 @@ def gather_longcall(conn, ticker=None):
             SELECT id FROM checks WHERE position_id = p.id AND data_quality = 'GOOD'
             ORDER BY checked_at DESC LIMIT 1
         )
-        WHERE p.status = 'OPEN' AND p.strategy = 'LONG_CALL'
+        WHERE p.status = 'OPEN' AND p.strategy = 'LONG_CALL' AND p.book = 'REAL'
     """
     args = []
     if ticker:
@@ -1286,7 +1286,7 @@ def gather_icondor(conn, ticker=None):
             SELECT id FROM checks WHERE position_id = p.id AND data_quality = 'GOOD'
             ORDER BY checked_at DESC LIMIT 1
         )
-        WHERE p.status = 'OPEN' AND p.strategy = 'IRON_CONDOR'
+        WHERE p.status = 'OPEN' AND p.strategy = 'IRON_CONDOR' AND p.book = 'REAL'
     """
     args = []
     if ticker:
@@ -1740,7 +1740,7 @@ def s_bps_max_profit(p):
     return 0
 
 def gather_bearput(conn, ticker=None):
-    sql = """SELECT p.id,p.ticker,p.company_name,p.net_premium,p.total_contracts,p.max_loss,p.max_profit,p.earnings_date,c.spot_price,c.delta,c.theta,c.dte_now,c.pnl_unrealized,c.iv_current,c.checked_at,c.greeks_source,c.data_quality FROM positions p LEFT JOIN checks c ON c.id=(SELECT id FROM checks WHERE position_id=p.id AND data_quality='GOOD' ORDER BY checked_at DESC LIMIT 1) WHERE p.status='OPEN' AND p.strategy='BEAR_PUT_SPREAD'"""
+    sql = """SELECT p.id,p.ticker,p.company_name,p.net_premium,p.total_contracts,p.max_loss,p.max_profit,p.earnings_date,c.spot_price,c.delta,c.theta,c.dte_now,c.pnl_unrealized,c.iv_current,c.checked_at,c.greeks_source,c.data_quality FROM positions p LEFT JOIN checks c ON c.id=(SELECT id FROM checks WHERE position_id=p.id AND data_quality='GOOD' ORDER BY checked_at DESC LIMIT 1) WHERE p.status='OPEN' AND p.strategy='BEAR_PUT_SPREAD' AND p.book='REAL'"""
     args = []
     if ticker:
         sql += " AND p.ticker=?"
