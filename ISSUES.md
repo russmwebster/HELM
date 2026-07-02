@@ -21,12 +21,22 @@ _Snapshot; refreshed each `helm checkpoint`, read via `helm status`._
 - **Next highest-leverage:** HELM-031 shipped (see Last shipped) — the -50%-of-premium would-fire flag now accumulates on the real book; revisit go-live once enough would-fire rows land AND the parked `pnl_pct` corruption is fixed (it gates any trustworthy long-debit backtest). Next deliberate builds: **HELM-042** (mean-reversion → momentum bias re-base, staged paper validation) and **HELM-043** (condor health greeks / short-strike proximity). Process debt: repo-root cleanup (retired handovers · `.bak` files · spent patch scripts · the stray `data/helm.db?mode=ro` typo artifact) and formalizing the checkpoint/status ritual (continuity step 5).
 - **Last shipped (s46):** **HELM-031** built end-to-end — pure `evaluate_shadow_debit_stop` helper (`83fec91`), nullable `checks.shadow_*` columns + live migration 38→41 (`e6f396e`), and REAL-check wiring so the flag persists 3×/day (`fb1a241`); status OPEN→DEFERRED. Also: `ORIENTATION.md` structural map added (`20bd592`), `cots2` reference tree removed (`210ca8a`), and the charter trimmed in project Instructions (status now single-sourced to this file). **5 commits ahead of origin, all unpushed:** `83fec91` · `e6f396e` · `210ca8a` · `20bd592` · `fb1a241`.
 - **Blocked (market/RTH):** live re-pull of the deep-ITM spec CSPs (RKLB/IREN/OKLO/IONQ) still pending.
-- **Counts:** 14 active (9 OPEN · 5 DEFERRED) · 7 parked · last shipped s46 (HELM-031).
+- **Counts:** 15 active (10 OPEN · 5 DEFERRED) · 7 parked · last shipped s47 (HELM-044 L2).
 - **Next RTH:** eyeball the new `shadow_*` columns populate on the next REAL `helm check` — a LONG_DEBIT position should get `shadow_signal='DEBIT_STOP_50'` + `would_fire` 0/1, everything else NULL. Also: `helm ivr refresh` for the 12 `core_v1` names, and a REAL check to confirm condor verdicts on `/health`.
 
 ---
 
 ## Active
+
+### Bugs
+
+**HELM-044 · `BUG` · `OPEN` · Earnings not surfaced at entry decision (scans + `helm open`)**
+_s47: `helm open META CSP` threw no earnings flag with a print ~27d out (Jul 29) inside the 50-DTE window. Three stacked layers; layer 2 fixed this commit._
+`helm/earnings.py` (`fetch_earnings_date`, `days_until`, `earnings_warning`, `EARNINGS_WARN_DAYS=45`) is warn-capable and wired into `_decision_capture`, `check_cmd`, `entry_snapshot` — but earnings never reaches the entry decision surface.
+1. **[OPEN] Surface gap (open_cmd blind) — primary ask.** `open_cmd.py` has zero earnings refs and never calls `_decision_capture`: no compute, no column, no recommendation flag, browse or confirm. Earnings must appear in every scan table and every `helm open XXX`, cache-sourced (no per-candidate network). Missing/stale renders explicit "unknown," never blank. yfinance dates are estimates — label as estimated, not confirmed.
+2. **[RESOLVED s47] Empty cache — gate starvation.** `refresh_watchlist_earnings` gated fetch-eligibility on `last_fundamentals_at`, a shared timestamp other watchlist paths keep fresh → NULL/passed `next_earnings` perpetually skipped (was 0/205). Fix: gate now fetches when `next_earnings` is NULL, passed, or timestamp stale. Verified live — META/AAPL/NVDA populated. Remaining ~202 drain at max_fetch=12/scan pending backfill.
+3. **[OPEN] Corpus contamination (consequence).** While the cache was empty, `_decision_capture` stamped `earnings_warning=None` onto every captured signal — no usable earnings feature in the corpus. New captures clean once cache fills; historical backfill likely unrecoverable (mark-and-accept).
+Gating/scoring on earnings is explicitly OUT of scope — separate future fork for the decision-core confidence layer.
 
 ### Tech debt
 

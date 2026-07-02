@@ -78,20 +78,26 @@ def refresh_watchlist_earnings(conn, tickers=None, force=False, stale_days=7, ma
         tks = [t.upper() for t in tickers]
         ph = ",".join("?" for _ in tks)
         rows = conn.execute(
-            "SELECT ticker, last_fundamentals_at FROM watchlist WHERE ticker IN (" + ph + ") "
+            "SELECT ticker, last_fundamentals_at, next_earnings FROM watchlist WHERE ticker IN (" + ph + ") "
             "ORDER BY last_fundamentals_at ASC",
             tks,
         ).fetchall()
     else:
         rows = conn.execute(
-            "SELECT ticker, last_fundamentals_at FROM watchlist WHERE active = 1 "
+            "SELECT ticker, last_fundamentals_at, next_earnings FROM watchlist WHERE active = 1 "
             "ORDER BY last_fundamentals_at ASC, ticker"
         ).fetchall()
 
     stale = []
     cached = 0
     for r in rows:
-        if not force and _fundamentals_fresh(r["last_fundamentals_at"], stale_days):
+        # HELM-044-L2: eligible when there is no date yet, when the cached
+        # date has already passed, or when the shared fundamentals timestamp
+        # is stale. Gating on next_earnings (the target column) stops NULL /
+        # passed rows hiding behind a timestamp other refresh paths keep fresh.
+        _du = days_until(r["next_earnings"]) if r["next_earnings"] else None
+        _valid_future = _du is not None and _du >= 0
+        if not force and _fundamentals_fresh(r["last_fundamentals_at"], stale_days) and _valid_future:
             cached += 1
         else:
             stale.append(r["ticker"])
