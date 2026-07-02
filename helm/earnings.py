@@ -96,8 +96,13 @@ def refresh_watchlist_earnings(conn, tickers=None, force=False, stale_days=7, ma
         # is stale. Gating on next_earnings (the target column) stops NULL /
         # passed rows hiding behind a timestamp other refresh paths keep fresh.
         _du = days_until(r["next_earnings"]) if r["next_earnings"] else None
-        _valid_future = _du is not None and _du >= 0
-        if not force and _fundamentals_fresh(r["last_fundamentals_at"], stale_days) and _valid_future:
+        # HELM-044-L2b: skip any dated + fresh name, including an already-passed
+        # date. A stale-source past date (e.g. FDX still showing last quarter's
+        # print until yfinance rolls forward) otherwise stays eligible on every
+        # pass and re-fetches forever, burning a scan fetch slot each time.
+        # Passed dates still re-fetch -- throttled to the staleness cadence.
+        _have_date = _du is not None
+        if not force and _fundamentals_fresh(r["last_fundamentals_at"], stale_days) and _have_date:
             cached += 1
         else:
             stale.append(r["ticker"])
