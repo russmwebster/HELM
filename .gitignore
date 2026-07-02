@@ -60,3 +60,22 @@ archive/
 
 # ── macOS ────────────────────────────────────────────────────────────────
 .DS_Store
+
+# -- s48 cleanup: bak/db-backup + one-off-script gap fix --
+# Timestamped backups (patch discipline writes .bak_YYYYMMDD / .bak-YYYYMMDD):
+*.bak_*
+*.bak-*
+data/helm.db.bak*
+data/helm.db*mode=ro
+# One-off scratch / migration scripts (root only; helm/ package never matched):
+/migrate_*.py
+/note_*.py
+/checkpoint_*.py
+/reconcile_*.py
+/lift_*.py
+/flip_*.py
+/retime_*.py
+/cleanup_*.py
+/ws[0-9]*.py
+/ws_*.py
+/ib_data_probe.py
