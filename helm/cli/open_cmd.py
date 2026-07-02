@@ -2557,6 +2557,14 @@ def run():
             ivr_warn = f"  [yellow]⚠ IVR {_ivr_open.iv_rank:.0f} above strategy max {ivr_max}[/yellow]"
         console.print(f"  IVR: {_ivr_open.rank_label}  IVP: {_ivr_open.percentile_label}  [dim]current IV {_ivr_open.iv_current:.1f}% | 52wk {_ivr_open.iv_52wk_low:.0f}%-{_ivr_open.iv_52wk_high:.0f}%[/dim]{ivr_warn}")
 
+    # HELM-044-L1: per-underlying earnings banner (cache-sourced, no network).
+    # Printed in run() before strategy dispatch, so it shows for every helm open.
+    # Outside the IVR guard above, so it renders even when IVR data is missing.
+    from helm.earnings import earnings_banner_line
+    _eb_line = earnings_banner_line(ticker)
+    if _eb_line:
+        console.print(_eb_line)
+
     # Get spot price for context
     spot = None
     try:

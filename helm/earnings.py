@@ -132,3 +132,54 @@ def refresh_watchlist_earnings(conn, tickers=None, force=False, stale_days=7, ma
         "failed": failed,
         "deferred": max(0, len(stale) - len(batch)),
     }
+
+
+# HELM-044-L1: entry-surface earnings helpers (cache-sourced, no network).
+def earnings_state(ticker, conn=None):
+    """Return (next_earnings, days_to, severity) from the watchlist cache.
+
+    No network. severity:
+      'warn'    -- dated, upcoming, within EARNINGS_WARN_DAYS
+      'ok'      -- dated, upcoming, beyond the window
+      'past'    -- cached date already elapsed (source not yet rolled forward)
+      'unknown' -- not cached / NULL / unparseable
+    """
+    own = conn is None
+    if own:
+        from helm.db import get_conn
+        conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT next_earnings FROM watchlist WHERE ticker = ?", (str(ticker).upper(),)
+        ).fetchone()
+    finally:
+        if own:
+            conn.close()
+    ne = row[0] if row else None
+    if not ne:
+        return (None, None, "unknown")
+    d = days_until(ne)
+    if d is None:
+        return (ne, None, "unknown")
+    if d < 0:
+        return (ne, d, "past")
+    if d <= EARNINGS_WARN_DAYS:
+        return (ne, d, "warn")
+    return (ne, d, "ok")
+
+
+def earnings_banner_line(ticker, conn=None):
+    """Rich-markup one-liner for the entry header, or None. Cache-sourced.
+
+    Dates are unconfirmed yfinance estimates -- marked 'est'. A passed date is
+    never shown as an upcoming warning; a missing date renders 'unknown', never
+    blank (a blank would read as 'no earnings risk').
+    """
+    ne, d, sev = earnings_state(ticker, conn=conn)
+    if sev == "warn":
+        return f"  [yellow][!] Earnings: {ne} ({d}d, est) -- inside entry window[/yellow]"
+    if sev == "ok":
+        return f"  [dim]Earnings: {ne} ({d}d out, est)[/dim]"
+    if sev == "past":
+        return f"  [dim]Earnings: last known {ne} has passed -- no confirmed upcoming date[/dim]"
+    return "  [dim yellow]Earnings: unknown (not in cache)[/dim yellow]"
