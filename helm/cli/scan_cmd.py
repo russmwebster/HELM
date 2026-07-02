@@ -567,7 +567,7 @@ def run():
     from helm.models.iv_history import IVHistory
     _ivr_data = IVHistory.for_tickers([r["ticker"] for r in valid])
     # HELM-EARN-DISPLAY-v1: earnings proximity for the scan table
-    from helm.earnings import days_until, earnings_warning
+    from helm.earnings import classify_earnings
     try:
         _earn_map = {row["ticker"]: row["next_earnings"] for row in get_conn().execute(
             "SELECT ticker, next_earnings FROM watchlist").fetchall()}
@@ -601,12 +601,15 @@ def run():
             strat_str = strat_str + "[dim] open[/dim]"
 
         _ed = _earn_map.get(_tk)
-        _d = days_until(_ed)
-        if _d is None or _d < 0:
-            _earn_str = "[dim]--[/dim]"
+        _d, _sev = classify_earnings(_ed)  # HELM-044-L1b: shared classifier; split past vs unknown
+        if _sev == "warn":
+            _earn_str = f"[yellow]{_ed[5:]} {_d}d[/yellow]"
+        elif _sev == "ok":
+            _earn_str = f"[dim]{_ed[5:]} {_d}d[/dim]"
+        elif _sev == "past":
+            _earn_str = "[dim]past[/dim]"
         else:
-            _etxt = f"{_ed[5:]} {_d}d"
-            _earn_str = f"[yellow]{_etxt}[/yellow]" if earnings_warning(_d) else f"[dim]{_etxt}[/dim]"
+            _earn_str = "[dim]--[/dim]"
         t.add_row(_tk_str, price, bias_str, strat_str, conv_str, _earn_str,
                   rsi, iv, ivr_str, ivp_str, atr, s1, s2, top_factor)
 

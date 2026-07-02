@@ -135,6 +135,25 @@ def refresh_watchlist_earnings(conn, tickers=None, force=False, stale_days=7, ma
 
 
 # HELM-044-L1: entry-surface earnings helpers (cache-sourced, no network).
+def classify_earnings(next_earnings, ref=None):
+    """Pure classifier: (days_to, severity) from a date string. No DB / network.
+
+    severity: 'warn' (within EARNINGS_WARN_DAYS), 'ok' (beyond the window),
+    'past' (already elapsed), 'unknown' (missing / unparseable). Shared by the
+    open banner (via earnings_state) and the scan cell so both agree on state.
+    """
+    if not next_earnings:
+        return (None, "unknown")
+    d = days_until(next_earnings, ref)
+    if d is None:
+        return (None, "unknown")
+    if d < 0:
+        return (d, "past")
+    if d <= EARNINGS_WARN_DAYS:
+        return (d, "warn")
+    return (d, "ok")
+
+
 def earnings_state(ticker, conn=None):
     """Return (next_earnings, days_to, severity) from the watchlist cache.
 
@@ -156,16 +175,8 @@ def earnings_state(ticker, conn=None):
         if own:
             conn.close()
     ne = row[0] if row else None
-    if not ne:
-        return (None, None, "unknown")
-    d = days_until(ne)
-    if d is None:
-        return (ne, None, "unknown")
-    if d < 0:
-        return (ne, d, "past")
-    if d <= EARNINGS_WARN_DAYS:
-        return (ne, d, "warn")
-    return (ne, d, "ok")
+    d, sev = classify_earnings(ne)
+    return (ne, d, sev)
 
 
 def earnings_banner_line(ticker, conn=None):
