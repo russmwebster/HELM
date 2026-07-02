@@ -171,3 +171,43 @@ def evaluate_arms(pos, total_pnl):
          'would_trigger': (t is not None and total_pnl <= -t)}
         for (a, b, t) in arms
     ]
+
+
+# ---------------------------------------------------------------------------
+# HELM-031  -  long-debit shadow stop capture (informational; no auto-close)
+# ---------------------------------------------------------------------------
+# A -DEBIT_SHADOW_STOP_PCT-of-premium loss "would-fire" flag for LONG_DEBIT
+# positions (LONG_CALL / LONG_PUT). Pure and side-effect-free, mirroring
+# evaluate_arms: it never mutates the verdict returned by evaluate() and never
+# closes anything. The REAL check journal (Patch 2) persists would_fire so the
+# real book accumulates counterfactual evidence before we consider acting.
+# The threshold is an OBSERVATION level, NOT a stop.
+
+DEBIT_SHADOW_STOP_PCT = 0.50   # fraction of premium paid; observation-only
+
+
+def evaluate_shadow_debit_stop(pos, total_pnl):
+    """HELM-031 shadow capture (pure; no DB writes, no verdict mutation).
+
+    For a LONG_DEBIT position report whether an informational
+    -DEBIT_SHADOW_STOP_PCT-of-premium loss level would fire at the current
+    marks. Returns None off-family or when premium is unknown.
+
+    loss_pct is computed here from total_pnl and premium (max loss on a long
+    option is the premium paid, so it floors naturally at -1.0). It does NOT
+    read the stored pnl_pct, so it is unaffected by the parked pnl_pct
+    corruption -- this forward flag is trustworthy without that fix.
+    """
+    if _family(pos.strategy) != LONG_DEBIT_FAMILY:
+        return None
+    premium = abs(pos.net_premium or 0.0)
+    if not premium:
+        return None
+    threshold = DEBIT_SHADOW_STOP_PCT * premium
+    return {
+        "signal": "DEBIT_STOP_50",
+        "basis": "PREMIUM",
+        "threshold_dollars": threshold,
+        "loss_pct": total_pnl / premium,
+        "would_fire": total_pnl <= -threshold,
+    }
