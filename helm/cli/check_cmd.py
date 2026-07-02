@@ -30,7 +30,7 @@ from datetime import date, datetime, time
 from typing import Optional
 import math
 from types import SimpleNamespace
-from helm.decision import evaluate as _core_evaluate, DEFAULT_STOP_MULT
+from helm.decision import evaluate as _core_evaluate, evaluate_shadow_debit_stop, DEFAULT_STOP_MULT
 from helm.models.settings import StrategySettings
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -241,6 +241,7 @@ def save_check(position_id: str, assessment: dict, pos: dict, leg_marks_by_id: O
 
     try:
         with _tx() as conn:
+            _sh = assessment.get("shadow") or {}
             conn.execute("""
                 INSERT INTO checks (
                     id, position_id, checked_at,
@@ -254,8 +255,9 @@ def save_check(position_id: str, assessment: dict, pos: dict, leg_marks_by_id: O
                     greeks_source, data_quality, rth_flag,
                     buffer_dollars, buffer_pct,
                     narrative,
-                    created_at
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    created_at,
+                    shadow_signal, shadow_would_fire, shadow_loss_pct
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, (
                 check_id, position_id, now,
                 spot, days_left, days_open, days_to_earnings,
@@ -270,6 +272,9 @@ def save_check(position_id: str, assessment: dict, pos: dict, leg_marks_by_id: O
                 buf, buf_pct_val,
                 narrative,
                 now,
+                _sh.get("signal"),
+                (1 if _sh.get("would_fire") else 0) if _sh else None,
+                _sh.get("loss_pct"),
             ))
             _persist_real_leg_marks(conn, check_id, position_id, leg_marks_by_id)
     except Exception:
@@ -440,10 +445,12 @@ def core_verdict(pos, legs, opt_legs, primary, opt_data, leg_marks):
             marks[lg["id"]] = leg_marks[key]
     if any(lg["id"] not in marks for lg in opt_legs):
         return None  # incomplete marks -> no verdict (mirrors paper_manage)
+    _nspos = _ns_pos(pos)
     reason, total_pnl = _core_evaluate(
-        _ns_pos(pos), [_ns_leg(l) for l in opt_legs], marks
+        _nspos, [_ns_leg(l) for l in opt_legs], marks
     )
-    return {"reason": reason, "core_pnl": total_pnl}
+    return {"reason": reason, "core_pnl": total_pnl,
+            "shadow": evaluate_shadow_debit_stop(_nspos, total_pnl)}
 
 
 def assess_position(pos: dict, legs: list, underlying_price: Optional[float],
@@ -759,6 +766,7 @@ def check_one(pos: dict, legs: list, deep: bool = False) -> dict:
         if _cv is not None:
             assessment["core_reason"] = _cv["reason"]
             assessment["core_pnl"] = _cv["core_pnl"]
+            assessment["shadow"] = _cv.get("shadow")
             _ib = assessment.get("intrinsic_buffer")
             _ev = {
                 "pnl_pct": assessment.get("pnl_pct"),
