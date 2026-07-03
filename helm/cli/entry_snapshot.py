@@ -74,6 +74,17 @@ def capture_entry_snapshot(
         except Exception:
             pass
 
+    # HELM-023: days-to-earnings at entry from the watchlist cache (no network;
+    # same source HELM-044 surfaces at open). Only when the caller didn't supply it.
+    if ticker and days_to_earnings is None:
+        try:
+            from helm.earnings import earnings_state
+            _ne, _d2e, _sev = earnings_state(ticker, conn)
+            if _d2e is not None:
+                days_to_earnings = _d2e
+        except Exception:
+            pass
+
     # Compute ATR-based strike distance if we have the data
     atr_strikes_otm = None
     if spot_price and atr_14:
