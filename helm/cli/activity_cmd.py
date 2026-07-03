@@ -620,6 +620,69 @@ def run():
         console.print(t2)
         console.print()
 
+    # --- HELM-038 Gap 2: group multi-leg spreads before per-tx single-leg import ---
+    # Imported spreads arrive as separate transactions; partition_new_opens infers
+    # credit verticals / iron condors from leg structure so they persist as ONE
+    # multi-leg position (real trade date + Fidelity provenance) instead of
+    # fragmenting into misclassified single-leg rows. Unrecognized legs fall
+    # through unchanged to the single-leg path below.
+    if new_opens:
+        from helm.cli.activity_grouping import partition_new_opens
+        _spreads, _singles = partition_new_opens(new_opens)
+        if _spreads:
+            from helm.cli.entry_snapshot import open_multileg_with_snapshot
+            console.print(f"[bold yellow]Multi-leg spreads detected ({len(_spreads)}):[/bold yellow]")
+            console.print("[dim]These import as single multi-leg positions (grouped from their legs).[/dim]")
+            console.print()
+            _sp_imported = 0
+            for _sp in _spreads:
+                _legs = _sp["legs"]
+                _pf = _sp["position_fields"]
+                _pretty = _sp["strategy"].replace("_", " ").title()
+                _strikes = "/".join(f"{_l['strike']:.0f}" for _l in _legs)
+                _exp = _sp["expiration"][5:]
+                _credit = _pf.get("max_profit") or 0.0
+                _risk = _pf.get("max_loss") or 0.0
+                _trade_date = _sp["source_txs"][0]["date"]
+                _ans = Prompt.ask(
+                    f"  Import [bold cyan]{_sp['ticker']}[/bold cyan] "
+                    f"{_pretty} {_strikes} exp {_exp} x{_sp['contracts']} "
+                    f"[dim](credit ${_credit:.0f} / max loss ${_risk:.0f})[/dim]?",
+                    choices=["y", "n", "s"], default="y",
+                    show_choices=False, show_default=False,
+                )
+                if _ans == "s":
+                    console.print("  [dim]Skipping remaining spreads.[/dim]")
+                    break
+                if _ans != "y":
+                    continue
+                try:
+                    _pos_id, _leg_ids, _snap_id = open_multileg_with_snapshot(
+                        ticker=_sp["ticker"], strategy=_sp["strategy"],
+                        legs=_legs, contracts=_sp["contracts"],
+                        spot=None, scan_data=None, book="REAL",
+                        position_fields=_pf,
+                        pricing_source="fidelity_import",
+                        opened_at=f"{_trade_date}T00:00:00",
+                        notes=("Imported from Fidelity activity — Stage 4 spread "
+                               "(no HELM confirmation). Grouped from single-leg "
+                               "transactions; entry snapshot is partial."),
+                    )
+                    _sp_imported += 1
+                    console.print(
+                        f"  [green]✓[/green] {_sp['ticker']} {_pretty} "
+                        f"imported — [dim]{_pos_id}[/dim]"
+                    )
+                except Exception as _e:
+                    console.print(f"  [red]✗[/red] {_sp['ticker']} {_pretty} failed: {_e}")
+            if _sp_imported:
+                console.print()
+                console.print(f"  [green]{_sp_imported} spread(s) imported.[/green]")
+            console.print()
+        # Only unrecognized single legs continue to the per-transaction path below.
+        new_opens = _singles
+    # --- end HELM-038 Gap 2 ---
+
     if new_opens:
         console.print(f"[bold yellow]New positions not in HELM ({len(new_opens)}):[/bold yellow]")
         console.print("[dim]These were opened in Fidelity but not through HELM — skipping Stage 3.[/dim]")

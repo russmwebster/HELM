@@ -233,6 +233,8 @@ def open_multileg_with_snapshot(
     book: str = 'REAL',
     position_fields: Optional[dict] = None,
     pricing_source: Optional[str] = None,
+    opened_at: Optional[str] = None,
+    notes: Optional[str] = None,
 ) -> tuple:
     """
     Open a multi-leg position: one Position, N legs, ONE entry snapshot
@@ -270,7 +272,7 @@ def open_multileg_with_snapshot(
         net_premium += sign * float(lg["fill_price"]) * 100 * contracts
     net_premium = round(net_premium, 2)
 
-    note = f"Pending execution - opened via HELM on {today}"
+    note = notes or f"Pending execution - opened via HELM on {today}"
     if pricing_source:
         note += f" | priced: {pricing_source}"
 
@@ -285,7 +287,7 @@ def open_multileg_with_snapshot(
             ticker=ticker,
             company_name=company_name,
             status='OPEN',
-            opened_at=now,
+            opened_at=opened_at or now,
             total_contracts=contracts,
             net_premium=net_premium,
             book=book,
