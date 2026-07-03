@@ -24,7 +24,6 @@ ALLOWED_PREFIXES = [
     'git add', 'git commit', 'git push', 'git status', 'git log', 'git diff',
     'python3 ', 'sqlite3 ',
     '/opt/anaconda3/envs/helm/bin/python3',
-    '/opt/anaconda3/envs/cots/bin/python',
     'conda run',
     'helm ',
     'bash -c',
