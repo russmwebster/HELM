@@ -232,6 +232,14 @@ def save_check(position_id: str, assessment: dict, pos: dict, leg_marks_by_id: O
     now = datetime.now().isoformat()
     has_option_data = opt.get("bid") is not None or opt.get("mid") is not None
     dq = "GOOD" if ("live" in source and has_option_data) else "PARTIAL"
+    # HELM-045 guard: a live mark implying pnl_unrealized > max_profit is an impossible
+    # quote; it must not be persisted as GOOD even when the source is live + complete.
+    _mp045 = pos.get("max_profit")
+    _pnl045 = a.get("pnl_mtm")
+    if dq == "GOOD" and _pnl045 is not None and _mp045 not in (None, 0) \
+            and float(_pnl045) > float(_mp045) * 1.001:
+        dq = "STALE"
+
     # HELM-037 live-only persistence gate: only GOOD (live + complete) marks are
     # written. Frozen / partial / yfinance reads are still computed and displayed
     # (the caller renders the returned assessment) but never persisted, keeping the
