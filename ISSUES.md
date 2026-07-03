@@ -30,7 +30,7 @@ _Last updated: 2026-07-02 (s47 — **HELM-044 earnings-at-entry shipped end-to-e
 
 ### Bugs
 
-**HELM-044 · `BUG` · `OPEN` · Earnings not surfaced at entry decision (scans + `helm open`)**
+**HELM-044 · `BUG` · `RESOLVED (surface) / layer-3 corpus OPEN` · Earnings at entry decision surfaced (scans + `helm open`); only historical-corpus `earnings_warning` backfill remains**
 _s47: `helm open META CSP` threw no earnings flag with a print ~27d out (Jul 29) inside the 50-DTE window. Three stacked layers; layer 2 fixed this commit._
 `helm/earnings.py` (`fetch_earnings_date`, `days_until`, `earnings_warning`, `EARNINGS_WARN_DAYS=45`) is warn-capable and wired into `_decision_capture`, `check_cmd`, `entry_snapshot` — but earnings never reaches the entry decision surface.
 1. **[RESOLVED s47] Surface gap (open_cmd blind) — primary ask.** `open_cmd.py` has zero earnings refs and never calls `_decision_capture`: no compute, no column, no recommendation flag, browse or confirm. Earnings must appear in every scan table and every `helm open XXX`, cache-sourced (no per-candidate network). Missing/stale renders explicit "unknown," never blank. yfinance dates are estimates — label as estimated, not confirmed. **Update s47:** `helm open` banner shipped (all strategies, via the run() header; states warn/ok/past/unknown, forward dates marked est). `helm scan` per-row column pre-existed (HELM-EARN-DISPLAY-v1) but was dark until the L2 cache fix; L1b routed it through the shared `classify_earnings` and split past (shown `past`) from unknown (shown `--`). Both surfaces now agree on state. Layer 1 complete.
