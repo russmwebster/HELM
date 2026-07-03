@@ -640,7 +640,6 @@ def _spot_class(r):
     return "spot-g"
 
 
-
 def _earnings_chip(earnings_date, expiration=None):
     if not earnings_date:
         return ""
@@ -724,7 +723,6 @@ def _page(title, body):
         f"<title>{_esc(title)}</title><style>{CSS}</style></head>"
         f"<body><div class='wrap'>{body}</div></body></html>"
     )
-
 
 
 def _refresh_earnings(conn):
@@ -1447,47 +1445,6 @@ def score_icondor(r):
     return {"scores": scores, "composite": composite, "band": band, "band_color": band_color}
 
 
-def guidance_icondor(r, scored):
-    c      = scored["composite"]
-    put_d  = r.get("abs_put_delta")
-    call_d = r.get("abs_call_delta")
-    dte    = r.get("dte_now")
-    max_pct = r.get("max_profit_pct")
-    # Gamma squeeze: high delta near expiry
-    if ((put_d is not None and put_d >= 0.30) or (call_d is not None and call_d >= 0.30)) and dte is not None and dte < 21:
-        return ("red", "Gamma squeeze \u2014 threatened side accelerating near expiration. Close immediately.")
-    # 50% profit target
-    if max_pct is not None and max_pct >= 50:
-        return ("green", "At or past 50% profit target \u2014 close this position and redeploy capital.")
-    if c is None:
-        return ("gray", "Insufficient data \u2014 run a fresh check.")
-    # Tested sides
-    if r.get("call_side_tested"):
-        return ("red", "Call side tested \u2014 stock above short call. Roll or close immediately.")
-    if r.get("put_side_tested"):
-        return ("red", "Put side tested \u2014 stock below short put. Roll or close immediately.")
-    # Leg delta warnings
-    if put_d is not None and put_d >= 0.30:
-        return ("amber", "Put side at action threshold \u2014 delta above 0.30. Roll untested (call) side in or close.")
-    if call_d is not None and call_d >= 0.30:
-        return ("amber", "Call side at action threshold \u2014 delta above 0.30. Roll untested (put) side in or close.")
-    if put_d is not None and put_d >= 0.25:
-        return ("amber", "Put side at watch threshold \u2014 monitor closely. Roll untested side if move continues.")
-    if call_d is not None and call_d >= 0.25:
-        return ("amber", "Call side at watch threshold \u2014 monitor closely. Roll untested side if move continues.")
-    # DTE urgency
-    if dte is not None and dte <= 7:
-        return ("red", "Under 7 DTE \u2014 close immediately to avoid assignment risk.")
-    if dte is not None and dte <= 21:
-        return ("amber", "Under 21 DTE \u2014 evaluate closing to avoid gamma risk in the final weeks.")
-    # Composite bands
-    if c >= 70:
-        return ("green", "Healthy \u2014 stock inside profit zone, buffers intact. Theta working in your favor.")
-    if c >= 40:
-        return ("amber", "Watch \u2014 buffers thinning or delta drifting. Monitor for potential adjustment.")
-    return ("red", "At risk \u2014 significant pressure on one or both sides. Consider closing or rolling.")
-
-
 def _summary_facts_ic(r):
     spot = r["spot_price"]
     pnl  = r.get("pnl_display", r["pnl_unrealized"])
@@ -1775,8 +1732,6 @@ def _legend():
     return keyline + "<div class='vardefs-title'>Cash Secured Put — variable definitions &amp; scoring</div>" + grid
 
 
-
-
 def _bs_put_price_bps(spot, strike, T_days, iv, r=0.043):
     if not (spot and strike and T_days and T_days > 0 and iv and iv > 0): return None
     try:
@@ -1889,27 +1844,6 @@ def score_bearput(r):
     band, band_color = composite_band(composite)
     return {'scores': scores, 'composite': composite, 'band': band, 'band_color': band_color}
 
-def guidance_bearput(r, scored):
-    c = scored['composite']; pct = r.get('be_buffer_pct'); dte = r.get('dte_now'); mp = r.get('max_profit_pct')
-    if mp is not None and mp >= 80:
-        return ('green', 'Approaching maximum profit \u2014 close this position and lock in the gain.')
-    if c is None:
-        return ('gray', 'Insufficient data \u2014 run a fresh check.')
-    if r.get('in_profit_zone'):
-        if mp is not None and mp >= 40:
-            return ('green', 'Position in profit \u2014 stock below break-even and gaining. Monitor for exit.')
-        return ('green', 'Stock below break-even \u2014 position profitable. Let it work or take partial profits.')
-    if dte is not None and dte <= 7:
-        return ('red', 'Under 7 DTE \u2014 close immediately. Not enough time for the required move.')
-    if dte is not None and dte <= 14:
-        if pct is not None and pct > 5:
-            return ('red', 'Under 14 DTE and still far from break-even \u2014 consider closing to limit loss.')
-        return ('amber', 'Under 14 DTE \u2014 monitor closely. Stock needs to move soon.')
-    if c >= 70:
-        return ('green', 'On track \u2014 stock moving toward break-even. Let theta work.')
-    if c >= 40:
-        return ('amber', 'Watch \u2014 stock needs to continue lower. Monitor for time decay erosion.')
-    return ('red', 'At risk \u2014 significant move needed with limited time. Evaluate cutting loss.')
 
 def _summary_facts_bps(r):
     spot = r['spot_price']; pnl = r['pnl_display']; be = r['breakeven']; ls = r['long_strike']; ss = r['short_strike']
