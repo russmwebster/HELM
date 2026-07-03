@@ -50,6 +50,7 @@ def capture_entry_snapshot(
     open_interest: Optional[int] = None,
     bid_ask_spread: Optional[float] = None,
     bid_ask_spread_pct: Optional[float] = None,
+    ticker: Optional[str] = None,
     conn=None,
 ) -> str:
     """
@@ -58,6 +59,20 @@ def capture_entry_snapshot(
     """
     snap_id = f"snap-{uuid.uuid4().hex[:8].upper()}"
     now = datetime.now().isoformat()
+
+    # HELM-023 Track B: rank the entry IV against the ticker's own history
+    # so the variance-risk-premium entry lever is scoreable (mirrors
+    # close_snapshot). Additive; NULL when ticker/history absent.
+    iv_rank = iv_percentile = None
+    if ticker:
+        try:
+            from helm.models.iv_history import IVHistory
+            _ivr = IVHistory.latest(ticker)
+            if _ivr:
+                iv_rank = _ivr.iv_rank
+                iv_percentile = _ivr.iv_percentile
+        except Exception:
+            pass
 
     # Compute ATR-based strike distance if we have the data
     atr_strikes_otm = None
@@ -81,16 +96,16 @@ def capture_entry_snapshot(
             INSERT INTO entry_snapshots (
                 id, position_id, leg_id, snapshot_at,
                 spot_price, spot_52wk_high, spot_52wk_low,
-                iv_current, delta, gamma, theta, vega,
+                iv_current, iv_rank, iv_percentile, delta, gamma, theta, vega,
                 atr_14, atr_strikes_otm, dte,
                 days_to_earnings, premium_collected,
                 open_interest, bid_ask_spread, bid_ask_spread_pct,
                 theta_per_day, settings_snapshot, created_at
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, (
             snap_id, position_id, leg_id, now,
             spot_price, week_52_high, week_52_low,
-            iv_current, delta, gamma, theta, vega,
+            iv_current, iv_rank, iv_percentile, delta, gamma, theta, vega,
             atr_14, atr_strikes_otm, dte,
             days_to_earnings, premium_collected,
             open_interest, bid_ask_spread, bid_ask_spread_pct,
@@ -185,6 +200,7 @@ def open_position_with_snapshot(
         snap_id = capture_entry_snapshot(
             position_id=pos.id,
             leg_id=leg.id,
+            ticker=ticker,
             spot_price=contract.get("spot"),
             delta=contract.get("delta"),
             theta=contract.get("theta"),
@@ -337,6 +353,7 @@ def open_multileg_with_snapshot(
         snap_id = capture_entry_snapshot(
             position_id=pos.id,
             leg_id=p_leg_id,
+            ticker=ticker,
             spot_price=(p_lg["spot"] if p_lg.get("spot") is not None else spot),
             delta=p_lg.get("delta"),
             theta=p_lg.get("theta"),
