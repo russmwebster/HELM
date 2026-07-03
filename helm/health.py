@@ -335,7 +335,7 @@ def _core_band_ml(r, conn):
     if prow is None:
         return None
     legs = [dict(l) for l in conn.execute(
-        "SELECT id, direction, open_price, contracts, multiplier, expiration "
+        "SELECT id, direction, open_price, contracts, multiplier, expiration, strike, option_type "
         "FROM legs WHERE position_id = ? ORDER BY strike", (pid,)
     ).fetchall()]
     if not legs:
@@ -375,9 +375,29 @@ def _core_band_ml(r, conn):
                else r.get("pnl_pct"))
     gs = (r.get("greeks_source") or "").lower()
     mc = "frozen" if "frozen" in gs else ("stale" if "stale" in gs else "live")
+    # HELM-043 v1a: iron-condor short-strike proximity (structural, greeks-free).
+    # Reads the short strikes + latest journaled spot; no-op when spot is absent.
+    prox = None
+    if prow["strategy"] == "IRON_CONDOR":
+        from helm.verdict import condor_proximity
+        _sp = next((l["strike"] for l in legs
+                    if l["direction"] == "SHORT"
+                    and (l["option_type"] or "").upper() == "PUT"), None)
+        _sc = next((l["strike"] for l in legs
+                    if l["direction"] == "SHORT"
+                    and (l["option_type"] or "").upper() == "CALL"), None)
+        _srow = conn.execute(
+            "SELECT spot_price FROM checks WHERE position_id = ? "
+            "ORDER BY checked_at DESC, id DESC LIMIT 1", (pid,)
+        ).fetchone()
+        _spot = _srow["spot_price"] if _srow else None
+        prox = condor_proximity(_spot, _sp, _sc)
     ev = {"direction": None, "is_multileg": True,
           "intrinsic_buffer": None, "pct_buffer": None,
           "pnl_pct": pnl_pct, "mark_confidence": mc}
+    if prox:
+        ev["proximity_pct"] = prox["proximity_pct"]
+        ev["tested_side"] = prox["tested_side"]
     return band_for(reason, ev)
 
 

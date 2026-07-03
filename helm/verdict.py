@@ -22,6 +22,38 @@ _REASON_HEADLINE = {
 }
 _FLAG_STYLE = {"GREEN": "bold green", "YELLOW": "bold yellow", "RED": "bold red"}
 
+PROX_PREP = 0.50
+PROX_ACT = 0.75
+
+
+def condor_proximity(spot, short_put, short_call):
+    """Iron-condor short-strike proximity (greeks-free structural signal).
+
+    Fraction of the body center -> tested short strike distance covered by
+    spot: 0.0 = at center (safe), 1.0 = spot at the short strike (fully
+    tested), >1.0 = short strike breached. Returns {proximity_pct,
+    tested_side} or None when inputs are incomplete/degenerate. Pure.
+    """
+    if spot is None or short_put is None or short_call is None:
+        return None
+    if not (short_put < short_call):
+        return None
+    center = (short_put + short_call) / 2.0
+    if spot >= center:
+        span = short_call - center
+        if span <= 0:
+            return None
+        prox = (spot - center) / span
+        side = "call"
+    else:
+        span = center - short_put
+        if span <= 0:
+            return None
+        prox = (center - spot) / span
+        side = "put"
+    return {"proximity_pct": round(prox, 4), "tested_side": side}
+
+
 def band_for(reason, evidence=None):
     """Map a decision-core (reason, evidence) to {flag, flag_style, headline}.
 
@@ -46,6 +78,14 @@ def band_for(reason, evidence=None):
             flag, headline = "YELLOW", "Holding — ITM, assignment risk"
         elif _short_single and pct_buf is not None and pct_buf < 3:
             flag, headline = "YELLOW", "Holding — thin buffer to strike"
+        elif (ev.get("is_multileg") and ev.get("proximity_pct") is not None
+              and ev.get("proximity_pct") >= PROX_PREP):
+            _side = ev.get("tested_side") or "short"
+            _pct = int(round(ev.get("proximity_pct") * 100))
+            _act = ev.get("proximity_pct") >= PROX_ACT
+            _verb = "tested" if _act else "approaching"
+            _tier = "manage" if _act else "watch"
+            flag, headline = "YELLOW", f"Holding — short {_side} strike {_verb} ({_pct}%), {_tier}"
         elif (ev.get("pnl_pct") is not None
               and ev["pnl_pct"] < (-15 if direction == "SHORT" else -25)):
             flag, headline = "YELLOW", "Holding — underwater, watch"
