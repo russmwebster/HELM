@@ -68,6 +68,19 @@ def band_for(reason, evidence=None):
     ev = evidence or {}
     if reason is not None:
         flag, headline = _REASON_HEADLINE.get(reason, ("YELLOW", "Manage"))
+        # HELM-043 v1b: on an already-RED condor verdict, name the tested
+        # short-strike side + depth from the v1a proximity evidence computed
+        # upstream. Structural detail only -- never changes the flag or the
+        # reason; silent when proximity is absent or below prep, and for
+        # non-condor multileg (no proximity_pct in evidence).
+        if flag == "RED":
+            _p = ev.get("proximity_pct")
+            if _p is not None and _p >= PROX_PREP:
+                _side = ev.get("tested_side") or "short"
+                _pct = int(round(_p * 100))
+                _state = ("past strike" if _p >= 1.0
+                          else "tested" if _p >= PROX_ACT else "approaching")
+                headline = f"{headline} · short {_side} {_state} ({_pct}%)"
     else:
         direction = ev.get("direction")
         buf = ev.get("intrinsic_buffer")
