@@ -110,8 +110,10 @@ def _finalize_close(pos, legs, close_prices, reason="manual"):
     except Exception:
         pass  # never block a close
     # back-propagate the realized outcome onto the originating signal
+    # (REAL book only -- HELM-049: paper positions may carry signal_id for pick-
+    # linkage, but their outcomes stay on the paper position, never on the signal)
     try:
-        if getattr(pos, "signal_id", None):
+        if getattr(pos, "signal_id", None) and getattr(pos, "book", None) == "REAL":
             from helm.models.signal import Signal
             sig = Signal.get(pos.signal_id)
             if sig is not None:

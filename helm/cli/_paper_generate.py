@@ -158,6 +158,23 @@ def paper_generate() -> dict:
             skipped.append((ticker, strategy, "no viable real-chain contract (fidelity skip)"))
             continue
 
+        # HELM-049: link this paper position to its originating scan signal.
+        # Non-destructive -- stamps positions.signal_id only, never consuming the
+        # signal (a later real open on the same ticker still links). Best-effort;
+        # a linkage stamp must never fail the batch. Outcome back-prop stays REAL-
+        # only (close_cmd), so this reference can't contaminate signal outcomes.
+        _sig_id = sig.get("id")
+        if _sig_id:
+            try:
+                from helm.db import transaction
+                with transaction() as _conn:
+                    _conn.execute(
+                        "UPDATE positions SET signal_id = ? WHERE id = ?",
+                        (_sig_id, pos_id),
+                    )
+            except Exception:
+                pass
+
         booked.append((ticker, strategy, pos_id))
         seen.add((ticker, strategy))
 
