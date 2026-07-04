@@ -116,18 +116,21 @@ def conviction_label(score: float) -> str:
 
 
 
-def momentum_bias(price, sma_50, sma_200, ema_20, rsi, pct_52wk, atr):
-    """HELM-042 v1 shadow scorer: option-buyer's momentum read (MACD deferred).
+def momentum_bias(price, sma_50, sma_200, ema_20, macd_hist, obv_trend, adx):
+    """HELM-042 v2 shadow scorer: four-category momentum read, ADX-gated.
 
-    Computed alongside the legacy mean-reversion bias_score for corpus
-    comparison; NOT routed. Same [-3, 3] clamp as the legacy score so the two are
-    directly comparable. Each component is skipped when its input is None.
+    Sums three directional votes — MA stack (structure), MACD histogram (momentum),
+    OBV trend (conviction) — then an ADX regime gate scales the result: a weak or
+    absent trend (low ADX) is pulled toward neutral so range-bound names route to
+    condors on purpose, not as a leftover. Same [-3, 3] clamp as the legacy score
+    for direct comparison. Still shadow: NOT routed. Each vote is skipped when its
+    input is None. Thresholds seeded from a s58 real-name sample; tunable.
     Returns (score, factors). Pure.
     """
     score = 0
     factors = []
 
-    # -- MA stack: trend structure --
+    # (1) Direction -- MA stack (structure)
     if None not in (price, sma_50, sma_200):
         if price > sma_50 > sma_200:
             score += 2; factors.append("Price > SMA50 > SMA200 -- bullish stack")
@@ -143,27 +146,34 @@ def momentum_bias(price, sma_50, sma_200, ema_20, rsi, pct_52wk, atr):
         elif price < ema_20 < sma_50:
             score -= 1; factors.append("Price < EMA20 < SMA50 -- downtrend (no SMA200)")
 
-    # -- RSI momentum band (vs legacy's oversold-is-bullish) --
-    if rsi is not None:
-        if 50 <= rsi <= 72:
-            score += 1; factors.append(f"RSI {rsi:.0f} -- momentum band (50-72)")
-        elif rsi > 72:
-            factors.append(f"RSI {rsi:.0f} -- overbought, momentum extended")
-        elif rsi < 50:
-            score -= 1; factors.append(f"RSI {rsi:.0f} -- sub-momentum")
+    # (2) Momentum -- MACD histogram sign
+    if macd_hist is not None:
+        if macd_hist > 0:
+            score += 1; factors.append(f"MACD hist +{macd_hist:.2f} -- momentum up")
+        elif macd_hist < 0:
+            score -= 1; factors.append(f"MACD hist {macd_hist:.2f} -- momentum down")
 
-    # -- 52-week position (vs legacy's near-low-is-bullish) --
-    if pct_52wk is not None:
-        if pct_52wk >= 75:
-            score += 1; factors.append(f"Near 52wk high ({pct_52wk:.0f}%) -- momentum")
-        elif pct_52wk <= 25:
-            score -= 1; factors.append(f"Near 52wk low ({pct_52wk:.0f}%) -- no momentum")
+    # (3) Conviction -- OBV trend
+    if obv_trend:  # +1 / -1 (0 or None -> no vote)
+        score += 1 if obv_trend > 0 else -1
+        factors.append("OBV rising -- accumulation" if obv_trend > 0
+                       else "OBV falling -- distribution")
 
-    # -- ATR over-extension guard: damp chasing a parabolic move --
-    if None not in (price, sma_50, atr) and atr and atr > 0 and score > 0:
-        stretch = (price - sma_50) / atr
-        if stretch > 3.0:
-            score -= 1; factors.append(f"Over-extended {stretch:.1f} ATR above SMA50 -- chase guard")
+    # (4) Regime gate -- ADX scales the directional read (range -> neutral)
+    if adx is not None:
+        if adx < 20:
+            if score != 0:
+                factors.append(f"ADX {adx:.0f} (<20) -- range-bound, gated to neutral")
+            score = 0
+        elif adx < 25:
+            _pre = score
+            score = int(score / 2)  # halve toward zero (weak trend strength)
+            if _pre != score:
+                factors.append(f"ADX {adx:.0f} (20-25) -- weak trend, directional read halved")
+        else:
+            factors.append(f"ADX {adx:.0f} -- trend confirmed")
+    else:
+        factors.append("ADX n/a -- gate skipped")
 
     return max(-3, min(3, score)), factors
 
@@ -270,6 +280,14 @@ def fetch_technicals(ticker: str, ivr_record=None) -> dict:
         "conviction": None,
         "conviction_score": None,
         "atr_strikes": None,  # suggested strike range based on ATR
+        "macd": None,
+        "macd_signal": None,
+        "macd_hist": None,
+        "obv": None,
+        "obv_trend": None,   # +1 rising / -1 falling / 0 flat vs own 20d mean
+        "adx": None,
+        "plus_di": None,
+        "minus_di": None,
         "error": None,
     }
 
@@ -325,6 +343,38 @@ def fetch_technicals(ticker: str, ivr_record=None) -> dict:
         )
         atr = float(tr.rolling(14).mean().iloc[-1])
         result["atr_14"] = round(atr, 2)
+
+        # ── HELM-042 capability: MACD/OBV/ADX (additive, shadow — no scorer reads these yet) ──
+        _ema12 = close.ewm(span=12, adjust=False).mean()
+        _ema26 = close.ewm(span=26, adjust=False).mean()
+        _macd = _ema12 - _ema26
+        _macd_sig = _macd.ewm(span=9, adjust=False).mean()
+        result["macd"] = round(float(_macd.iloc[-1]), 3)
+        result["macd_signal"] = round(float(_macd_sig.iloc[-1]), 3)
+        result["macd_hist"] = round(float((_macd - _macd_sig).iloc[-1]), 3)
+
+        _vol = hist["Volume"]
+        _obv = (np.sign(close.diff().fillna(0)) * _vol).cumsum()
+        _obv_now = float(_obv.iloc[-1])
+        _obv_ref = _obv.rolling(20).mean().iloc[-1]
+        result["obv"] = round(_obv_now, 0)
+        result["obv_trend"] = (0 if _obv_ref != _obv_ref
+                               else 1 if _obv_now > _obv_ref
+                               else -1 if _obv_now < _obv_ref else 0)
+
+        _up = high.diff()
+        _down = -low.diff()
+        _plus_dm = _up.where((_up > _down) & (_up > 0), 0.0)
+        _minus_dm = _down.where((_down > _up) & (_down > 0), 0.0)
+        _atr_n = tr.rolling(14).mean()
+        _plus_di = 100 * _plus_dm.rolling(14).mean() / _atr_n
+        _minus_di = 100 * _minus_dm.rolling(14).mean() / _atr_n
+        _dx = 100 * (_plus_di - _minus_di).abs() / (_plus_di + _minus_di).replace(0, float("nan"))
+        _adx = _dx.rolling(14).mean()
+        _pdi, _mdi, _adxv = _plus_di.iloc[-1], _minus_di.iloc[-1], _adx.iloc[-1]
+        result["plus_di"]  = round(float(_pdi), 1) if _pdi == _pdi else None
+        result["minus_di"] = round(float(_mdi), 1) if _mdi == _mdi else None
+        result["adx"]      = round(float(_adxv), 1) if _adxv == _adxv else None
 
         # ATR-based strike suggestions for CSP (1 and 2 ATRs below spot)
         result["atr_strikes"] = {
@@ -410,8 +460,8 @@ def fetch_technicals(ticker: str, ivr_record=None) -> dict:
         # routing below still uses result["bias_score"]. Additive, no persist.
         _mo_score, _mo_factors = momentum_bias(
             result.get("price"), result.get("sma_50"), result.get("sma_200"),
-            result.get("ema_20"), result.get("rsi_14"),
-            result.get("price_vs_52wk_pct"), result.get("atr_14"))
+            result.get("ema_20"), result.get("macd_hist"),
+            result.get("obv_trend"), result.get("adx"))
         result["momentum_bias_score"] = _mo_score
         result["momentum_bias_factors"] = _mo_factors
 
