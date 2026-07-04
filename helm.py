@@ -25,6 +25,7 @@ COMMANDS = {
     'ibkr':      ('helm.cli.ibkr_cmd',  'run',  'Manage IB Gateway connection'),
     'positions': ('helm.cli.positions_cmd', 'run', 'View open positions'),
     'check':     ('helm.cli.check_cmd',     'run', 'Health check on open positions'),
+    'snapshot':  ('helm.cli.check_cmd',     'run_snapshot', 'Persist a live health snapshot (scheduled writer)'),
     'scan':      ('helm.cli.scan_cmd',      'run', 'Scan optionable tickers for opportunities'),
     'open':      ('helm.cli.open_cmd',      'run', 'Evaluate contracts for a new position'),
     'activity':  ('helm.cli.activity_cmd',  'run', 'Import Fidelity activity to close positions'),

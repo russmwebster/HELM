@@ -95,10 +95,18 @@ def band_for(reason, evidence=None):
               and ev.get("proximity_pct") >= PROX_PREP):
             _side = ev.get("tested_side") or "short"
             _pct = int(round(ev.get("proximity_pct") * 100))
-            _act = ev.get("proximity_pct") >= PROX_ACT
-            _verb = "tested" if _act else "approaching"
-            _tier = "manage" if _act else "watch"
-            flag, headline = "YELLOW", f"Holding — short {_side} strike {_verb} ({_pct}%), {_tier}"
+            # HELM-043 Gap B: a proximity >= 1.0 breach (spot at/past the short
+            # strike) is a structural, spot-based fact -- mark-robust even when the
+            # greeks are None -- so it escalates to RED on its own. Display-only
+            # (band_for drives no auto-close); the "evidence never escalates to RED"
+            # invariant is narrowly amended for this hard structural breach.
+            if ev.get("proximity_pct") >= 1.0:
+                flag, headline = "RED", f"Short {_side} breached ({_pct}%) — act now"
+            else:
+                _act = ev.get("proximity_pct") >= PROX_ACT
+                _verb = "tested" if _act else "approaching"
+                _tier = "manage" if _act else "watch"
+                flag, headline = "YELLOW", f"Holding — short {_side} strike {_verb} ({_pct}%), {_tier}"
         elif (ev.get("pnl_pct") is not None
               and ev["pnl_pct"] < (-15 if direction == "SHORT" else -25)):
             flag, headline = "YELLOW", "Holding — underwater, watch"

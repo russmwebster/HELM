@@ -199,7 +199,7 @@ def save_check(position_id: str, assessment: dict, pos: dict, leg_marks_by_id: O
     pnl_pct = buffer_pct = None
     try:
         pnl = a.get("pnl_mtm")
-        premium = pos.get("net_premium") or pos.get("premium_collected") or (primary.get("open_price", 0) * 100)
+        premium = pos.get("net_premium") or pos.get("premium_collected")
         if pnl is not None and premium:
             pnl_pct = round(float(pnl) / abs(float(premium)) * 100, 1)
     except Exception:
@@ -643,7 +643,7 @@ def fmt_pct(v):
 
 # ── Commands ──────────────────────────────────────────────────────────────────
 
-def check_one(pos: dict, legs: list, deep: bool = False) -> dict:
+def check_one(pos: dict, legs: list, deep: bool = False, persist: bool = True) -> dict:
     """Run a full check on a single position. Returns assessment dict."""
     ticker = pos["ticker"]
     strategy = pos["strategy"]
@@ -794,8 +794,10 @@ def check_one(pos: dict, legs: list, deep: bool = False) -> dict:
             "core_verdict failed for %s: %s", pos.get("ticker"), _e
         )
 
-    # Save check to DB silently
-    save_check(pos["id"], assessment, pos, leg_marks_by_id)
+    # Save check to DB silently -- only when the caller is a sanctioned writer
+    # (helm snapshot / scheduled agent -> persist=True; ad-hoc helm check -> False). HELM-037.
+    if persist:
+        save_check(pos["id"], assessment, pos, leg_marks_by_id)
 
     return assessment
 
@@ -1821,6 +1823,48 @@ def cmd_check_integrity(verbose=False):
         console.print("[red]Integrity: %d family(ies) failing.[/red] Use [bold]--verbose[/bold] for all items." % n_fail)
     else:
         console.print("[green]Integrity: all invariants hold.[/green]")
+
+
+def cmd_snapshot(args):
+    """helm snapshot -- sanctioned scheduled writer (HELM-037).
+
+    Computes + persists one live check row per open position, reusing the same
+    compute (check_one) and the live-only persistence gate inside save_check.
+    Persists the SAME rows the scheduled `helm check --silent` writes today:
+    identical open-position set + identical check_one(persist=True) -> save_check
+    path. The only difference is that the write lives in this dedicated command
+    rather than the overloaded ad-hoc check path. No display table -- this is a
+    writer, not a view.
+    """
+    conn = get_conn()
+    account_id = get_active_account()
+    bc, bp = book_filter(args)
+    positions = [dict(r) for r in conn.execute(
+        "SELECT * FROM positions WHERE account_id = ? AND status = 'OPEN'" + bc + " ORDER BY strategy, ticker",
+        (account_id, *bp)
+    ).fetchall()]
+    conn.close()
+    if not positions:
+        return
+    written = 0
+    for pos in positions:
+        conn = get_conn()
+        legs = [dict(r) for r in conn.execute(
+            "SELECT * FROM legs WHERE position_id = ?", (pos["id"],)
+        ).fetchall()]
+        conn.close()
+        check_one(pos, legs, persist=True)
+        written += 1
+    if "--silent" not in args:
+        console.print(f"[dim]snapshot: {written} position(s) processed (live-only persist)[/dim]")
+
+
+def run_snapshot():
+    args = sys.argv[1:]
+    if not get_active_account():
+        console.print("[red]No active account. Run helm setup first.[/red]")
+        return
+    cmd_snapshot(args)
 
 
 def run():
