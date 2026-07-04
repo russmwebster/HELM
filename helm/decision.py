@@ -72,7 +72,10 @@ def evaluate(pos, legs, marks: dict):
         elif credit:
             stop_dollars = stop_mult * abs(credit)
             if pos.max_loss:
-                stop_dollars = min(stop_dollars, abs(pos.max_loss))
+                cap = abs(pos.max_loss)
+                if pos.strategy in DEFINED_RISK_SPREADS:
+                    cap = INTERIM_DR_STOP_FRAC * cap  # HELM-030 interim: real stop below max loss
+                stop_dollars = min(stop_dollars, cap)
             if total_pnl <= -stop_dollars and not _ab_suppresses_stop(pos):
                 reason = 'STOP'
     elif fam == LONG_DEBIT_FAMILY:
@@ -117,6 +120,10 @@ def evaluate(pos, legs, marks: dict):
 
 DEFINED_RISK_SPREADS = ('BULL_PUT_SPREAD', 'BEAR_CALL_SPREAD', 'IRON_CONDOR')
 NAKED_CREDIT         = ('CSP', 'SHORT_STRANGLE', 'JADE_LIZARD')
+
+INTERIM_DR_STOP_FRAC = 0.75   # HELM-030 interim: live defined-risk stop floor at 75% of
+                              # max loss (loosest A/B arm 'ml_75') until the stop A/B grades
+                              # a winner. Naked credit (CSP/strangle/jade) is unchanged.
 
 
 def _stop_ab_active():
