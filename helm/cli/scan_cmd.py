@@ -478,6 +478,12 @@ def fetch_technicals(ticker: str, ivr_record=None) -> dict:
         result["conviction"] = conviction_label(conv_score)
         result["strategy"] = strategy
         result["strategy_rationale"] = rationale
+        # HELM-042 unknown-IVR guard (s58): no vol read -> HELM refuses to assess.
+        # Keep the row visible/ranked but mark it; the sentinel is not a real
+        # strategy, so paper generation (fail-closed) will not book it.
+        if result.get("iv_rank") is None:
+            result["strategy"] = "NO_ASSESS_IVR"
+            result["strategy_rationale"] = "IVR missing -- run helm ivr refresh, then re-scan"
 
         # IVR signal injection
         _ivr = result.get("iv_rank")
@@ -698,6 +704,8 @@ def run():
         strat = res.get("strategy", "--")
         color = strategy_colors.get(strat, "white")
         strat_str = f"[{color}]{strat}[/{color}]"
+        if strat == "NO_ASSESS_IVR":
+            strat_str = "[yellow]⚠ IVR missing[/yellow]"
         bias_str = score_label(score)
         _lb = res.get("legacy_bias_score")
         legacy_str = "[dim]--[/dim]" if _lb is None else f"[dim]{_lb:+d}[/dim]"
@@ -715,6 +723,8 @@ def run():
         _conv = res.get("conviction", "Low")
         _cc = {"High": "green", "Moderate": "yellow", "Low": "dim"}.get(_conv, "dim")
         conv_str = f"[{_cc}]{_conv}[/{_cc}]"
+        if strat == "NO_ASSESS_IVR":
+            conv_str = "[dim]--[/dim]"
         _tk = res["ticker"]
         _tk_str = _tk
         if _tk in _open_tickers:
