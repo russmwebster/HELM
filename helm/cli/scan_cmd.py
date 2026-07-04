@@ -455,15 +455,22 @@ def fetch_technicals(ticker: str, ivr_record=None) -> dict:
 
         result["bias_score"] = max(-3, min(3, score))
         result["bias_factors"] = factors
-        # HELM-042 v1: shadow momentum score, computed alongside the legacy
-        # mean-reversion bias_score for corpus comparison. NOT routed --
-        # routing below still uses result["bias_score"]. Additive, no persist.
+        # HELM-042: momentum score computed here; the flip block just below
+        # promotes v2 to the operative bias_score (legacy kept as display shadow).
         _mo_score, _mo_factors = momentum_bias(
             result.get("price"), result.get("sma_50"), result.get("sma_200"),
             result.get("ema_20"), result.get("macd_hist"),
             result.get("obv_trend"), result.get("adx"))
         result["momentum_bias_score"] = _mo_score
         result["momentum_bias_factors"] = _mo_factors
+        # HELM-042 flip (s58): v2 momentum is now the OPERATIVE bias for the scan.
+        # Legacy demoted to a display-only shadow (not recorded). Every downstream
+        # read of result["bias_score"] -- routing, conviction, sort, the Bias column,
+        # and the persisted auto_bias_score -- follows this automatically.
+        # Revert = delete these three assignments.
+        result["legacy_bias_score"] = result["bias_score"]
+        result["bias_score"] = result["momentum_bias_score"]
+        result["bias_factors"] = result["momentum_bias_factors"]
 
         strategy, rationale = bias_to_strategy(result["bias_score"], None, rsi=result.get("rsi_14"), ivr=result.get("iv_rank"))
         conv_score = compute_conviction(result["bias_score"], result.get("iv_rank"), strategy)
@@ -648,6 +655,7 @@ def run():
     t.add_column("Ticker",   style="bold cyan", width=7, no_wrap=True)
     t.add_column("Price",    justify="right", width=8, no_wrap=True)
     t.add_column("Bias",     width=16, no_wrap=True)
+    t.add_column("Legacy",   width=8, no_wrap=True)
     t.add_column("Strategy", width=16, no_wrap=True)
     t.add_column("Conviction",  width=10, no_wrap=True)
     t.add_column("Earnings", width=12, no_wrap=True)  # HELM-EARN-DISPLAY-v1
@@ -691,6 +699,8 @@ def run():
         color = strategy_colors.get(strat, "white")
         strat_str = f"[{color}]{strat}[/{color}]"
         bias_str = score_label(score)
+        _lb = res.get("legacy_bias_score")
+        legacy_str = "[dim]--[/dim]" if _lb is None else f"[dim]{_lb:+d}[/dim]"
         rsi = f"{res['rsi_14']:.0f}" if res.get("rsi_14") else "--"
         iv  = f"{res['iv_current']:.0f}%" if res.get("iv_current") else "--"
         atr = f"${res['atr_14']:.2f}" if res.get("atr_14") else "--"
@@ -721,7 +731,7 @@ def run():
             _earn_str = "[dim]past[/dim]"
         else:
             _earn_str = "[dim]--[/dim]"
-        t.add_row(_tk_str, price, bias_str, strat_str, conv_str, _earn_str,
+        t.add_row(_tk_str, price, bias_str, legacy_str, strat_str, conv_str, _earn_str,
                   rsi, iv, ivr_str, ivp_str, atr, s1, s2, top_factor)
 
     console.print(f"[bold]Scan Results — {len(valid)} candidates[/bold]")
