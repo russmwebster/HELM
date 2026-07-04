@@ -178,14 +178,11 @@ def momentum_bias(price, sma_50, sma_200, ema_20, macd_hist, obv_trend, adx):
     return max(-3, min(3, score)), factors
 
 
-def bias_to_strategy(score: int, iv_pct, rsi=None, ivr=None):
+def bias_to_strategy(score: int, rsi=None, ivr=None):
     """
     Map directional bias + IV environment to best strategy.
     IVR threshold for premium selling lowered to 35 (from 50).
     """
-    iv_high      = iv_pct is not None and float(iv_pct) >= 40
-    iv_moderate  = iv_pct is not None and 25 <= float(iv_pct) < 40
-    iv_low       = iv_pct is not None and float(iv_pct) < 25
     ivr_val      = float(ivr) if ivr is not None else None
     ivr_rich     = ivr_val is not None and ivr_val >= 35   # sell premium (lowered from 50)
     ivr_moderate = ivr_val is not None and 15 <= ivr_val < 35
@@ -202,39 +199,39 @@ def bias_to_strategy(score: int, iv_pct, rsi=None, ivr=None):
         if (ivr_buyable or ivr_unknown) and not ivr_rich:
             if ivr_val is not None and ivr_val < 60:
                 return 'LONG_CALL', 'Strong bullish bias + IVR confirms reasonable premium'
-            elif iv_pct is None or float(iv_pct) < 50:
+            else:
                 return 'LONG_CALL', 'Strong bullish bias + reasonable IV'
-        if ivr_rich or (ivr_unknown and iv_high):
+        if ivr_rich:
             return 'CSP', 'Bullish bias + elevated IVR — ideal for cash-secured put'
         return 'BULL_PUT_SPREAD', 'Bullish bias, moderate IV — defined risk spread'
 
     elif score == 1:  # Mildly bullish
         # CSP takes priority when IVR >= 35
-        if ivr_rich or (ivr_unknown and iv_high):
+        if ivr_rich:
             return 'CSP', 'Mildly bullish + elevated IVR — CSP with comfortable strike'
         # DIAGONAL when IVR is moderate and momentum present
-        if (ivr_moderate or (ivr_unknown and iv_moderate)) and rsi_momentum:
+        if ivr_moderate and rsi_momentum:
             return 'DIAGONAL', 'Mildly bullish + moderate IVR + momentum — diagonal spread'
-        if ivr_cheap or (ivr_unknown and iv_low):
+        if ivr_cheap:
             return 'LONG_CALL', 'Mildly bullish + low IVR — long call while options cheap'
         return 'BULL_PUT_SPREAD', 'Mildly bullish — defined risk spread preferred'
 
     elif score == 0:
-        if ivr_rich or (ivr_unknown and iv_high):
+        if ivr_rich:
             return 'IRON_CONDOR', 'Neutral + elevated IVR — iron condor (IRA-safe defined risk)'
-        if ivr_cheap or (ivr_unknown and iv_low):
+        if ivr_cheap:
             return 'LONG_STRADDLE', 'Neutral + low IVR — buy cheap volatility on both sides'
         return 'IRON_CONDOR', 'Neutral, moderate IV — defined risk condor'
 
     elif score == -1:
-        if ivr_rich or (ivr_unknown and iv_high):
+        if ivr_rich:
             return 'BEAR_CALL_SPREAD', 'Mildly bearish + elevated IVR — bear call credit spread'
-        if ivr_cheap or (ivr_unknown and iv_low):
+        if ivr_cheap:
             return 'BEAR_PUT_SPREAD', 'Mildly bearish + low IVR — buy cheap puts via debit spread'
         return 'IRON_CONDOR', 'Mildly bearish, moderate IV — iron condor for range-bound move'
 
     else:  # score <= -2, Bearish
-        if ivr_rich or (ivr_unknown and iv_high):
+        if ivr_rich:
             return 'BEAR_CALL_SPREAD', 'Bearish + elevated IVR — bear call credit spread'
         return 'BEAR_PUT_SPREAD', 'Bearish + low IVR — buy cheap puts via debit spread'
 
@@ -472,7 +469,7 @@ def fetch_technicals(ticker: str, ivr_record=None) -> dict:
         result["bias_score"] = result["momentum_bias_score"]
         result["bias_factors"] = result["momentum_bias_factors"]
 
-        strategy, rationale = bias_to_strategy(result["bias_score"], None, rsi=result.get("rsi_14"), ivr=result.get("iv_rank"))
+        strategy, rationale = bias_to_strategy(result["bias_score"], rsi=result.get("rsi_14"), ivr=result.get("iv_rank"))
         conv_score = compute_conviction(result["bias_score"], result.get("iv_rank"), strategy)
         result["conviction_score"] = conv_score
         result["conviction"] = conviction_label(conv_score)
