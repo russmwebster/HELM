@@ -116,6 +116,58 @@ def conviction_label(score: float) -> str:
 
 
 
+def momentum_bias(price, sma_50, sma_200, ema_20, rsi, pct_52wk, atr):
+    """HELM-042 v1 shadow scorer: option-buyer's momentum read (MACD deferred).
+
+    Computed alongside the legacy mean-reversion bias_score for corpus
+    comparison; NOT routed. Same [-3, 3] clamp as the legacy score so the two are
+    directly comparable. Each component is skipped when its input is None.
+    Returns (score, factors). Pure.
+    """
+    score = 0
+    factors = []
+
+    # -- MA stack: trend structure --
+    if None not in (price, sma_50, sma_200):
+        if price > sma_50 > sma_200:
+            score += 2; factors.append("Price > SMA50 > SMA200 -- bullish stack")
+        elif price < sma_50 < sma_200:
+            score -= 2; factors.append("Price < SMA50 < SMA200 -- bearish stack")
+        elif price > sma_50:
+            score += 1; factors.append("Price > SMA50 -- above mid-term trend")
+        elif price < sma_50:
+            score -= 1; factors.append("Price < SMA50 -- below mid-term trend")
+    elif None not in (price, ema_20, sma_50):  # SMA200 unavailable (short history)
+        if price > ema_20 > sma_50:
+            score += 1; factors.append("Price > EMA20 > SMA50 -- uptrend (no SMA200)")
+        elif price < ema_20 < sma_50:
+            score -= 1; factors.append("Price < EMA20 < SMA50 -- downtrend (no SMA200)")
+
+    # -- RSI momentum band (vs legacy's oversold-is-bullish) --
+    if rsi is not None:
+        if 50 <= rsi <= 72:
+            score += 1; factors.append(f"RSI {rsi:.0f} -- momentum band (50-72)")
+        elif rsi > 72:
+            factors.append(f"RSI {rsi:.0f} -- overbought, momentum extended")
+        elif rsi < 50:
+            score -= 1; factors.append(f"RSI {rsi:.0f} -- sub-momentum")
+
+    # -- 52-week position (vs legacy's near-low-is-bullish) --
+    if pct_52wk is not None:
+        if pct_52wk >= 75:
+            score += 1; factors.append(f"Near 52wk high ({pct_52wk:.0f}%) -- momentum")
+        elif pct_52wk <= 25:
+            score -= 1; factors.append(f"Near 52wk low ({pct_52wk:.0f}%) -- no momentum")
+
+    # -- ATR over-extension guard: damp chasing a parabolic move --
+    if None not in (price, sma_50, atr) and atr and atr > 0 and score > 0:
+        stretch = (price - sma_50) / atr
+        if stretch > 3.0:
+            score -= 1; factors.append(f"Over-extended {stretch:.1f} ATR above SMA50 -- chase guard")
+
+    return max(-3, min(3, score)), factors
+
+
 def bias_to_strategy(score: int, iv_pct, rsi=None, ivr=None):
     """
     Map directional bias + IV environment to best strategy.
@@ -353,6 +405,15 @@ def fetch_technicals(ticker: str, ivr_record=None) -> dict:
 
         result["bias_score"] = max(-3, min(3, score))
         result["bias_factors"] = factors
+        # HELM-042 v1: shadow momentum score, computed alongside the legacy
+        # mean-reversion bias_score for corpus comparison. NOT routed --
+        # routing below still uses result["bias_score"]. Additive, no persist.
+        _mo_score, _mo_factors = momentum_bias(
+            result.get("price"), result.get("sma_50"), result.get("sma_200"),
+            result.get("ema_20"), result.get("rsi_14"),
+            result.get("price_vs_52wk_pct"), result.get("atr_14"))
+        result["momentum_bias_score"] = _mo_score
+        result["momentum_bias_factors"] = _mo_factors
 
         strategy, rationale = bias_to_strategy(result["bias_score"], None, rsi=result.get("rsi_14"), ivr=result.get("iv_rank"))
         conv_score = compute_conviction(result["bias_score"], result.get("iv_rank"), strategy)

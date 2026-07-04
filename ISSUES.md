@@ -60,6 +60,7 @@ _v1b (s57): `band_for` now enriches an already-RED condor headline with the test
 
 **HELM-042 · `DESIGN` · `OPEN` · Re-base scan bias scorer: mean-reversion → momentum**
 _Raised s43. The legacy `bias_score` (`scan_cmd.py`) is mean-reversion coded — RSI oversold (<30) scores +2 bullish, near-52wk-low +1 — a Russ-authored heuristic. It is the SHARED directional read feeding CSP / IC / spread routing, not just LONG_CALL. Reframe to a standard option-buyer's momentum read: bullish MA stack (price > SMA50 > SMA200), MACD histogram positive, RSI 50-72, near-52wk-high, plus a not-over-extended-vs-ATR guard. Keep the IVR<35 cost gate and the earnings guard unchanged — they are correct. Read-only model over the 2026-06-30 batch: momentum surfaces 18 trending names vs the legacy scorer's 5 strongly-bullish; the binding constraint is vol-cost, not direction (9 of 18 at IVR>=60), so the full screen yields 1 clean long call today (TGT, IVR 8.3 — trending + cheap vol — which the legacy scorer missed, tagging it LONG_STRADDLE). Blast radius is book-wide (shifts CSP / spread selection too — selling premium on strength vs into oversold knives), so: build staged/guarded, and score the PAPER corpus both ways (HELM-023 territory) to compare outcomes before the momentum scorer goes authoritative. Do NOT gut-flip live. Also surfaced: `bias_to_strategy` is called with `iv_pct=None` (`scan_cmd.py`), so every IV-percentile branch is dead code — routing is IV-Rank-only; fold this cleanup into the re-base._
+_v1 shadow live (s57): eyeball probe (TGT/NVDA/PFE/OR) shows momentum and legacy diverging in the hypothesized direction — TGT momentum +2 (bullish stack, near highs) vs legacy 0; PFE -2 (falling knife) vs legacy +1 (oversold-bullish). Confirms the re-base direction on a small hand-picked set; corpus comparison pending (patch 2). RSI sub-50 tuning question carried below._
 
 **HELM-028 · `DESIGN` · `DEFERRED` · Diagonal front-leg roll + ITM-assignment flag**
 _Born of WS3c (s33). The diagonal family (PMCC/DIAGONAL/DIAGONAL_PUT) is managed calendar-only off the
@@ -376,6 +377,9 @@ _Future aspirations and enhancements, un-numbered until promoted. On promotion: 
 ## Carried threads · un-promoted follow-ups
 
 Not yet promoted to numbered issues; pull in as they get worked.
+
+**s57:**
+- **HELM-042 RSI sub-50 penalty** — v1 momentum scorer docks -1 for RSI <50, which fired on TGT (RSI 47) despite a healthy bullish stack near highs. A neutral dead-zone (~45–50 → 0) may read pullbacks-within-uptrends better. Revisit if patch-2's corpus comparison shows the sub-50 penalty suppresses otherwise-strong momentum names.
 
 - **PFE PAPER `LONG_CALL`/`SHORT_CALL` mismatch** — paper position `PFE-LONG_CALL-20260626-E304A3` is tagged `strategy=LONG_CALL`, but its single leg is `leg_role=SHORT_CALL` / `direction=SHORT` with `net_premium=+110` (a credit) — i.e. the trade is a short call; the strategy label is the wrong part, the leg is right. `gather_longcall`'s `leg_role='LONG_CALL'` JOIN correctly excludes it, so it never reached the WS5b map; no GOOD checks either. Fix = one-row strategy correction (→ `SHORT_CALL`/naked, or `COVERED_CALL` if PFE stock backs it). Surfaced s41 WS5b smoke. Low urgency: single malformed PAPER row, nothing forced — but left as-is it would mis-grade against the wrong playbook in the paper corpus.
 
