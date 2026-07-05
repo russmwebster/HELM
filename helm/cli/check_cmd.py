@@ -656,7 +656,7 @@ def _weakest_leg_confidence(mark_confidence, leg_marks_by_id):
     return mark_confidence
 
 
-def check_one(pos: dict, legs: list, deep: bool = False, persist: bool = True) -> dict:
+def check_one(pos: dict, legs: list, deep: bool = False, persist: bool = False) -> dict:
     """Run a full check on a single position. Returns assessment dict."""
     ticker = pos["ticker"]
     strategy = pos["strategy"]
