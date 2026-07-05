@@ -8,7 +8,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 COMMANDS = {
-    'paper':     ('helm.cli.paper_cmd',   'run',  'Paper book - paper-trade candidates you passed on'),
     'setup':     ('helm.cli.setup',     'run',  'Initialize HELM and create your account'),
     'watchlist': ('helm.cli.watchlist', 'run',  'Manage your ticker watchlist'),
     'scan':      ('helm.cli.scan',      'run',  'Scan watchlist for opportunities'),
@@ -21,7 +20,6 @@ COMMANDS = {
     'analyze':   ('helm.cli.analyze',   'run',  'Analyze historical outcomes'),
     'status':    ('helm.cli.status',    'run',  'Show HELM system status'),
     'import':    ('helm.cli.import_cmd', 'run',  'Import positions from a broker export'),
-    'screen':    ('helm.cli.screen',     'run',  'Screen watchlist tickers for optionability'),
     'ibkr':      ('helm.cli.ibkr_cmd',  'run',  'Manage IB Gateway connection'),
     'positions': ('helm.cli.positions_cmd', 'run', 'View open positions'),
     'check':     ('helm.cli.check_cmd',     'run', 'Health check on open positions'),

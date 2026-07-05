@@ -1919,9 +1919,6 @@ def run():
     else:
         cmd_check_all(args)
 
-    if "--manage" in args:
-        from helm.cli.paper_manage import manage_paper_book
-        manage_paper_book()
 
     # Log event and show nudges
     try:
