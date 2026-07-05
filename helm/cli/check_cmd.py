@@ -643,6 +643,19 @@ def fmt_pct(v):
 
 # ── Commands ──────────────────────────────────────────────────────────────────
 
+def _weakest_leg_confidence(mark_confidence, leg_marks_by_id):
+    """HELM-019: a netted multi-leg P&L is only as fresh as its least-fresh leg.
+    Per-leg liveness is captured in leg_marks_by_id (HELM-041). A \"live\" reading
+    with any non-live (or unstamped) leg is contaminated, so it is downgraded to
+    \"stale\"; non-live base readings (\"frozen\"/\"stale\") are returned unchanged.
+    Fail-closed: a leg missing its is_live flag counts as not live."""
+    if mark_confidence == "live" and any(
+        not _m.get("is_live") for _m in (leg_marks_by_id or [])
+    ):
+        return "stale"
+    return mark_confidence
+
+
 def check_one(pos: dict, legs: list, deep: bool = False, persist: bool = True) -> dict:
     """Run a full check on a single position. Returns assessment dict."""
     ticker = pos["ticker"]
@@ -743,14 +756,15 @@ def check_one(pos: dict, legs: list, deep: bool = False, persist: bool = True) -
     conn.close()
     strategy_settings = dict(settings_row) if settings_row else {}
 
-    # HELM-019: classify mark freshness from the primary leg's opt_source as a
-    # market-state proxy (per-leg weakest-link is a logged deferral).
+    # HELM-019: base mark freshness from the primary leg's opt_source, then apply
+    # the weakest-leg downgrade below so a stale wing can't read as "live".
     if opt_source == "ibkr-live":
         mark_confidence = "live"
     elif opt_source == "ibkr-frozen":
         mark_confidence = "frozen"
     else:
         mark_confidence = "stale"
+    mark_confidence = _weakest_leg_confidence(mark_confidence, leg_marks_by_id)
 
     # Run assessment
     assessment = assess_position(pos, legs, underlying_price, opt_data, strategy_settings, leg_marks=leg_marks, mark_confidence=mark_confidence)

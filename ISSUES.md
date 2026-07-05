@@ -127,6 +127,7 @@ stores only each leg's mid and discards its source, so v1 confidence uses the pr
 leg's `opt_source` as a market-state proxy (live / frozen / stale). Stamp per-leg source
 there when that loop is reworked; pairs with the carried "mid-only fast fetch for hedge
 legs" (HELM-018 follow-up)._
+_s60: weakest-leg deferral resolved — `check_one` now downgrades `mark_confidence` "live" → "stale" when any leg's mark isn't a live IBKR quote, via a pure `_weakest_leg_confidence` helper that consumes the per-leg `is_live` flags HELM-041 already stamps into `leg_marks_by_id` (fail-closed on a missing flag); 8-case truth table fixtured. The loop rework the deferral anticipated was unnecessary — the liveness data already existed; only the classifier (primary-leg-only) needed to use it. Still OPEN: the HELM-vs-Fidelity RTH mark/P&L reconcile prong._
 
 ---
 
