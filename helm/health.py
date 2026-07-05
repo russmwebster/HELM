@@ -756,7 +756,6 @@ def _refresh_earnings(conn):
         pass
 
 def render(conn, ticker=None):
-    _refresh_earnings(conn)
     rows = gather_csp(conn, ticker)
     lc_rows = gather_longcall(conn, ticker)
     ic_rows = gather_icondor(conn, ticker)

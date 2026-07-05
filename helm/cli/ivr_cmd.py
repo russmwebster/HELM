@@ -132,6 +132,11 @@ def _chunks(lst, n):
 def cmd_refresh(args: list) -> None:
     """Fetch IV history from IBKR and compute IVR/IVP for watchlist tickers."""
     from helm.ibkr import get_ib
+    # HELM-037: refresh open-position earnings_date on this pre-market run
+    # (moved off /health render so /health is read-only)
+    from helm.health import _refresh_earnings as _refresh_position_earnings
+    from helm.db import get_conn as _earnings_conn
+    _refresh_position_earnings(_earnings_conn())
 
     # Determine which tickers to refresh
     if args:
