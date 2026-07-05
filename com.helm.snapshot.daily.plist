@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.helm.snapshot.daily</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/bash</string>
+		<string>-c</string>
+		<string>source /Users/russmacbookpro/.helm/env &amp;&amp; /opt/anaconda3/envs/helm/bin/python3 /Users/russmacbookpro/Projects/helm/helm.py snapshot --all</string>
+	</array>
+	<key>StandardErrorPath</key>
+	<string>/Users/russmacbookpro/Projects/helm/logs/snapshot_daily.log</string>
+	<key>StandardOutPath</key>
+	<string>/Users/russmacbookpro/Projects/helm/logs/snapshot_daily.log</string>
+	<key>StartCalendarInterval</key>
+	<array>
+		<dict><key>Hour</key><integer>10</integer><key>Minute</key><integer>0</integer><key>Weekday</key><integer>1</integer></dict>
+		<dict><key>Hour</key><integer>12</integer><key>Minute</key><integer>30</integer><key>Weekday</key><integer>1</integer></dict>
+		<dict><key>Hour</key><integer>15</integer><key>Minute</key><integer>45</integer><key>Weekday</key><integer>1</integer></dict>
+		<dict><key>Hour</key><integer>10</integer><key>Minute</key><integer>0</integer><key>Weekday</key><integer>2</integer></dict>
+		<dict><key>Hour</key><integer>12</integer><key>Minute</key><integer>30</integer><key>Weekday</key><integer>2</integer></dict>
+		<dict><key>Hour</key><integer>15</integer><key>Minute</key><integer>45</integer><key>Weekday</key><integer>2</integer></dict>
+		<dict><key>Hour</key><integer>10</integer><key>Minute</key><integer>0</integer><key>Weekday</key><integer>3</integer></dict>
+		<dict><key>Hour</key><integer>12</integer><key>Minute</key><integer>30</integer><key>Weekday</key><integer>3</integer></dict>
+		<dict><key>Hour</key><integer>15</integer><key>Minute</key><integer>45</integer><key>Weekday</key><integer>3</integer></dict>
+		<dict><key>Hour</key><integer>10</integer><key>Minute</key><integer>0</integer><key>Weekday</key><integer>4</integer></dict>
+		<dict><key>Hour</key><integer>12</integer><key>Minute</key><integer>30</integer><key>Weekday</key><integer>4</integer></dict>
+		<dict><key>Hour</key><integer>15</integer><key>Minute</key><integer>45</integer><key>Weekday</key><integer>4</integer></dict>
+		<dict><key>Hour</key><integer>10</integer><key>Minute</key><integer>0</integer><key>Weekday</key><integer>5</integer></dict>
+		<dict><key>Hour</key><integer>12</integer><key>Minute</key><integer>30</integer><key>Weekday</key><integer>5</integer></dict>
+		<dict><key>Hour</key><integer>15</integer><key>Minute</key><integer>45</integer><key>Weekday</key><integer>5</integer></dict>
+	</array>
+</dict>
+</plist>
