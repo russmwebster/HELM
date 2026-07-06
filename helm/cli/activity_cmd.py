@@ -425,25 +425,10 @@ def import_stage4_position(account_id: str, tx: dict) -> bool:
                 f"${strike} {exp} @ ${fill:.2f} — Stage 4 trade"
             ))
 
-        # Try to fetch partial entry snapshot (current market data as proxy)
-        try:
-            import yfinance as yf
-            import warnings
-            warnings.filterwarnings("ignore")
-            tk = yf.Ticker(ticker)
-            hist = tk.history(period="5d")
-            spot = float(hist["Close"].iloc[-1]) if not hist.empty else None
-
-            if spot:
-                snap_id = "snap-" + uuid.uuid4().hex[:8].upper()
-                with _tx() as conn:
-                    conn.execute("""
-                        INSERT INTO entry_snapshots
-                        (id, position_id, snap_type, spot_price, created_at)
-                        VALUES (?,?,?,?,?)
-                    """, (snap_id, pos_id, "PARTIAL", spot, now))
-        except Exception:
-            pass  # Partial snapshot is best-effort
+        # HELM-053: dead PARTIAL entry_snapshots insert removed -- it referenced a
+        # column that does not exist in the schema, so it raised and was silently
+        # swallowed by a bare except (wrote zero rows). Real capture path:
+        # capture_entry_snapshot() in helm/cli/entry_snapshot.py via open_position_with_snapshot.
 
         return pos_id
 
