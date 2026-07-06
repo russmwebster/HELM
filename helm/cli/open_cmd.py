@@ -40,6 +40,7 @@ from rich import box
 
 from helm.config import get_active_account
 from helm.db import get_conn
+from helm.strategies import resolve_strategy
 
 console = Console()
 
@@ -152,21 +153,10 @@ STRATEGY_CONFIG = {
         "option_type": "BOTH",
         "direction": "SHORT",
         "delta_min": 0.15,
-        "delta_max": 0.35,
-        "delta_sweet": (0.20, 0.30),
-        "dte_min": 21,
-        "dte_max": 56,
-        "label": "Iron Condor",
-        "is_strangle": True,
-    },
-    "IRON_CONDOR": {
-        "option_type": "BOTH",
-        "direction": "SHORT",
-        "delta_min": 0.15,
-        "delta_max": 0.35,
-        "delta_sweet": (0.20, 0.30),
-        "dte_min": 21,
-        "dte_max": 56,
+        "delta_max": 0.20,
+        "delta_sweet": (0.16, 0.18),
+        "dte_min": 30,
+        "dte_max": 45,
         "label": "Iron Condor",
         "is_condor": True,
         "spread_widths": [5, 10, 15, 20],
@@ -2501,7 +2491,7 @@ def run():
         return
 
     ticker   = positional[0].upper()
-    strategy = positional[1].upper()
+    strategy = resolve_strategy(positional[1])
 
     if strategy in OFF_LIMITS:
         console.print(f"[red]Off-limits in this IRA:[/red] {strategy}")

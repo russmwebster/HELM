@@ -15,6 +15,29 @@ STRATEGIES = (
     'DIAGONAL', 'PMCC', 'DIAGONAL_PUT', 'SHORT_STRANGLE', 'JADE_LIZARD',
 )
 
+# Short strategy codes -- single source shared by `helm scan` (display) and
+# `helm open` (input). Direction prefix: B = bull, Be = bear.
+STRATEGY_CODES = {
+    'CSP': 'CSP', 'COVERED_CALL': 'CC', 'LONG_CALL': 'LC', 'LONG_PUT': 'LP',
+    'LONG_STRADDLE': 'STDL', 'PERM': 'PERM',
+    'BULL_PUT_SPREAD': 'BPS', 'BEAR_CALL_SPREAD': 'BeCS', 'IRON_CONDOR': 'IC',
+    'BEAR_PUT_SPREAD': 'BePS', 'BULL_CALL_SPREAD': 'BCS', 'LONG_CONDOR': 'LCDR',
+    'DIAGONAL': 'DIAG', 'PMCC': 'PMCC', 'DIAGONAL_PUT': 'DGP',
+    'SHORT_STRANGLE': 'STRG', 'JADE_LIZARD': 'JADE',
+}
+
+_CODE_TO_STRATEGY = {code.upper(): strat for strat, code in STRATEGY_CODES.items()}
+
+
+def resolve_strategy(token):
+    """Map a short code (case-insensitive) to its canonical strategy token.
+
+    Canonical tokens pass through unchanged (uppercased). Shared by
+    `helm scan` (display) and `helm open` (input) so they cannot drift.
+    """
+    t = (token or "").strip().upper()
+    return _CODE_TO_STRATEGY.get(t, t)
+
 
 def _check_tokens(sql):
     import re

@@ -50,6 +50,7 @@ from rich import box
 from helm.config import get_active_account
 from helm.models.watchlist import WatchlistItem
 from helm.db import get_conn
+from helm.strategies import STRATEGY_CODES
 
 console = Console()
 
@@ -654,22 +655,22 @@ def run():
         return
 
     # Results table
-    t = Table(box=box.SIMPLE_HEAD, show_header=True, padding=(0,1), width=170)
-    t.add_column("Ticker",   style="bold cyan", width=7, no_wrap=True)
+    t = Table(box=box.SIMPLE_HEAD, show_header=True, padding=(0,1))
+    t.add_column("Ticker",   style="bold cyan", width=6, no_wrap=True)
     t.add_column("Price",    justify="right", width=8, no_wrap=True)
-    t.add_column("Bias",     width=16, no_wrap=True)
-    t.add_column("Legacy",   width=8, no_wrap=True)
-    t.add_column("Strategy", width=16, no_wrap=True)
-    t.add_column("Conviction",  width=10, no_wrap=True)
-    t.add_column("Earnings", width=12, no_wrap=True)  # HELM-EARN-DISPLAY-v1
-    t.add_column("RSI",      justify="right", width=5, no_wrap=True)
+    t.add_column("Bias",     width=11, no_wrap=True)
+    t.add_column("Legacy",   width=6, no_wrap=True)
+    t.add_column("Strategy", width=10, no_wrap=True)
+    t.add_column("Conv",  width=8, no_wrap=True)
+    t.add_column("Earnings", width=10, no_wrap=True)  # HELM-EARN-DISPLAY-v1
+    t.add_column("RSI",      justify="right", width=4, no_wrap=True)
     t.add_column("IV%",      justify="right", width=5, no_wrap=True)
     t.add_column("IVR",      justify="right", width=5, no_wrap=True)
     t.add_column("IVP",      justify="right", width=5, no_wrap=True)
-    t.add_column("ATR",      justify="right", width=7, no_wrap=True)
-    t.add_column("1-ATR Strike", justify="right", width=12, no_wrap=True)
-    t.add_column("2-ATR Strike", justify="right", width=12, no_wrap=True)
-    t.add_column("Top Signal", width=45, no_wrap=True)
+    t.add_column("ATR",      justify="right", width=6, no_wrap=True)
+    t.add_column("1-ATR", justify="right", width=9, no_wrap=True)
+    t.add_column("2-ATR", justify="right", width=9, no_wrap=True)
+    t.add_column("Top Signal", width=40, no_wrap=True)
 
     strategy_colors = {
         "CSP": "green", "BULL_PUT_SPREAD": "cyan",
@@ -700,9 +701,10 @@ def run():
         score = res["bias_score"]
         strat = res.get("strategy", "--")
         color = strategy_colors.get(strat, "white")
-        strat_str = f"[{color}]{strat}[/{color}]"
+        _code = STRATEGY_CODES.get(strat, strat)
+        strat_str = f"[{color}]{_code}[/{color}]"
         if strat == "NO_ASSESS_IVR":
-            strat_str = "[yellow]⚠ IVR missing[/yellow]"
+            strat_str = "[yellow]⚠ IVR?[/yellow]"
         bias_str = score_label(score)
         _lb = res.get("legacy_bias_score")
         legacy_str = "[dim]--[/dim]" if _lb is None else f"[dim]{_lb:+d}[/dim]"
