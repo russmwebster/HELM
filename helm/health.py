@@ -17,6 +17,7 @@ from __future__ import annotations
 from helm.models.check import _pnl_pick
 from helm.verdict import band_for, _ns_pos, _ns_leg
 from helm.decision import evaluate as _core_evaluate
+from helm.db import book_clause
 
 # ── Cell colour stops (per individual 0-10 score) ────────────────────────────
 # Each: bg, border, label-text, value-text
@@ -199,7 +200,7 @@ def _fmt(x, suffix="", dash="—", nd=1):
     return f"{x:.{nd}f}{suffix}"
 
 
-def gather_csp(conn, ticker=None):
+def gather_csp(conn, ticker=None, book="real"):
     sql = """
         SELECT p.id, p.ticker, p.company_name, p.net_premium, p.total_contracts,
                p.breakeven_low, p.earnings_date, p.account_id,
@@ -212,9 +213,11 @@ def gather_csp(conn, ticker=None):
             SELECT id FROM checks WHERE position_id = p.id AND data_quality = 'GOOD'
             ORDER BY checked_at DESC LIMIT 1
         )
-        WHERE p.status = 'OPEN' AND p.strategy = 'CSP' AND p.book = 'REAL'
+        WHERE p.status = 'OPEN' AND p.strategy = 'CSP'
     """
-    args = []
+    bc, bp = book_clause(book, alias="p.")
+    sql += bc
+    args = list(bp)
     if ticker:
         sql += " AND p.ticker = ?"
         args.append(ticker.upper())
@@ -755,11 +758,11 @@ def _refresh_earnings(conn):
     except Exception:
         pass
 
-def render(conn, ticker=None):
-    rows = gather_csp(conn, ticker)
-    lc_rows = gather_longcall(conn, ticker)
-    ic_rows = gather_icondor(conn, ticker)
-    bps_rows = gather_bearput(conn, ticker)
+def render(conn, ticker=None, book="real"):
+    rows = gather_csp(conn, ticker, book)
+    lc_rows = gather_longcall(conn, ticker, book)
+    ic_rows = gather_icondor(conn, ticker, book)
+    bps_rows = gather_bearput(conn, ticker, book)
     if ticker:
         if not rows:
             if lc_rows:
@@ -828,8 +831,14 @@ def render(conn, ticker=None):
         if r["checked_at"]:
             asof = r["checked_at"][:16].replace("T", " ")
             break
+    _bk = (book or "real").strip().lower()
+    _bk_label = {"paper": "PAPER", "all": "ALL BOOKS"}.get(_bk, "REAL")
+    _bk_css = ({"paper": "background:#faeeda;border-color:#fac775;color:#633806;",
+                "all": "background:#e3edf7;border-color:#7aa8d6;color:#1c3d5e;"}
+               .get(_bk, "background:#eaf3de;border-color:#97c459;color:#27500a;"))
+    _bk_pill = f"<span class='pip' style='{_bk_css}margin-left:8px;'>book: {_bk_label}</span>"
     top = (
-        "<div class='top'><div class='brand'>HELM <span class='dim'>· CSP health map</span></div>"
+        "<div class='top'><div class='brand'>HELM <span class='dim'>· CSP health map</span>" + _bk_pill + "</div>"
         f"<div class='asof'>{n} positions · checked {asof}</div></div>"
     )
     avg_str = f"{avg:.0f}" if avg is not None else "—"
@@ -885,7 +894,7 @@ def render(conn, ticker=None):
             + "</div>"
             + _legend_bps()
         )
-    return _page("HELM · Portfolio Health", top + summary + cards + _legend() + lc_section + ic_section + bps_section)
+    return _page(f"HELM · Portfolio Health · {_bk_label}", top + summary + cards + _legend() + lc_section + ic_section + bps_section)
 
 
 # ── Long Call scoring ────────────────────────────────────────────────────────
@@ -999,7 +1008,7 @@ def s_lc_iv_change(chg):
     return 2
 
 
-def gather_longcall(conn, ticker=None):
+def gather_longcall(conn, ticker=None, book="real"):
     sql = """
         SELECT p.id, p.ticker, p.company_name, p.net_premium, p.total_contracts,
                p.earnings_date, p.account_id,
@@ -1013,9 +1022,11 @@ def gather_longcall(conn, ticker=None):
             SELECT id FROM checks WHERE position_id = p.id AND data_quality = 'GOOD'
             ORDER BY checked_at DESC LIMIT 1
         )
-        WHERE p.status = 'OPEN' AND p.strategy = 'LONG_CALL' AND p.book = 'REAL'
+        WHERE p.status = 'OPEN' AND p.strategy = 'LONG_CALL'
     """
-    args = []
+    bc, bp = book_clause(book, alias="p.")
+    sql += bc
+    args = list(bp)
     if ticker:
         sql += " AND p.ticker = ?"
         args.append(ticker.upper())
@@ -1356,7 +1367,7 @@ def s_ic_max_profit(pct):
     return 10
 
 
-def gather_icondor(conn, ticker=None):
+def gather_icondor(conn, ticker=None, book="real"):
     sql = """
         SELECT p.id, p.ticker, p.company_name, p.net_premium, p.total_contracts,
                p.max_loss, p.earnings_date,
@@ -1367,9 +1378,11 @@ def gather_icondor(conn, ticker=None):
             SELECT id FROM checks WHERE position_id = p.id AND data_quality = 'GOOD'
             ORDER BY checked_at DESC LIMIT 1
         )
-        WHERE p.status = 'OPEN' AND p.strategy = 'IRON_CONDOR' AND p.book = 'REAL'
+        WHERE p.status = 'OPEN' AND p.strategy = 'IRON_CONDOR'
     """
-    args = []
+    bc, bp = book_clause(book, alias="p.")
+    sql += bc
+    args = list(bp)
     if ticker:
         sql += " AND p.ticker = ?"
         args.append(ticker.upper())
@@ -1782,9 +1795,11 @@ def s_bps_max_profit(p):
     if p >= -50: return 1
     return 0
 
-def gather_bearput(conn, ticker=None):
-    sql = """SELECT p.id,p.ticker,p.company_name,p.net_premium,p.total_contracts,p.max_loss,p.max_profit,p.earnings_date,c.spot_price,c.delta,c.theta,c.dte_now,c.pnl_unrealized,c.iv_current,c.checked_at,c.greeks_source,c.data_quality FROM positions p LEFT JOIN checks c ON c.id=(SELECT id FROM checks WHERE position_id=p.id AND data_quality='GOOD' ORDER BY checked_at DESC LIMIT 1) WHERE p.status='OPEN' AND p.strategy='BEAR_PUT_SPREAD' AND p.book='REAL'"""
-    args = []
+def gather_bearput(conn, ticker=None, book="real"):
+    sql = """SELECT p.id,p.ticker,p.company_name,p.net_premium,p.total_contracts,p.max_loss,p.max_profit,p.earnings_date,c.spot_price,c.delta,c.theta,c.dte_now,c.pnl_unrealized,c.iv_current,c.checked_at,c.greeks_source,c.data_quality FROM positions p LEFT JOIN checks c ON c.id=(SELECT id FROM checks WHERE position_id=p.id AND data_quality='GOOD' ORDER BY checked_at DESC LIMIT 1) WHERE p.status='OPEN' AND p.strategy='BEAR_PUT_SPREAD'"""
+    bc, bp = book_clause(book, alias="p.")
+    sql += bc
+    args = list(bp)
     if ticker:
         sql += " AND p.ticker=?"
         args.append(ticker.upper())

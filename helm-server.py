@@ -69,9 +69,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             importlib.reload(_H)
             q = _up.urlparse(self.path).query
             ticker = _up.parse_qs(q).get('ticker', [None])[0]
+            book = _up.parse_qs(q).get('book', ['real'])[0]
             conn = _db.get_conn()
             try:
-                out = _H.render(conn, ticker)
+                out = _H.render(conn, ticker, book)
             finally:
                 try:
                     conn.close()

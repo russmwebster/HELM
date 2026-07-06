@@ -122,18 +122,32 @@ def check_schema_version(db_path: Path = DB_PATH) -> dict:
 
 # ── Utilities ────────────────────────────────────────────────────────────────
 
+def book_clause(book="real", alias=""):
+    """String-keyed book filter for trader-facing views (server + gathers).
+
+    ``book`` in {real, paper, all}; ``alias`` is an optional column prefix
+    such as ``"p."``. Returns (clause, params) to splice after an existing
+    WHERE condition. 'all' => no filter; any unknown value fails safe to REAL.
+    """
+    b = (book or "real").strip().lower()
+    if b == "all":
+        return "", []
+    val = "PAPER" if b == "paper" else "REAL"
+    return f" AND {alias}book = ?", [val]
+
+
 def book_filter(argv):
-    """Operational book filter for trader-facing views.
+    """Operational book filter (argv-based) for CLI trader-facing views.
 
     Default REAL only; '--all' => both books; '--paper' => paper only.
-    Returns (clause, params) to splice after an existing WHERE condition,
-    e.g.  "... AND status='OPEN'" + clause  with  (existing, *params).
+    Delegates to book_clause so the SQL fragment has a single source of truth.
+    Returns (clause, params) to splice after an existing WHERE condition.
     """
     if "--all" in argv:
-        return "", []
+        return book_clause("all")
     if "--paper" in argv:
-        return " AND book = ?", ["PAPER"]
-    return " AND book = ?", ["REAL"]
+        return book_clause("paper")
+    return book_clause("real")
 
 
 def row_to_dict(row: sqlite3.Row) -> dict:
