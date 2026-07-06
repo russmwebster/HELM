@@ -533,13 +533,21 @@ def assess_position(pos: dict, legs: list, underlying_price: Optional[float],
                 if net_premium != 0:
                     pnl_pct = round((pnl_mtm / abs(net_premium)) * 100, 1)
 
-        # Intrinsic buffer (distance from strike) -- single-leg only; a condor's
-        # one-wing buffer is misleading (deep view shows both wings).
-        if underlying_price and not is_multileg:
-            if opt_type == "PUT":
-                intrinsic_buffer = round(underlying_price - strike, 2)
-            else:  # CALL
-                intrinsic_buffer = round(strike - underlying_price, 2)
+        # Intrinsic buffer (distance to the SHORT strike). Meaningful when
+        # there is exactly one short option leg -- CSP, covered call, or a
+        # credit vertical (bull-put / bear-call). Two short strikes (condor /
+        # strangle / jade) or none (long debit) leave it None; the deep view
+        # shows the wings.
+        _short_opt_legs = [_l for _l in opt_legs if _l.get("direction") == "SHORT"]
+        if underlying_price and len(_short_opt_legs) == 1:
+            _sl = _short_opt_legs[0]
+            _s_strike = _sl.get("strike")
+            _s_type = _sl.get("option_type")
+            if _s_strike is not None and _s_type:
+                if _s_type == "PUT":
+                    intrinsic_buffer = round(underlying_price - _s_strike, 2)
+                else:  # CALL
+                    intrinsic_buffer = round(_s_strike - underlying_price, 2)
 
         # ── GREEN/YELLOW/RED logic ────────────────────────────────────────────
         profit_target_raw = strategy_settings.get("profit_target_pct", 0.50) or 0.50
@@ -617,6 +625,10 @@ def assess_position(pos: dict, legs: list, underlying_price: Optional[float],
         flag_style = "dim"
         reasons.append("No market data available")
 
+    # Resolve the profit target once (as a percent) so the deep panels read
+    # the configured value instead of hardcoding 50%.
+    _ptr = strategy_settings.get("profit_target_pct", 0.50) or 0.50
+    _ptr = _ptr * 100 if _ptr <= 1 else _ptr
     return {
         "flag": final_flag,
         "flag_style": flag_style,
@@ -624,6 +636,7 @@ def assess_position(pos: dict, legs: list, underlying_price: Optional[float],
         "pnl_mtm": pnl_mtm,
         "pnl_pct": pnl_pct,
         "intrinsic_buffer": intrinsic_buffer,
+        "profit_target_pct": _ptr,
     }
 
 
@@ -1091,7 +1104,8 @@ def cmd_check_deep_csp(pos: dict, legs: list, assessment: dict, snap: dict):
     console.print()
     console.print(f"  [bold]P&L[/bold]")
 
-    prem_str = f"${abs(net_premium):.0f}  ({contracts} x ${open_price:.2f})"
+    _net_pc = round(abs(net_premium) / contracts / 100, 2) if contracts else 0
+    prem_str = f"${abs(net_premium):.0f}  ({contracts} x ${_net_pc:.2f})"
     prem_label = "Paid:" if direction == "LONG" else "Collected:"
     console.print(f"  {prem_label:<12} {prem_str}")
 
@@ -1102,7 +1116,7 @@ def cmd_check_deep_csp(pos: dict, legs: list, assessment: dict, snap: dict):
         console.print(f"  Current P&L: [{pnl_color}]{sign}${abs(pnl_mtm):.0f}{pct_str}[/{pnl_color}]")
 
         # Profit target progress
-        target_pct = 50.0
+        target_pct = a.get("profit_target_pct") or 50.0
         if pnl_pct is not None and direction == "SHORT":
             target_dollar = abs(net_premium) * (target_pct / 100)
             console.print(f"  Target:      ${target_dollar:.0f} ({target_pct:.0f}% of premium)  —  {'[green]REACHED[/green]' if pnl_pct >= target_pct else f'[dim]{target_pct - pnl_pct:.0f}% remaining[/dim]'}")
@@ -1114,34 +1128,41 @@ def cmd_check_deep_csp(pos: dict, legs: list, assessment: dict, snap: dict):
         console.print()
         console.print(f"  [bold]Buffer to Strike[/bold]")
 
-        buf = a.get("intrinsic_buffer", 0) or 0
-        buf_pct = round(buf / spot * 100, 1) if spot else 0
-        otm_itm = "OTM" if buf > 0 else "ITM"
-        buf_color = "green" if buf_pct > 10 else "yellow" if buf_pct > 5 else "red"
+        buf = a.get("intrinsic_buffer")
+        if buf is None:
+            # Multi-strike position (condor / strangle / jade / straddle /
+            # diagonal): a single buffer-to-strike is ambiguous. Show n/a --
+            # per-wing detail lives in the legs view.
+            console.print(f"  Strike:      [dim]multi-strike — see legs[/dim]  |  Spot: ${spot:.2f}")
+            console.print(f"  Buffer:      [dim]n/a (multi-strike position)[/dim]")
+        else:
+            buf_pct = round(buf / spot * 100, 1) if spot else 0
+            otm_itm = "OTM" if buf > 0 else "ITM"
+            buf_color = "green" if buf_pct > 10 else "yellow" if buf_pct > 5 else "red"
 
-        console.print(f"  Strike:      ${strike:.0f}  |  Spot: ${spot:.2f}")
-        console.print(f"  Buffer:      [{buf_color}]${abs(buf):.2f}  ({abs(buf_pct):.1f}% {otm_itm})[/{buf_color}]")
+            console.print(f"  Strike:      ${strike:.0f}  |  Spot: ${spot:.2f}")
+            console.print(f"  Buffer:      [{buf_color}]${abs(buf):.2f}  ({abs(buf_pct):.1f}% {otm_itm})[/{buf_color}]")
 
-        if atr:
-            atr1 = round(spot - atr, 2) if opt_type == "PUT" else round(spot + atr, 2)
-            atr2 = round(spot - 2*atr, 2) if opt_type == "PUT" else round(spot + 2*atr, 2)
-            console.print(f"  1-ATR:       ${atr1:.2f}  |  2-ATR: ${atr2:.2f}")
-            if opt_type == "PUT":
-                if spot > atr1:
-                    console.print(f"  [dim]Spot is above 1-ATR — well positioned[/dim]")
-                elif spot > atr2:
-                    console.print(f"  [yellow]Spot between 1-ATR and 2-ATR — monitor[/yellow]")
-                else:
-                    console.print(f"  [red]Spot below 2-ATR — elevated risk[/red]")
-            else:  # CALL
-                gap_to_strike = abs(buf)
-                gap_pct = round(gap_to_strike / spot * 100, 1) if spot else 0
-                if gap_pct > 20:
-                    console.print(f"  [red]Stock needs to rally {gap_pct:.1f}% to reach strike[/red]")
-                elif gap_pct > 10:
-                    console.print(f"  [yellow]Stock needs to rally {gap_pct:.1f}% to reach strike[/yellow]")
-                else:
-                    console.print(f"  [dim]Stock needs to rally {gap_pct:.1f}% to reach strike[/dim]")
+            if atr:
+                atr1 = round(spot - atr, 2) if opt_type == "PUT" else round(spot + atr, 2)
+                atr2 = round(spot - 2*atr, 2) if opt_type == "PUT" else round(spot + 2*atr, 2)
+                console.print(f"  1-ATR:       ${atr1:.2f}  |  2-ATR: ${atr2:.2f}")
+                if opt_type == "PUT":
+                    if spot > atr1:
+                        console.print(f"  [dim]Spot is above 1-ATR — well positioned[/dim]")
+                    elif spot > atr2:
+                        console.print(f"  [yellow]Spot between 1-ATR and 2-ATR — monitor[/yellow]")
+                    else:
+                        console.print(f"  [red]Spot below 2-ATR — elevated risk[/red]")
+                else:  # CALL
+                    gap_to_strike = abs(buf)
+                    gap_pct = round(gap_to_strike / spot * 100, 1) if spot else 0
+                    if gap_pct > 20:
+                        console.print(f"  [red]Stock needs to rally {gap_pct:.1f}% to reach strike[/red]")
+                    elif gap_pct > 10:
+                        console.print(f"  [yellow]Stock needs to rally {gap_pct:.1f}% to reach strike[/yellow]")
+                    else:
+                        console.print(f"  [dim]Stock needs to rally {gap_pct:.1f}% to reach strike[/dim]")
 
     # ── Break-even ─────────────────────────────────────────────────────────────────
     if spot and strike and open_price:
@@ -1441,7 +1462,8 @@ def cmd_check_deep(pos: dict, legs: list, assessment: dict, snap: dict):
     console.print()
     console.print(f"  [bold]P&L[/bold]")
 
-    prem_str = f"${abs(net_premium):.0f}  ({contracts} x ${open_price:.2f})"
+    _net_pc = round(abs(net_premium) / contracts / 100, 2) if contracts else 0
+    prem_str = f"${abs(net_premium):.0f}  ({contracts} x ${_net_pc:.2f})"
     prem_label = "Paid:" if direction == "LONG" else "Collected:"
     console.print(f"  {prem_label:<12} {prem_str}")
 
@@ -1452,7 +1474,7 @@ def cmd_check_deep(pos: dict, legs: list, assessment: dict, snap: dict):
         console.print(f"  Current P&L: [{pnl_color}]{sign}${abs(pnl_mtm):.0f}{pct_str}[/{pnl_color}]")
 
         # Profit target progress
-        target_pct = 50.0
+        target_pct = a.get("profit_target_pct") or 50.0
         if pnl_pct is not None and direction == "SHORT":
             target_dollar = abs(net_premium) * (target_pct / 100)
             console.print(f"  Target:      ${target_dollar:.0f} ({target_pct:.0f}% of premium)  —  {'[green]REACHED[/green]' if pnl_pct >= target_pct else f'[dim]{target_pct - pnl_pct:.0f}% remaining[/dim]'}")
@@ -1464,34 +1486,41 @@ def cmd_check_deep(pos: dict, legs: list, assessment: dict, snap: dict):
         console.print()
         console.print(f"  [bold]Buffer to Strike[/bold]")
 
-        buf = a.get("intrinsic_buffer", 0) or 0
-        buf_pct = round(buf / spot * 100, 1) if spot else 0
-        otm_itm = "OTM" if buf > 0 else "ITM"
-        buf_color = "green" if buf_pct > 10 else "yellow" if buf_pct > 5 else "red"
+        buf = a.get("intrinsic_buffer")
+        if buf is None:
+            # Multi-strike position (condor / strangle / jade / straddle /
+            # diagonal): a single buffer-to-strike is ambiguous. Show n/a --
+            # per-wing detail lives in the legs view.
+            console.print(f"  Strike:      [dim]multi-strike — see legs[/dim]  |  Spot: ${spot:.2f}")
+            console.print(f"  Buffer:      [dim]n/a (multi-strike position)[/dim]")
+        else:
+            buf_pct = round(buf / spot * 100, 1) if spot else 0
+            otm_itm = "OTM" if buf > 0 else "ITM"
+            buf_color = "green" if buf_pct > 10 else "yellow" if buf_pct > 5 else "red"
 
-        console.print(f"  Strike:      ${strike:.0f}  |  Spot: ${spot:.2f}")
-        console.print(f"  Buffer:      [{buf_color}]${abs(buf):.2f}  ({abs(buf_pct):.1f}% {otm_itm})[/{buf_color}]")
+            console.print(f"  Strike:      ${strike:.0f}  |  Spot: ${spot:.2f}")
+            console.print(f"  Buffer:      [{buf_color}]${abs(buf):.2f}  ({abs(buf_pct):.1f}% {otm_itm})[/{buf_color}]")
 
-        if atr:
-            atr1 = round(spot - atr, 2) if opt_type == "PUT" else round(spot + atr, 2)
-            atr2 = round(spot - 2*atr, 2) if opt_type == "PUT" else round(spot + 2*atr, 2)
-            console.print(f"  1-ATR:       ${atr1:.2f}  |  2-ATR: ${atr2:.2f}")
-            if opt_type == "PUT":
-                if spot > atr1:
-                    console.print(f"  [dim]Spot is above 1-ATR — well positioned[/dim]")
-                elif spot > atr2:
-                    console.print(f"  [yellow]Spot between 1-ATR and 2-ATR — monitor[/yellow]")
-                else:
-                    console.print(f"  [red]Spot below 2-ATR — elevated risk[/red]")
-            else:  # CALL
-                gap_to_strike = abs(buf)
-                gap_pct = round(gap_to_strike / spot * 100, 1) if spot else 0
-                if gap_pct > 20:
-                    console.print(f"  [red]Stock needs to rally {gap_pct:.1f}% to reach strike[/red]")
-                elif gap_pct > 10:
-                    console.print(f"  [yellow]Stock needs to rally {gap_pct:.1f}% to reach strike[/yellow]")
-                else:
-                    console.print(f"  [dim]Stock needs to rally {gap_pct:.1f}% to reach strike[/dim]")
+            if atr:
+                atr1 = round(spot - atr, 2) if opt_type == "PUT" else round(spot + atr, 2)
+                atr2 = round(spot - 2*atr, 2) if opt_type == "PUT" else round(spot + 2*atr, 2)
+                console.print(f"  1-ATR:       ${atr1:.2f}  |  2-ATR: ${atr2:.2f}")
+                if opt_type == "PUT":
+                    if spot > atr1:
+                        console.print(f"  [dim]Spot is above 1-ATR — well positioned[/dim]")
+                    elif spot > atr2:
+                        console.print(f"  [yellow]Spot between 1-ATR and 2-ATR — monitor[/yellow]")
+                    else:
+                        console.print(f"  [red]Spot below 2-ATR — elevated risk[/red]")
+                else:  # CALL
+                    gap_to_strike = abs(buf)
+                    gap_pct = round(gap_to_strike / spot * 100, 1) if spot else 0
+                    if gap_pct > 20:
+                        console.print(f"  [red]Stock needs to rally {gap_pct:.1f}% to reach strike[/red]")
+                    elif gap_pct > 10:
+                        console.print(f"  [yellow]Stock needs to rally {gap_pct:.1f}% to reach strike[/yellow]")
+                    else:
+                        console.print(f"  [dim]Stock needs to rally {gap_pct:.1f}% to reach strike[/dim]")
 
     # ── Entry Context ─────────────────────────────────────────────────────────
     if entry_spot or entry_rsi or entry_bias is not None:
