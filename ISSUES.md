@@ -22,7 +22,7 @@ _Snapshot; refreshed each `helm checkpoint`, read via `helm status`._
 - **Counts:** 16 active (7 OPEN · 9 DEFERRED) · last shipped s64 (scan UX + strategy codes + IC bounds; HELM-053..058) · 749425b + s64 commit local, PUSH PENDING.
 - **Next RTH:** eyeball `shadow_*` columns populate on the next REAL `helm check` (a LONG_DEBIT position should stamp `shadow_signal='DEBIT_STOP_50'` + would_fire 0/1, else NULL); deep-ITM CSP re-pulls.
 
-_Last updated: 2026-07-06 (s64 -- shipped HELM-053..058: dead entry_snapshots insert removed; HELM-050 watchlist earnings backfilled 65->203 and DEFERRED (promote-before-open makes the cadence inert); fix-3 confirmed already-shipped 7/3 and verified live; scan table refit to 180 with short codes; shared strategy-code map so `helm open` accepts codes; IC open bounds 15-20 delta / 30-45 DTE + dedup. Logged HELM-059 (open vs strategy_settings entry bounds) and HELM-060 (/health codes). Duplicate stamp collapsed. Four code files + register in one commit; 749425b + s64 PUSH PENDING.)._
+_Last updated: 2026-07-06 (s65 -- deep-check field-coverage audit + fixes. HELM-063 buffer axis committed (f56c695) but its ISSUES entry was missing -- reconciled here. HELM-061 (helm paper generate wired) and HELM-064 (deep-check target from strategy_settings + net-per-contract credit label) are APPLIED to the working tree but UNCOMMITTED -- both still need commit + ISSUES pairing. Logged HELM-062/065/066/067/068. Outstanding: commit 061+064; apply scan width fix (HELM-065, still broken); IC 50% hardcode (066); multi-wing render (067); roll lineage (068). HELM-051 amended with the exec-bridge command whitelist.)._
 
 ## Active
 
@@ -103,6 +103,7 @@ _s46 (P2 c3): wired `evaluate_shadow_debit_stop` into the REAL check writer (`ch
 ### Ops / enhancement
 
 **HELM-051 · `OPS` · `OPEN` · git binary non-functional through the exec bridge; filesystem-based recon workaround**
+  - **s65:** the exec bridge now also enforces a **command whitelist** -- `pwd`, `sed`, and `&&`-compound commands return "Not whitelisted"; `helm` / `cat` / `grep` / `tail` / `echo` / anaconda `python3` (incl. `echo <hex> | python3 -c ...` pipes) pass. Read files with cat/grep; transmit complex Python as hex.
 _s60: every `git …` via `helm.local:8766/exec` hangs and returns empty — no stdout/stderr, and a `> /tmp/x` redirect never even creates the file, while `echo`/`ls`/python/file-reads all work. Suspect the exec server's PATH/shell env (git needing a login shell or TTY). Workaround in use: read git state straight from `.git/` (HEAD, refs, packed-refs, `logs/HEAD` reflog) via python; Russ runs all real git. Fix: inspect the exec server's spawned-shell env/PATH and whether `/opt/homebrew/bin/git` runs under it._
 _Durable bridge constraints (true regardless of the git fix): commands run via `/bin/sh -c "…"`, so double-quotes in SQL/Python literals close the shell quote and break parsing — transmit python as hex (`echo <hex> | python3 -c "…unhexlify…exec"`); `/usr/bin` not on PATH (git/xxd absent) — use absolute paths or the anaconda python; `cd`/bare `pwd` return empty — use `git -C` / absolute paths; sockets wedge after ~20 calls/tab — rotate + re-nonce; `/exec` is async — poll until the echoed `cmd` matches._
 
@@ -174,8 +175,21 @@ _Two sources of truth for IC/vertical entry delta+DTE: open_cmd.py's hardcoded S
 **HELM-060 · `UX` · `DEFERRED` · /health strategy codes not on the shared map**
 _/health still renders strategy labels with its own informal shorthand, independent of the s64 shared STRATEGY_CODES map (HELM-057). Low-priority consistency gap. **Trigger:** next /health touch -- point it at helm.strategies.STRATEGY_CODES so scan, open, and /health all speak the same codes._
 
+**HELM-062 · `OPS` · `OPEN` · duplicate keys in `helm.py` COMMANDS** — `scan` / `open` / `positions` / `status` each appear twice (legacy block + newer `_cmd` block); dict last-wins silently shadows the first, leaving ~4 dead entries at stale module paths. Prune the shadowed originals.
+
+**HELM-065 · `UX` · `OPEN` · scan table prints tiny-width columns** — the s64 scan refit dropped the `width=` arg from `Table(...)` in `scan_cmd.py`; with no forced width the ~187-col table collapses to the console default and squishes 15 `no_wrap` columns. Fix: restore `width=180`. One-liner, **not yet applied**.
+
+**HELM-066 · `UX` · `OPEN` · iron-condor deep renderer hardcodes 50% target** — `cmd_check_deep_iron_condor` prints `(50% of premium)` literally (separate path from HELM-064). Should read the resolved `profit_target_pct`. Sub-item of the target axis.
+
+**HELM-067 · `UX` · `OPEN` · deep-check multi-wing ATR / reach-strike (two-sided structures)** — ATR levels + "reach strike" branch on a single primary `opt_type`, so straddle / strangle / jade / diagonal can't show both wings. Belongs to multi-leg render (WS5 / HELM-033). Needs a design pass before code.
+
+**HELM-068 · `DATA` · `OPEN` · roll leaves the replacement unparented; verify close net P&L** — `helm roll` closes (reason=rolled -> ROLLED_OUT) then launches `helm open` with only [ticker, strategy]; the new position lands with no `parent_position_id` though the field exists, so roll lineage / cross-roll P&L / corpus continuity is lost. Roll also reopens the SAME strategy (won't switch to the currently-signalled structure). Separately: `close_position`'s multi-leg net P&L (which roll books) is unverified -- trace before trusting rolled realized figures on spreads.
+
 ## Resolved log
 
+- **2026-07-06 (s65)** — **HELM-064 deep-check target + credit label** — deep panels read `profit_target_pct` from `strategy_settings` (via a new `core_verdict` return field) instead of a hardcoded 50%; net-credit parenthetical derived from `net_premium / contracts / 100` so it reconciles to the headline (was the primary-leg fill). Two panels (csp + general). Six-guard patch, self-tested. **APPLIED, commit pending.**
+- **2026-07-06 (s65)** — **HELM-063 deep-check buffer axis** — `core_verdict` computes intrinsic_buffer for single-short-leg positions (CSP / covered call / credit vertical) off the short strike; multi-strike (condor / strangle / jade / straddle / diagonal) -> None -> panel renders `n/a` not a false `$0.00 ITM`. Fixed HON BeCS reading 0.0% ITM while 8.8% OTM. Display-only; verdict unchanged. **Committed f56c695** (ISSUES entry added retroactively here).
+- **2026-07-06 (s65)** — **HELM-061 `helm paper generate` wired** — new `helm/cli/paper_cmd.py` (dispatch -> `paper_generate()`, fail-closed on non-generate) + `paper` entry in `helm.py` COMMANDS. Generate unit existed but was orphaned (zero callers) after the s62 paper.manage teardown. Manual by design (booking is a write; HELM-037 keeps snapshot --all the sole scheduled writer). **APPLIED, commit pending.**
 - **2026-07-06 (s64)** - **HELM-054 iron-condor open bounds -- RESOLVED** - tightened the effective IRON_CONDOR entry bounds in open_cmd.py STRATEGY_CONFIG to 15-20 delta (sweet 0.16-0.18) / 30-45 DTE (was 15-35 / 21-56), and removed a shadowed DUPLICATE "IRON_CONDOR" key (dead is_strangle block the second is_condor block overrode). Runtime-verified the effective config resolves to the new rule. Scan applies no delta/DTE gating; open sources these from STRATEGY_CONFIG not strategy_settings (see HELM-059).
 
 - **2026-07-06 (s64)** - **HELM-055 scan table width cap -- RESOLVED** - dropped width=170 on the helm scan Table so it renders at natural width up to the terminal instead of crushing columns.
