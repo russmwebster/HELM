@@ -25,7 +25,7 @@ def run(args=None):
     remaining argv it is used; otherwise argv is read directly from sys.argv.
     """
     if args is None:
-        args = sys.argv[2:]
+        args = sys.argv[1:]
     sub = args[0].lower() if args else None
 
     if sub == "generate":
