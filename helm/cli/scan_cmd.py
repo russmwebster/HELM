@@ -655,7 +655,7 @@ def run():
         return
 
     # Results table
-    t = Table(box=box.SIMPLE_HEAD, show_header=True, padding=(0,1))
+    t = Table(box=box.SIMPLE_HEAD, show_header=True, padding=(0,1), width=180)
     t.add_column("Ticker",   style="bold cyan", width=6, no_wrap=True)
     t.add_column("Price",    justify="right", width=8, no_wrap=True)
     t.add_column("Bias",     width=11, no_wrap=True)

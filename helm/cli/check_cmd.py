@@ -1124,6 +1124,8 @@ def cmd_check_deep_csp(pos: dict, legs: list, assessment: dict, snap: dict):
         console.print(f"  Current P&L: [dim]-- (no option price data)[/dim]")
 
     # ── Buffer ────────────────────────────────────────────────────────────────
+    buf = None
+    buf_pct = None
     if spot and strike:
         console.print()
         console.print(f"  [bold]Buffer to Strike[/bold]")
@@ -1133,8 +1135,13 @@ def cmd_check_deep_csp(pos: dict, legs: list, assessment: dict, snap: dict):
             # Multi-strike position (condor / strangle / jade / straddle /
             # diagonal): a single buffer-to-strike is ambiguous. Show n/a --
             # per-wing detail lives in the legs view.
-            console.print(f"  Strike:      [dim]multi-strike — see legs[/dim]  |  Spot: ${spot:.2f}")
-            console.print(f"  Buffer:      [dim]n/a (multi-strike position)[/dim]")
+            _nshort = len([_l for _l in legs if _l.get("option_type") not in (None, "STOCK") and _l.get("direction") == "SHORT"])
+            if _nshort >= 2:
+                console.print(f"  Strike:      [dim]multi-strike — see legs[/dim]  |  Spot: ${spot:.2f}")
+                console.print(f"  Buffer:      [dim]n/a (multi-strike position)[/dim]")
+            else:
+                console.print(f"  Strike:      [dim]long option — no short strike[/dim]  |  Spot: ${spot:.2f}")
+                console.print(f"  Buffer:      [dim]n/a (long debit — no short strike)[/dim]")
         else:
             buf_pct = round(buf / spot * 100, 1) if spot else 0
             otm_itm = "OTM" if buf > 0 else "ITM"
@@ -1224,7 +1231,8 @@ def cmd_check_deep_iron_condor(pos, legs, assessment, snap):
     pnl_mtm = a.get('pnl_mtm') or 0
     profit_pct = round(pnl_mtm / net_premium * 100, 1) if net_premium else 0
     mark_confidence = a.get('mark_confidence', 'live')  # HELM-019 v1.1
-    target = round(net_premium * 0.50, 0)
+    target_pct = assessment.get("profit_target_pct") or 50.0
+    target = round(net_premium * (target_pct / 100), 0)
     expiration = None
     short_put = long_put = short_call = long_call = None
     for l in legs:
@@ -1284,7 +1292,11 @@ def cmd_check_deep_iron_condor(pos, legs, assessment, snap):
     pnl_color = 'green' if pnl_mtm >= 0 else 'red'
     _fz = '' if mark_confidence == 'live' else f'  [yellow]({mark_confidence})[/yellow]'
     console.print(f'  Current P&L: [{pnl_color}]{pnl_mtm:+,.0f}  ({profit_pct:.1f}% of max profit)[/{pnl_color}]{_fz}')
-    console.print(f'  Target:      ${target:,.0f} (50% of premium)  —  {round(100 - profit_pct, 0):.0f}% remaining')
+    if profit_pct >= target_pct:
+        _rem = '[green]REACHED[/green]'
+    else:
+        _rem = f'{round(target_pct - profit_pct, 0):.0f}% remaining'
+    console.print(f'  Target:      ${target:,.0f} ({target_pct:.0f}% of premium)  —  {_rem}')
     console.print()
     # Position map
     if spot and sp_str and sc_str:
@@ -1482,6 +1494,8 @@ def cmd_check_deep(pos: dict, legs: list, assessment: dict, snap: dict):
         console.print(f"  Current P&L: [dim]-- (no option price data)[/dim]")
 
     # ── Buffer ────────────────────────────────────────────────────────────────
+    buf = None
+    buf_pct = None
     if spot and strike:
         console.print()
         console.print(f"  [bold]Buffer to Strike[/bold]")
@@ -1491,8 +1505,13 @@ def cmd_check_deep(pos: dict, legs: list, assessment: dict, snap: dict):
             # Multi-strike position (condor / strangle / jade / straddle /
             # diagonal): a single buffer-to-strike is ambiguous. Show n/a --
             # per-wing detail lives in the legs view.
-            console.print(f"  Strike:      [dim]multi-strike — see legs[/dim]  |  Spot: ${spot:.2f}")
-            console.print(f"  Buffer:      [dim]n/a (multi-strike position)[/dim]")
+            _nshort = len([_l for _l in legs if _l.get("option_type") not in (None, "STOCK") and _l.get("direction") == "SHORT"])
+            if _nshort >= 2:
+                console.print(f"  Strike:      [dim]multi-strike — see legs[/dim]  |  Spot: ${spot:.2f}")
+                console.print(f"  Buffer:      [dim]n/a (multi-strike position)[/dim]")
+            else:
+                console.print(f"  Strike:      [dim]long option — no short strike[/dim]  |  Spot: ${spot:.2f}")
+                console.print(f"  Buffer:      [dim]n/a (long debit — no short strike)[/dim]")
         else:
             buf_pct = round(buf / spot * 100, 1) if spot else 0
             otm_itm = "OTM" if buf > 0 else "ITM"
