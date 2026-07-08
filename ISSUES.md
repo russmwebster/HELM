@@ -28,8 +28,6 @@ _Last updated_: 2026-07-07 (s67 checkpoint. Shipped deep-check hardening + CLI c
 
 ### Bugs
 
-**HELM-073 · `BUG` · `OPEN` · per-leg greeks fetched (ibkr-live) but never persisted to `leg_checks`** — every `leg_checks` row has `delta`/`gamma`/`theta`/`vega`/`iv_current` NULL (0 of 2,063) though `current_price` marks write fine and `checks.greeks_source` is `ibkr-live`; blocks a true tested-side delta for spreads/condors in `helm check`. Same audit surfaced a sign smell: CRM (BEAR_CALL_SPREAD) stored `checks.delta` +0.38 where negative expected — check the capture sign convention here too. Detail: docs/design/2026-07-08-check-per-strategy-redesign.md (added 2026-07-08).
-
 **HELM-072 · `UX` · `OPEN` · residual hardcoded 50% profit target in a deep renderer** — a `console.print` in `check_cmd.py` emits the literal "🎯 50% profit target reached — close and redeploy" (sibling of HELM-064 / HELM-066); should read the resolved `profit_target_pct`. One-liner, not yet applied.
 
 **HELM-044 · `BUG` · `RESOLVED (s59)` · Earnings at entry decision surfaced (scans + `helm open`); layer-3 corpus resolved (mark-and-accept, trust-boundary documented s59)**
@@ -43,6 +41,8 @@ Gating/scoring on earnings is explicitly OUT of scope — separate future fork f
 
 ### Tech debt
 
+**HELM-073 · `DEBT` · `DEFERRED` (trigger: next time the snapshot writer is opened, or when Track A needs per-leg greek history) · snapshot writer drops per-leg greeks into `leg_checks`** — the `persist=True` path (`check_one` -> `_persist_real_leg_marks` in `cli/check_cmd.py`) writes only `current_price`; the INSERT omits `delta`/`gamma`/`theta`/`vega`/`iv_current`, so all 2,063 `leg_checks` rows carry NULL greeks even though the live fetch returns them. Affects stored history only (learning corpus), NOT the display — HELM-074 shows per-leg delta from the live fetch. Ride-along: `checks.delta` is the raw primary-leg delta, not direction-adjusted (CRM bear-call reads +0.38); decide whether `checks.delta` should be net position delta (x -1 for SHORT legs). Not a blocker for HELM-074. Detail: docs/design/2026-07-08-check-per-strategy-redesign.md.
+
 **HELM-004 · `DEBT` · `DEFERRED` · Multileg paper liquidity capture not wired**
 _Narrowed s30 (`e55a00b`): credit spreads wired — `paper_open_spread_one` stamps short-leg liquidity (oi + spread/spread_pct), long leg spread-only. Remaining: debit/condor/diagonal/straddle, deferred to the thin-name sleeve._
 `_paper_open.py` leg dicts don't carry `oi`/`spread`/`spread_pct`, so multileg paper
@@ -54,7 +54,7 @@ stops being muted.
 
 ### Design / sequencing
 
-**HELM-074 · `DESIGN` · `OPEN` · `helm check` redesign — group by strategy; instrument panel over stoplight** — replace the single flat CSP-shaped table with four grouped renderers (CSP · BCS · IC · LONG_CALL), each with its own gauges: delta-led danger, buffer-to-strike and buffer-to-breakeven shown together, kept% (credit banked, take-profit at 50%), extrinsic, breakeven; plus a portfolio-pulse header (open P&L total, up/down by P&L not health, concentration). Single-leg groups (CSP, LONG_CALL) are data-ready now; spreads/condors' tested-Δ gated on HELM-073. Thresholds (delta bands, 21-DTE flag) to config. Mockup + full column spec: docs/design/2026-07-08-check-per-strategy-redesign.md (added 2026-07-08).
+**HELM-074 · `DESIGN` · `OPEN` · `helm check` redesign — group by strategy; instrument panel over stoplight** — replace the single flat CSP-shaped table with four grouped renderers (CSP · BCS · IC · LONG_CALL), each with its own gauges: delta-led danger, buffer-to-strike and buffer-to-breakeven together, kept% (credit banked, take-profit at 50%), extrinsic, breakeven; plus a portfolio-pulse header (open P&L, up/down by P&L not health, concentration). `helm check` is display-only (`check_one` persist=False) and fetches per-leg greeks live every run, so tested-side/per-leg delta renders from the live fetch during RTH (dash off-hours) — no persistence, not gated on HELM-073. Thresholds (delta bands, 21-DTE flag) to config. Mockup + full column spec: docs/design/2026-07-08-check-per-strategy-redesign.md.
 
 **HELM-043 · `DESIGN` · `OPEN (v1a s50 · v1b s57 · Gap B s59)` · Condor health: short-strike proximity live (YELLOW 50% watch / 75% manage) + RED act-reason names tested side+depth (v1b) + Gap B breach→RED (s59); live greeks (steps 3-4) remain**
 _Surfaced s45 validating the REAL condor `/health` bands (AMD/LRCX/PG). **Confirmed:** `leg_checks` marks (prices) populate GOOD, but `delta`/`gamma`/`theta`/`vega`/`iv_current` come back `None` on every condor leg — no live greeks. Best-practice condor health (Benklifa / tastytrade / Fidelity consensus) keys on tested-side short-strike **delta** (danger >0.30, healthy <0.15–0.20), **proximity** of spot to the short strikes (prep at 50%, act at 75% of center→wing), plus theta+ / vega / gamma and the 2x-credit · 25–50% · 21-DTE rails. HELM monitors none of the greeks and folds no proximity into the verdict._
