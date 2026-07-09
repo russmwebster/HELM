@@ -108,6 +108,8 @@ The core is the single home for decision logic — earlier there were multiple d
 
 Authoritative detail lives in `ISSUES.md` (top-of-file conventions) — this is a pointer summary.
 
+- **Session lifecycle** — start each session by orienting from the `ISSUES.md` Status block + git (never recollection); read HELM-051 before the first bridge call. End each session with a **checkpoint** that refreshes the `ISSUES.md` Status block (Counts · Last-shipped · `_Last updated_` stamp; move any resolved issues to the Resolved log) via a per-session `checkpoint_sNN.py` — dry-run then `--apply`, timestamped backup + readback, runs no git. Full process: `docs/checkpoint-process.md`.
+
 - **Firewall** — HELM only; never COTS. Bright line.
 - **Register discipline** — `ISSUES.md` is the single source of truth for issues/status (Status block · Active · Parking lot · Resolved log). Reconcile from the live register + git, never from recollection or a past session's prose. A source change commits *with* its `ISSUES.md` update, named files only (never `git add -A`).
 - **Division of labor** — Claude reads code/DB and drafts guarded patch scripts; the human runs all terminal/git.
