@@ -50,7 +50,7 @@ from helm.config import get_active_account
 from helm.db import get_conn, book_filter
 from helm.dates import dte
 
-console = Console()
+console = Console(no_color=True)  # HELM-074: monochrome -- focus on the data
 
 # ── Market hours ─────────────────────────────────────────────────────────────
 
@@ -121,10 +121,10 @@ def _persist_real_leg_marks(conn, check_id, position_id, leg_marks_by_id):
         conn.execute(
             "INSERT INTO leg_checks "
             "(id, check_id, position_id, leg_id, checked_at, "
-            "current_price, data_quality, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, 'GOOD', ?)",
+            "current_bid, current_ask, current_price, delta, gamma, theta, vega, iv_current, greeks_source, data_quality, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'GOOD', ?)",
             ("LCHK-" + _uuid.uuid4().hex[:8].upper(),
-             check_id, position_id, _lid, _now, _m["current_price"], _now),
+             check_id, position_id, _lid, _now, _m.get("bid"), _m.get("ask"), _m["current_price"], _m.get("delta"), _m.get("gamma"), _m.get("theta"), _m.get("vega"), _m.get("iv"), ("ibkr-live" if _m.get("delta") is not None else None), _now),
         )
 
 
@@ -737,6 +737,9 @@ def check_one(pos: dict, legs: list, deep: bool = False, persist: bool = False) 
             "leg_id": primary.get("id"),
             "current_price": opt_data.get("mid"),
             "is_live": (opt_source == "ibkr-live"),
+            "delta": opt_data.get("delta"), "gamma": opt_data.get("gamma"),
+            "theta": opt_data.get("theta"), "vega": opt_data.get("vega"),
+            "iv": opt_data.get("iv"), "bid": opt_data.get("bid"), "ask": opt_data.get("ask"),
         })
     if len(opt_legs) > 1:
         if primary is not None and opt_data.get("mid") is not None:
@@ -757,6 +760,9 @@ def check_one(pos: dict, legs: list, deep: bool = False, persist: bool = False) 
                     "leg_id": _lg.get("id"),
                     "current_price": _mid,
                     "is_live": _leg_live,
+                    "delta": _q.get("delta"), "gamma": _q.get("gamma"),
+                    "theta": _q.get("theta"), "vega": _q.get("vega"),
+                    "iv": _q.get("iv"), "bid": _q.get("bid"), "ask": _q.get("ask"),
                 })
 
     # Get strategy settings
@@ -792,6 +798,7 @@ def check_one(pos: dict, legs: list, deep: bool = False, persist: bool = False) 
         "primary_leg": primary,
         "pos": pos,
         "legs": legs,
+        "leg_greeks": {m["leg_id"]: m for m in leg_marks_by_id if m.get("leg_id")},
     })
 
     # WS4: decision-core verdict (additive; legacy flag retained for diff).
@@ -829,100 +836,441 @@ def check_one(pos: dict, legs: list, deep: bool = False, persist: bool = False) 
     return assessment
 
 
+# ============================================================================
+# HELM-074 -- `helm check` per-strategy redesign (display-only rewrite of the
+# no-flags summary path). Instrument panel over stoplight: group by strategy,
+# each group its own gauges; danger axis is delta-led with buffer alongside;
+# a portfolio-pulse header on top. `check_one` stays persist=False (no writes).
+#
+# Drop-in: replaces the body of `cmd_check_all` and adds the helpers below.
+# Deep views (cmd_check_deep_*) and the router (run/cmd_check_one) are untouched.
+#
+# Data contract (from check_one's returned assessment `a`, verified s69):
+#   a: flag, primary_leg, underlying_price, underlying_source, intrinsic_buffer,
+#      pnl_mtm, pnl_pct, opt_data{mid,delta,iv,bid,ask}, opt_source,
+#      mark_confidence, reasons, profit_target_pct
+#   pos: net_premium, breakeven_low/high, max_profit/max_loss, total_contracts,
+#        strategy, ticker, company_name
+#   legs: strike, direction, option_type, leg_role, contracts, open_price, expiration
+#
+# Delta note: check_one fetches greeks live for the PRIMARY leg only. So Δ is
+# live for single-leg families (CSP short put, LONG_CALL) at RTH; for spreads &
+# condors per-leg tested Δ is dashed ("-- *") pending the greek-write (HELM-073).
+# Off-hours all greeks are frozen/None -> Δ dashes; derived columns still render.
+# ============================================================================
+
+from rich.columns import Columns
+
+# ---- group taxonomy --------------------------------------------------------
+_FAMILY_ORDER = ["CSP", "CREDIT_SPREAD", "IC", "LONG_CALL", "OTHER"]
+_FAMILY_META = {
+    "CSP":           ("Cash-secured puts", "CSP"),
+    "CREDIT_SPREAD": ("Credit spreads",    "BCS"),   # suffix refined per members
+    "IC":            ("Iron condors",      "IC"),
+    "LONG_CALL":     ("Long calls",        "LC"),
+    "OTHER":         ("Other",             "--"),
+}
+
+def _family(strat):
+    s = (strat or "").upper()
+    if s in ("CSP", "CASH_SECURED_PUT"):
+        return "CSP"
+    if s in ("BEAR_CALL_SPREAD", "BULL_PUT_SPREAD"):
+        return "CREDIT_SPREAD"
+    if s == "IRON_CONDOR":
+        return "IC"
+    if s == "LONG_CALL":
+        return "LONG_CALL"
+    return "OTHER"
+
+
+# ---- small format helpers --------------------------------------------------
+def _pct_s(v, dec=1):
+    """Signed percent, plain (no color). None -> em dash."""
+    return f"{v:+.{dec}f}%" if v is not None else "—"
+
+def _dte_cell(days):
+    """DTE with the 21-day gamma dot; color bands mirror the legacy renderer."""
+    if days is None:
+        return "—"
+    dot = " •" if days <= 21 else ""      # inside 21-day gamma zone
+    color = "red" if days <= 7 else "yellow" if days <= 21 else "green"
+    return f"[{color}]{days}[/{color}]{dot}"
+
+def _delta_cell(delta, pending=False):
+    """Delta as the danger gauge: <.30 green / .30-.60 yellow / >=.60 red.
+    `pending` renders the dashed placeholder for per-leg deltas we don't yet
+    persist (spreads & condors -> HELM-073)."""
+    if pending:
+        return "[dim]— *[/dim]"
+    if delta is None:
+        return "[dim]— *[/dim]"
+    d = abs(delta)
+    color = "red" if d >= 0.60 else "yellow" if d >= 0.30 else "green"
+    return f"[{color}]{d:.2f}[/{color}]"
+
+def _buf_stack(strike_pct, be_pct):
+    """Two-line stacked buffer cell: strike buffer on top, breakeven muted below.
+    Positive = safe side; color the top line by proximity."""
+    if strike_pct is None:
+        top = "—"
+    else:
+        c = "green" if strike_pct > 10 else "yellow" if strike_pct > 0 else "red"
+        top = f"[{c}]{strike_pct:+.1f}%[/{c}]"
+    be = "—" if be_pct is None else f"be {be_pct:+.1f}%"
+    return f"{top}\n[dim]{be}[/dim]"
+
+def _kept_cell(pct):
+    """kept% = share of credit banked. >=profit-target reads take-profit-ready."""
+    if pct is None:
+        return "—"
+    c = "green" if pct >= 0 else "red"
+    return f"[{c}]{pct:+.0f}%[/{c}]"
+
+def _money(v, dec=0):
+    if v is None:
+        return "—"
+    return (f"[green]+${v:,.{dec}f}[/green]" if v >= 0
+            else f"[red]-${abs(v):,.{dec}f}[/red]")
+
+
+# ---- per-position derivations ---------------------------------------------
+def _single_short_leg(legs):
+    shorts = [l for l in legs if l.get("option_type") not in (None, "STOCK")
+              and l.get("direction") == "SHORT"]
+    return shorts[0] if len(shorts) == 1 else None
+
+def _credit_per_share(pos, primary):
+    npx = abs(pos.get("net_premium") or 0)
+    ctr = (primary or {}).get("contracts") or pos.get("total_contracts") or 1
+    return (npx / ctr / 100) if ctr else 0
+
+def _buffers_single_short(a, pos, legs):
+    """(strike_pct, be_pct) for CSP / credit vertical -- positive = safe side.
+    Uses the short leg's option_type to orient sign and picks the stored
+    breakeven when present, else derives K -/+ credit-per-share."""
+    spot = a.get("underlying_price")
+    sl = _single_short_leg(legs)
+    if not (spot and sl):
+        return (None, None)
+    K = sl.get("strike"); otype = sl.get("option_type")
+    cps = _credit_per_share(pos, a.get("primary_leg"))
+    if K is None or not otype:
+        return (None, None)
+    if otype == "PUT":                                   # CSP / bull put
+        buf_strike = spot - K
+        be = pos.get("breakeven_low") or (K - cps)
+        buf_be = spot - be
+    else:                                                # bear call
+        buf_strike = K - spot
+        be = pos.get("breakeven_high") or (K + cps)
+        buf_be = be - spot
+    return (buf_strike / spot * 100, buf_be / spot * 100)
+
+def _extrinsic(a):
+    """mark - intrinsic for the primary leg (the premium still bleeding)."""
+    opt = a.get("opt_data") or {}
+    mid = opt.get("mid"); spot = a.get("underlying_price")
+    prim = a.get("primary_leg") or {}
+    K = prim.get("strike"); otype = prim.get("option_type")
+    if mid is None or spot is None or K is None or not otype:
+        return None
+    intrinsic = max(spot - K, 0) if otype == "CALL" else max(K - spot, 0)
+    return mid - intrinsic
+
+def _ic_tested(a, pos, legs):
+    """(tested_side, buf_pct_to_tested, be_pct_to_tested, sp_K, sc_K) for a
+    condor. Off-hours / greek-free: tested side = the short strike spot is
+    nearest to (or has breached); sign positive = safe."""
+    spot = a.get("underlying_price")
+    sp = sc = None
+    for l in legs:
+        r = (l.get("leg_role") or "").upper()
+        if r == "SHORT_PUT":  sp = l
+        elif r == "SHORT_CALL": sc = l
+    if not (spot and sp and sc):
+        return (None, None, None, sp and sp.get("strike"), sc and sc.get("strike"))
+    sp_K = sp.get("strike"); sc_K = sc.get("strike")
+    dist_put = spot - sp_K            # + when spot above short put (safe)
+    dist_call = sc_K - spot           # + when spot below short call (safe)
+    if dist_put <= dist_call:
+        side, buf = "put", dist_put
+        be = pos.get("breakeven_low") or sp_K
+        be_buf = spot - be
+    else:
+        side, buf = "call", dist_call
+        be = pos.get("breakeven_high") or sc_K
+        be_buf = be - spot
+    return (side, buf / spot * 100, be_buf / spot * 100, sp_K, sc_K)
+
+
+# ---- portfolio pulse header ------------------------------------------------
+def _pulse_header(rows):
+    """rows: list of dicts with keys ticker, family, pnl (a['pnl_mtm'])."""
+    pnls = [r["pnl"] for r in rows if r["pnl"] is not None]
+    total = sum(pnls) if pnls else 0
+    up = sum(1 for p in pnls if p > 0)
+    down = sum(1 for p in pnls if p <= 0)
+
+    # concentration: largest strategy-family share of total drawdown.
+    # NOTE: this is a strategy-group proxy for the hand-identified "correlated
+    # cluster" (e.g. spec-name CSPs). A thematic-ticker map would sharpen it --
+    # flagged for Russ (see accompanying notes).
+    draw = {}
+    for r in rows:
+        if r["pnl"] is not None and r["pnl"] < 0:
+            draw[r["family"]] = draw.get(r["family"], 0) + r["pnl"]
+    conc_pct = conc_lbl = None
+    total_draw = sum(draw.values())
+    if total_draw < 0:
+        fam, worst = min(draw.items(), key=lambda kv: kv[1])
+        conc_pct = round(worst / total_draw * 100)
+        n = sum(1 for r in rows if r["family"] == fam and (r["pnl"] or 0) < 0)
+        conc_lbl = f"{n} {_FAMILY_META[fam][1]} ({_money(worst)})"
+
+    pnl_col = "green" if total >= 0 else "red"
+    card_pnl = (f"[dim]open p&l[/dim]\n[bold {pnl_col}]"
+                f"{'+' if total>=0 else '-'}${abs(total):,.0f}[/bold {pnl_col}]\n"
+                f"[dim]{len(rows)} open positions[/dim]")
+    card_pos = (f"[dim]positions[/dim]\n[bold]{up} up · {down} down[/bold]\n"
+                f"[dim]by open p&l[/dim]")
+    if conc_pct is not None:
+        card_con = (f"[dim]concentration[/dim]\n[bold]{conc_pct}%[/bold]\n"
+                    f"[dim]largest {_FAMILY_META[fam][0].lower()} cluster[/dim]")
+    else:
+        card_con = "[dim]concentration[/dim]\n[bold]--[/bold]\n[dim]no drawdown[/dim]"
+
+    console.print(Columns(
+        [Panel(card_pnl, border_style=pnl_col, width=26),
+         Panel(card_pos, border_style="cyan", width=26),
+         Panel(card_con, border_style="yellow", width=30)],
+        equal=False, expand=False,
+    ))
+    console.print()
+
+
+# ---- group renderers -------------------------------------------------------
+def _grp_header(family, subtotal, n):
+    label, code = _FAMILY_META[family]
+    console.print(f"[bold]{label}[/bold]  [dim]{code} · {n}[/dim]   {_money(subtotal)}")
+
+def _tbl(cols):
+    t = Table(box=box.SIMPLE_HEAD, show_header=True, padding=(0, 2))
+    for name, kw in cols:
+        t.add_column(name, **kw)
+    return t
+
+_R = dict(justify="right", no_wrap=True)
+
+def _spot_cell(spot):
+    return f"{spot:,.2f}" if spot is not None else "—"
+
+
+def _render_csp(rows):
+    t = _tbl([("ticker", dict(style="bold cyan", no_wrap=True)), ("dte", _R),
+              ("spot", _R), ("Δ put", _R), ("buf% s/be", _R), ("kept%", _R),
+              ("extr", _R), ("p&l", _R), ("credit", _R), ("b/e", _R)])
+    # sort by |delta| desc (danger first); None deltas sink
+    rows.sort(key=lambda r: (r["_delta"] is None, -abs(r["_delta"] or 0)))
+    for r in rows:
+        a, pos, prim = r["a"], r["pos"], r["a"].get("primary_leg") or {}
+        sp, be = _buffers_single_short(a, pos, r["legs"])
+        cps = _credit_per_share(pos, prim)
+        be_val = (prim.get("strike") - cps) if prim.get("strike") else None
+        extr = _extrinsic(a)
+        t.add_row(
+            r["ticker"], _dte_cell(r["_dte"]), _spot_cell(a.get("underlying_price")), _delta_cell(r["_delta"]),
+            _buf_stack(sp, be), _kept_cell(a.get("pnl_pct")),
+            f"{extr:.2f}" if extr is not None else "—",
+            _money(a.get("pnl_mtm")),
+            f"${abs(pos.get('net_premium') or 0):,.0f}",
+            f"{be_val:.2f}" if be_val is not None else "—",
+        )
+    console.print(t)
+
+def _leg_delta(a, leg):
+    """Raw model delta for a specific leg from the live per-leg capture."""
+    if not leg:
+        return None
+    g = (a.get("leg_greeks") or {}).get(leg.get("id"))
+    return g.get("delta") if g else None
+
+
+def _net_delta(a, legs):
+    """Direction-adjusted net position delta across the structure (per contract):
+    long legs +model_delta, short legs -model_delta. None if no leg has greeks."""
+    lg = a.get("leg_greeks") or {}
+    net = 0.0
+    have = False
+    for l in legs:
+        g = lg.get(l.get("id"))
+        d = g.get("delta") if g else None
+        if d is None:
+            continue
+        have = True
+        net += d * (1 if l.get("direction") == "LONG" else -1)
+    return net if have else None
+
+
+def _net_delta_cell(v):
+    return f"{v:+.2f}" if v is not None else "[dim]— *[/dim]"
+
+
+def _render_credit(rows):
+    t = _tbl([("ticker", dict(style="bold cyan", no_wrap=True)), ("dte", _R),
+              ("spot", _R), ("Δ short", _R), ("buf% s/be", _R), ("kept%", _R),
+              ("p&l", _R), ("credit", _R), ("width", _R), ("b/e", _R)])
+    rows.sort(key=lambda r: (r["a"].get("pnl_pct") is None, r["a"].get("pnl_pct") or 0))
+    for r in rows:
+        a, pos = r["a"], r["pos"]
+        sp, be = _buffers_single_short(a, pos, r["legs"])
+        sl = _single_short_leg(r["legs"])
+        be_val = pos.get("breakeven_high") or pos.get("breakeven_low")
+        t.add_row(
+            r["ticker"], _dte_cell(r["_dte"]), _spot_cell(a.get("underlying_price")), _delta_cell(_leg_delta(a, sl)),
+            _buf_stack(sp, be), _kept_cell(a.get("pnl_pct")),
+            _money(a.get("pnl_mtm")),
+            f"${abs(pos.get('net_premium') or 0):,.0f}",
+            "—",                                     # width: not stored (HELM-073 kin)
+            f"{be_val:.2f}" if be_val else "—",
+        )
+    console.print(t)
+
+def _render_ic(rows):
+    t = _tbl([("ticker", dict(style="bold cyan", no_wrap=True)), ("dte", _R),
+              ("spot", _R), ("tested", _R), ("buf% s/be", _R), ("net Δ", _R), ("kept%", _R),
+              ("p&l", _R), ("short p/c", _R), ("b/e lo–hi", _R)])
+    keyed = []
+    for r in rows:
+        side, buf, be, sp_K, sc_K = _ic_tested(r["a"], r["pos"], r["legs"])
+        r["_ic"] = (side, buf, be, sp_K, sc_K)
+        keyed.append(r)
+    keyed.sort(key=lambda r: (r["_ic"][1] is None, r["_ic"][1] if r["_ic"][1] is not None else 0))
+    for r in keyed:
+        a, pos = r["a"], r["pos"]
+        side, buf, be, sp_K, sc_K = r["_ic"]
+        blo, bhi = pos.get("breakeven_low"), pos.get("breakeven_high")
+        t.add_row(
+            r["ticker"], _dte_cell(r["_dte"]), _spot_cell(a.get("underlying_price")), side or "—",
+            _buf_stack(buf, be), _net_delta_cell(_net_delta(a, r["legs"])),
+            _kept_cell(a.get("pnl_pct")), _money(a.get("pnl_mtm")),
+            (f"{sp_K:.0f}p / {sc_K:.0f}c" if sp_K and sc_K else "—"),
+            (f"{blo:.0f}–{bhi:.0f}" if blo and bhi else "—"),
+        )
+    console.print(t)
+
+def _render_longcall(rows):
+    t = _tbl([("ticker", dict(style="bold cyan", no_wrap=True)), ("dte", _R),
+              ("spot", _R), ("Δ", _R), ("vs strike / be", _R), ("extr", _R),
+              ("p&l", _R), ("debit", _R), ("b/e", _R), ("iv", _R)])
+    rows.sort(key=lambda r: (r["_delta"] is None, abs(r["_delta"] or 0)))
+    for r in rows:
+        a, pos, prim = r["a"], r["pos"], r["a"].get("primary_leg") or {}
+        spot = a.get("underlying_price"); K = prim.get("strike")
+        cps = _credit_per_share(pos, prim)
+        be_val = (K + cps) if K else None
+        if spot and K:
+            moneyness = (spot - K) / K * 100
+            tag = f"itm {moneyness:.1f}%" if moneyness >= 0 else f"otm {abs(moneyness):.1f}%"
+            be_pct = ((spot - be_val) / spot * 100) if be_val and spot else None
+            vs = f"{tag}\n[dim]be {be_pct:+.1f}%[/dim]" if be_pct is not None else tag
+        else:
+            vs = "—"
+        extr = _extrinsic(a)
+        iv = (a.get("opt_data") or {}).get("iv")
+        t.add_row(
+            r["ticker"], _dte_cell(r["_dte"]), _spot_cell(a.get("underlying_price")), _delta_cell(r["_delta"]),
+            vs, f"{extr:.2f}" if extr is not None else "—",
+            _money(a.get("pnl_mtm")),
+            f"-${abs(pos.get('net_premium') or 0):,.0f}",
+            f"{be_val:.2f}" if be_val is not None else "—",
+            f"{iv:.0f}" if iv is not None else "—",
+        )
+    console.print(t)
+
+def _render_other(rows):
+    t = _tbl([("ticker", dict(style="bold cyan", no_wrap=True)), ("strategy", dict(no_wrap=True)),
+              ("dte", _R), ("spot", _R), ("kept%", _R), ("p&l", _R), ("credit/debit", _R)])
+    rows.sort(key=lambda r: (r["a"].get("pnl_mtm") is None, r["a"].get("pnl_mtm") or 0))
+    for r in rows:
+        a, pos = r["a"], r["pos"]
+        t.add_row(r["ticker"], pos.get("strategy", ""), _dte_cell(r["_dte"]), _spot_cell(a.get("underlying_price")),
+                  _kept_cell(a.get("pnl_pct")), _money(a.get("pnl_mtm")),
+                  f"${abs(pos.get('net_premium') or 0):,.0f}")
+    console.print(t)
+
+_GROUP_RENDER = {
+    "CSP": _render_csp, "CREDIT_SPREAD": _render_credit, "IC": _render_ic,
+    "LONG_CALL": _render_longcall, "OTHER": _render_other,
+}
+
+
+# ---- the new no-flags entry point -----------------------------------------
 def cmd_check_all(args):
-    """Check all open positions — summary table."""
+    """Check all open positions -- per-strategy instrument panel (HELM-074).
+    Display-only: check_one runs persist=False, writes nothing."""
     conn = get_conn()
     account_id = get_active_account()
     bc, bp = book_filter(args)
     positions = [dict(r) for r in conn.execute(
-        "SELECT * FROM positions WHERE account_id = ? AND status = 'OPEN'" + bc + " ORDER BY strategy, ticker",
-        (account_id, *bp)
-    ).fetchall()]
+        "SELECT * FROM positions WHERE account_id = ? AND status = 'OPEN'" + bc
+        + " ORDER BY strategy, ticker", (account_id, *bp)).fetchall()]
     conn.close()
 
     if not positions:
         console.print("[yellow]No open positions.[/yellow]")
         return
 
-    console.print()
-    console.print(Panel.fit(
-        f"[bold cyan]HELM Check[/bold cyan] — {len(positions)} open position(s)\n"
-        f"[dim]Data: {market_status_label()}[/dim]",
-        border_style="cyan"
-    ))
-    console.print()
-
-    t = Table(box=box.SIMPLE_HEAD, show_header=True, padding=(0,1),
-              width=170)
-    t.add_column("",           width=3,  no_wrap=True)
-    t.add_column("Ticker",     style="bold cyan", width=7, no_wrap=True)
-    t.add_column("Strategy",   width=14, no_wrap=True)
-    t.add_column("Strike",     justify="right", width=8, no_wrap=True)
-    t.add_column("DTE",        justify="right", width=5, no_wrap=True)
-    t.add_column("Underlying", justify="right", width=11, no_wrap=True)
-    t.add_column("Buffer",     justify="right", width=9, no_wrap=True)
-    t.add_column("Buf%",       justify="right", width=6, no_wrap=True)
-    t.add_column("P&L",        justify="right", width=9, no_wrap=True)
-    t.add_column("P&L%",       justify="right", width=8, no_wrap=True)
-    t.add_column("Assessment", width=50, no_wrap=True)
-
-    counts = {"GREEN": 0, "YELLOW": 0, "RED": 0, "UNKNOWN": 0}
-
+    # assess each position (live fetch happens inside check_one; no writes)
+    rows = []
     for pos in positions:
         conn = get_conn()
         legs = [dict(r) for r in conn.execute(
-            "SELECT * FROM legs WHERE position_id = ?", (pos["id"],)
-        ).fetchall()]
+            "SELECT * FROM legs WHERE position_id = ?", (pos["id"],)).fetchall()]
         conn.close()
-
         console.print(f"[dim]Checking {pos['ticker']}...[/dim]", end="\r")
         a = check_one(pos, legs)
-        counts[a["flag"]] = counts.get(a["flag"], 0) + 1
+        prim = a.get("primary_leg") or {}
+        rows.append({
+            "ticker": pos["ticker"], "pos": pos, "legs": legs, "a": a,
+            "family": _family(pos.get("strategy")),
+            "pnl": a.get("pnl_mtm"),
+            "_dte": dte(prim["expiration"]) if prim.get("expiration") else None,
+            "_delta": (a.get("opt_data") or {}).get("delta"),
+        })
 
-        flag_icons = {"GREEN": "[green]●[/green]", "YELLOW": "[yellow]●[/yellow]",
-                      "RED": "[red]●[/red]", "UNKNOWN": "[dim]?[/dim]"}
-        flag_str = flag_icons.get(a["flag"], "?")
-
-        primary = a["primary_leg"]
-        strike_str = f"${primary['strike']:.0f}" if primary else "--"
-        exp_str = primary["expiration"][5:] if primary else "--"
-        days = dte(primary["expiration"]) if primary else None
-        dte_str = f"{days}d" if days is not None else "--"
-        dte_color = "red" if (days is not None and days <= 7) else                     "yellow" if (days is not None and days <= 21) else "green"
-        dte_fmt = f"[{dte_color}]{dte_str}[/{dte_color}]"
-
-        underlying_str = fmt_price(a["underlying_price"])
-        buffer_str = f"${a['intrinsic_buffer']:.1f}" if a["intrinsic_buffer"] is not None else "--"
-        buf_pct_str = "--"  # default, overwritten below if buffer exists
-        if a["intrinsic_buffer"] is not None:
-            buf_color = "red" if a["intrinsic_buffer"] < 0 else                         "yellow" if a["intrinsic_buffer"] < a["underlying_price"] * 0.03 else "green"
-            buffer_str = f"[{buf_color}]{buffer_str}[/{buf_color}]"
-            buf_pct_v = a["intrinsic_buffer"] / a["underlying_price"] * 100 if a["underlying_price"] else None
-            _bpc = "green" if (buf_pct_v or 0) > 10 else ("yellow" if (buf_pct_v or 0) > 5 else "red")
-            buf_pct_str = f"[{_bpc}]{buf_pct_v:.1f}%[/{_bpc}]"
-
-        pnl_str = fmt_pnl(a["pnl_mtm"])
-        pct_str = fmt_pct(a["pnl_pct"])
-        reason = a["reasons"][0] if a["reasons"] else "--"
-
-        _co = (pos.get("company_name") or "")[:14]
-        _tk_display = (f"{pos['ticker']}  [dim]{_co}[/dim]") if _co else pos["ticker"]
-        t.add_row(
-            flag_str, _tk_display, pos["strategy"],
-            strike_str, dte_fmt,
-            underlying_str, buffer_str, buf_pct_str,
-            pnl_str, pct_str, reason
-        )
-
-    console.print(t)
+    console.print(" " * 40, end="\r")   # clear the progress line
+    console.print()
+    console.print(Panel.fit(
+        f"[bold cyan]helm check[/bold cyan]  [dim]book: {book_label(args)} · "
+        f"{len(rows)} open · {market_status_label()}[/dim]",
+        border_style="cyan"))
     console.print()
 
-    # Summary
-    summary = f"[green]● {counts['GREEN']} GREEN[/green]  "               f"[yellow]● {counts['YELLOW']} YELLOW[/yellow]  "               f"[red]● {counts['RED']} RED[/red]"
-    console.print(f"  {summary}")
-    console.print()
+    _pulse_header(rows)
+
+    # render each non-empty group in canonical order
+    for fam in _FAMILY_ORDER:
+        grp = [r for r in rows if r["family"] == fam]
+        if not grp:
+            continue
+        subtotal = sum(r["pnl"] for r in grp if r["pnl"] is not None)
+        _grp_header(fam, subtotal, len(grp))
+        _GROUP_RENDER[fam](grp)
+        console.print()
+
+    _check_footer()
 
 
+# ---- helper the header needs (book pill) -----------------------------------
+def book_label(args):
+    """REAL / PAPER / ALL pill for the header, mirroring /health (HELM-033)."""
+    a = args or []
+    if "--all" in a:
+        return "ALL"
+    if "--paper" in a:
+        return "PAPER"
+    return "REAL"
 
 
 def render_csp_position_diagram(spot, strike, open_price, atr, net_premium):
@@ -1610,13 +1958,29 @@ def generate_guidance(pos: dict, primary: dict, assessment: dict, snap: dict,
     return lines
 
 
+# ---- shared footer legend (used by cmd_check_all and cmd_check_one) --------
+def _check_footer():
+    console.print(
+        "[dim][green]Δ<.30[/green] [yellow].30–.60[/yellow] [red]≥.60[/red]"
+        "  danger gauge = short-strike delta · • = inside 21-day gamma zone[/dim]")
+    console.print(
+        "[dim]buf% = spot to short strike (top) / spot to breakeven (below, muted). "
+        "kept% = share of credit banked (≥50% = take-profit; negative = giving credit back). "
+        "— * on delta = no live greeks in this quote (e.g. off-hours).[/dim]")
+    console.print(
+        "[dim]live now: Δ (single-leg), buffers, P&L, credit/debit · "
+        "derived: kept%, breakeven, extrinsic. Δ short = tested short-leg delta · net Δ = position delta.[/dim]")
+
+
 def cmd_check_one(ticker: str, deep: bool = False):
-    """Check a single position, with optional deep narrative."""
+    """Check a single position. --deep -> narrative view; otherwise the
+    HELM-074 per-strategy panel scoped to this one position."""
     conn = get_conn()
     account_id = get_active_account()
     bc, bp = book_filter(sys.argv)
     pos = conn.execute(
-        "SELECT * FROM positions WHERE account_id = ? AND ticker = ? AND status = 'OPEN'" + bc + " ORDER BY opened_at DESC LIMIT 1",
+        "SELECT * FROM positions WHERE account_id = ? AND ticker = ? AND status = 'OPEN'" + bc
+        + " ORDER BY opened_at DESC LIMIT 1",
         (account_id, ticker.upper(), *bp)
     ).fetchone()
     if not pos:
@@ -1627,7 +1991,6 @@ def cmd_check_one(ticker: str, deep: bool = False):
     legs = [dict(r) for r in conn.execute(
         "SELECT * FROM legs WHERE position_id = ?", (pos["id"],)
     ).fetchall()]
-    # Get entry snapshot
     snap = conn.execute(
         "SELECT * FROM entry_snapshots WHERE position_id=? ORDER BY created_at DESC LIMIT 1",
         (pos["id"],)
@@ -1635,10 +1998,8 @@ def cmd_check_one(ticker: str, deep: bool = False):
     snap = dict(snap) if snap else {}
     conn.close()
 
-    console.print()
-    console.print(f"[dim]Checking {ticker}...[/dim]")
+    console.print(f"[dim]Checking {ticker}...[/dim]", end="\r")
     a = check_one(pos, legs, deep=deep)
-    primary = a["primary_leg"]
 
     if deep:
         strat = pos.get('strategy', '')
@@ -1650,65 +2011,27 @@ def cmd_check_one(ticker: str, deep: bool = False):
             cmd_check_deep(pos, legs, a, snap)
         return
 
-    flag_colors = {"GREEN": "green", "YELLOW": "yellow", "RED": "red", "UNKNOWN": "dim"}
-    flag_color = flag_colors.get(a["flag"], "dim")
-
-    lines = [
-        f"[bold cyan]{ticker}[/bold cyan]  [dim]{(pos.get('company_name') or '')[:30]}[/dim]  {pos['strategy']}",
-        "",
-    ]
-
-    if primary:
-        days = dte(primary["expiration"])
-        lines += [
-            f"Strike:     ${primary['strike']:.0f}  {primary['expiration']}  ({days}d)",
-            f"Direction:  {primary['direction']}  x{primary['contracts']} contracts",
-            f"Opened at:  ${primary['open_price']:.2f}  (net premium: ${abs(pos['net_premium'] or 0):.0f})",
-        ]
-
-    lines += ["", "── Market Data " + "─"*40]
-    lines.append(f"Underlying: ${a['underlying_price']:.2f}  [dim]({a['underlying_source']})[/dim]" if a["underlying_price"] else "Underlying: --")
-
-    opt = a["opt_data"]
-    if opt.get("bid") and opt.get("ask"):
-        lines.append(f"Option:     bid ${opt['bid']:.2f}  ask ${opt['ask']:.2f}  mid ${opt['mid']:.2f}  [dim]({a['opt_source']})[/dim]")
-    elif opt.get("mid"):
-        lines.append(f"Option mid: ${opt['mid']:.2f}  [dim]({a['opt_source']})[/dim]")
-    else:
-        lines.append(f"Option:     no data  [dim]({a['opt_source']})[/dim]")
-
-    if opt.get("iv"):
-        lines.append(f"IV:         {opt['iv']:.1f}%")
-
-    if deep and any(opt.get(g) for g in ["delta","theta","gamma","vega"]):
-        lines.append(f"Delta:  {opt.get('delta','--')}   Theta: {opt.get('theta','--')}/day")
-        lines.append(f"Gamma:  {opt.get('gamma','--')}   Vega:  {opt.get('vega','--')}")
-
-    lines += ["", "── P&L " + "─"*46]
-    if a["pnl_mtm"] is not None:
-        sign = "+" if a["pnl_mtm"] >= 0 else ""
-        lines.append(f"Mark-to-market: {sign}${a['pnl_mtm']:.0f}  ({sign}{a['pnl_pct']:.1f}% of premium)")
-    else:
-        lines.append("Mark-to-market: -- (no option price data)")
-
-    if a["intrinsic_buffer"] is not None and a["underlying_price"]:
-        pct_buf = a["intrinsic_buffer"] / a["underlying_price"] * 100
-        itm_otm = "OTM" if a["intrinsic_buffer"] >= 0 else "ITM"
-        buf_val = abs(a['intrinsic_buffer'])
-        lines.append(f"Buffer to strike: ${buf_val:.2f} ({abs(pct_buf):.1f}%) {itm_otm}")
-
-    lines += ["", "── Assessment " + "─"*40]
-    lines.append(f"[{flag_color}]● {a['flag']}[/{flag_color}]")
-    for reason in a["reasons"]:
-        lines.append(f"  • {reason}")
-
-    console.print(Panel(
-        "\n".join(lines),
-        title=f"{ticker} Health Check",
-        border_style=flag_color
-    ))
+    # HELM-074: single-position view reuses the grouped panel renderers.
+    prim = a.get("primary_leg") or {}
+    row = {
+        "ticker": pos["ticker"], "pos": pos, "legs": legs, "a": a,
+        "family": _family(pos.get("strategy")),
+        "pnl": a.get("pnl_mtm"),
+        "_dte": dte(prim["expiration"]) if prim.get("expiration") else None,
+        "_delta": (a.get("opt_data") or {}).get("delta"),
+    }
+    console.print(" " * 40, end="\r")
     console.print()
-
+    console.print(Panel.fit(
+        f"[bold cyan]helm check[/bold cyan]  [dim]{ticker.upper()} · "
+        f"book: {book_label(sys.argv)} · {market_status_label()}[/dim]",
+        border_style="cyan"))
+    console.print()
+    fam = row["family"]
+    _grp_header(fam, row["pnl"], 1)
+    _GROUP_RENDER[fam]([row])
+    console.print()
+    _check_footer()
 
 
 # ============================================================================
