@@ -194,3 +194,35 @@ def earnings_banner_line(ticker, conn=None):
     if sev == "past":
         return f"  [dim]Earnings: last known {ne} has passed -- no confirmed upcoming date[/dim]"
     return "  [dim yellow]Earnings: unknown (not in cache)[/dim yellow]"
+
+
+def _refresh_earnings(conn):
+    """Refresh positions.earnings_date for OPEN positions with null/stale dates.
+    Relocated from helm/health.py during the HELM-033 /health retire.
+    Used by helm ivr (ivr_cmd) before computing IVR."""
+    try:
+        import yfinance as yf
+        from datetime import date
+        today = date.today().isoformat()
+        rows = conn.execute(
+            "SELECT id, ticker FROM positions WHERE status='OPEN'"
+            " AND (earnings_date IS NULL OR earnings_date < ?)"
+            , (today,)
+        ).fetchall()
+        for pos_id, ticker in rows:
+            try:
+                cal = yf.Ticker(ticker).calendar
+                ed = None
+                if isinstance(cal, dict) and 'Earnings Date' in cal:
+                    dates = cal['Earnings Date']
+                    if dates:
+                        ed = str(dates[0])[:10]
+                if ed and ed not in ('NaT', 'None', ''):
+                    conn.execute('UPDATE positions SET earnings_date=? WHERE id=?', (ed, pos_id))
+                else:
+                    conn.execute('UPDATE positions SET earnings_date=NULL WHERE id=?', (pos_id,))
+            except Exception:
+                pass
+        conn.commit()
+    except Exception:
+        pass
