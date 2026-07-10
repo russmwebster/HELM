@@ -101,6 +101,7 @@ The core is the single home for decision logic — earlier there were multiple d
 - **Secrets** — `helm/secrets_loader.py` reads `~/.helm/env` (chmod 600, outside the repo). Credentials are never hardcoded in plists/dotfiles/repo.
 - **Scheduling** — four `com.helm.*` launchd agents (check, paper-manage, server, notify). See `~/Library/LaunchAgents` for the authoritative set.
 - **Bridge** — a local server at `helm.local:8766` exposing `/exec`; how Claude reads state and runs read-only checks.
+- **Market data (IBKR entitlement)** — the account carries a live real-time US market-data subscription; real-time quotes are entitled. When writing data-fetch code, assume live data is available — `reqMarketDataType(1)` returns real-time in RTH, and a frozen request (`2`) upgrades to live (`1`) when a feed exists (see `sample_mktdata.py`). Do **not** default to delayed (`3`) or code as if there is no live entitlement. Off-hours, IBKR can still serve live pre/post-market prints — check `t.marketDataType` rather than assuming frozen/prior-close.
 
 ---
 
