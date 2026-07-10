@@ -291,7 +291,14 @@ def save_check(position_id: str, assessment: dict, pos: dict, leg_marks_by_id: O
 
 
 def fetch_ibkr_underlying(ticker: str) -> dict:
-    """Fetch underlying price from IBKR. Returns close price outside hours."""
+    """Fetch underlying price from IBKR. Returns close price outside hours.
+
+    HELM-075: set frozen market-data type off-hours (mirroring
+    fetch_ibkr_option) and prefer the frozen `last`. IBKR's `close` tick is the
+    PRIOR session's close, so reading it after today's close returned
+    yesterday's price (LRCX read 333.15 vs today's 353.17). Frozen `last` is the
+    most recent session's close; `close` is kept only as a last-resort fallback.
+    """
     result = {"price": None, "source": "ibkr", "live": False, "error": None}
     try:
         from helm.ibkr import check_connection
@@ -304,16 +311,25 @@ def fetch_ibkr_underlying(ticker: str) -> dict:
         ib = IB()
         ib.connect("127.0.0.1", 4002, clientId=12, readonly=True)
         try:
+            market_open = is_market_open()
+            ib.reqMarketDataType(1 if market_open else 2)  # 2 = frozen (last session)
             stock = Stock(ticker, "SMART", "USD")
             ib.qualifyContracts(stock)
             t = ib.reqMktData(stock, "", False, False)
             ib.sleep(2)
 
-            market_open = is_market_open()
-            if market_open and t.last and not math.isnan(t.last) and t.last > 0:
+            def _ok(v):
+                return v is not None and not math.isnan(v) and v > 0
+
+            if market_open and _ok(t.last):
                 result["price"] = round(t.last, 2)
                 result["live"] = True
-            elif t.close and not math.isnan(t.close) and t.close > 0:
+            elif _ok(t.last):
+                # frozen last == most recent session's close (today, post-RTH)
+                result["price"] = round(t.last, 2)
+                result["live"] = False
+            elif _ok(t.close):
+                # last resort: IBKR `close` tick is the PRIOR session's close
                 result["price"] = round(t.close, 2)
                 result["live"] = False
         finally:
@@ -321,7 +337,6 @@ def fetch_ibkr_underlying(ticker: str) -> dict:
     except Exception as e:
         result["error"] = str(e)[:60]
     return result
-
 
 def fetch_ibkr_option(ticker: str, expiration: str, strike: float,
                        option_type: str) -> dict:
