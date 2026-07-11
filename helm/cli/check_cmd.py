@@ -311,8 +311,7 @@ def fetch_ibkr_underlying(ticker: str) -> dict:
         ib = IB()
         ib.connect("127.0.0.1", 4002, clientId=12, readonly=True)
         try:
-            market_open = is_market_open()
-            ib.reqMarketDataType(1 if market_open else 2)  # 2 = frozen (last session)
+            ib.reqMarketDataType(2)  # HELM-076: frozen; IBKR upgrades to live (1) when a live session genuinely exists (pre/post-market)
             stock = Stock(ticker, "SMART", "USD")
             ib.qualifyContracts(stock)
             t = ib.reqMktData(stock, "", False, False)
@@ -321,13 +320,11 @@ def fetch_ibkr_underlying(ticker: str) -> dict:
             def _ok(v):
                 return v is not None and not math.isnan(v) and v > 0
 
-            if market_open and _ok(t.last):
+            got_live = (getattr(t, "marketDataType", None) == 1)
+            if _ok(t.last):
+                # HELM-076: live extended-hours print when IBKR upgraded (pre/post-market), else frozen last
                 result["price"] = round(t.last, 2)
-                result["live"] = True
-            elif _ok(t.last):
-                # frozen last == most recent session's close (today, post-RTH)
-                result["price"] = round(t.last, 2)
-                result["live"] = False
+                result["live"] = got_live
             elif _ok(t.close):
                 # last resort: IBKR `close` tick is the PRIOR session's close
                 result["price"] = round(t.close, 2)
@@ -361,7 +358,7 @@ def fetch_ibkr_option(ticker: str, expiration: str, strike: float,
             opt = Option(ticker, exp_fmt, strike,
                          option_type[0].upper(), "SMART", multiplier="100")
             ib.qualifyContracts(opt)
-            ib.reqMarketDataType(1 if is_market_open() else 2)  # 2=frozen — last close data, requires subscription
+            ib.reqMarketDataType(2)  # HELM-076: frozen; IBKR upgrades to live (1) when a live session exists
             t = ib.reqMktData(opt, "106", False, False)
             for _ in range(8):
                 ib.sleep(1)

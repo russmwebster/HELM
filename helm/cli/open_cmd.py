@@ -416,7 +416,7 @@ def fetch_chain_from_ibkr(ticker, opt_type, target_exps, spot, atr,
         ib.connect("127.0.0.1", 4002, clientId=15, readonly=True, timeout=15)
         ib.RequestTimeout = 45  # HELM-009: hung IBKR request raises/returns bounded instead of stalling the batch (caught upstream as a skip)
         from helm.cli.check_cmd import is_market_open
-        ib.reqMarketDataType(1 if is_market_open() else 2)
+        ib.reqMarketDataType(2)  # HELM-076: frozen; IBKR upgrades to live when a live session exists
         import atexit; atexit.register(lambda: ib.disconnect() if ib.isConnected() else None)
 
         for exp, days in target_exps:
