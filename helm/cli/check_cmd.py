@@ -1055,10 +1055,32 @@ def _pulse_header(rows):
     else:
         card_con = "[dim]concentration[/dim]\n[bold]--[/bold]\n[dim]no drawdown[/dim]"
 
+    _nth = _nvg = _bwd = 0.0
+    _has_g = False
+    for _r in rows:
+        _a = _r["a"]; _lg = _r.get("legs") or []; _p = _r["pos"]
+        _ct = _p.get("total_contracts") or 1
+        _th = _pos_greek(_a, _lg, "theta"); _vg = _pos_greek(_a, _lg, "vega"); _nd = _net_delta(_a, _lg)
+        if _th is not None:
+            _nth += _th * 100 * _ct; _has_g = True
+        if _vg is not None:
+            _nvg += _vg * 100 * _ct; _has_g = True
+        _sp = _a.get("underlying_price")
+        if _nd is not None and _sp:
+            _bwd += _nd * 100 * _ct * _sp * (_r.get("beta") or 1.0)
+    def _gs(v):
+        return ("+" if v >= 0 else "-") + "$" + format(abs(v), ",.0f")
+    def _gk(v):
+        return ("+" if v >= 0 else "-") + "$" + format(abs(v) / 1000, ",.0f") + "k"
+    if _has_g:
+        card_grk = ("[dim]net greeks (β-wtd)[/dim]\n[bold]Δ " + _gk(_bwd) + "[/bold]\n[dim]θ " + _gs(_nth) + "/day · ν " + _gs(_nvg) + "[/dim]")
+    else:
+        card_grk = "[dim]net greeks[/dim]\n[bold]— *[/bold]\n[dim]no live greeks[/dim]"
     console.print(Columns(
         [Panel(card_pnl, border_style=pnl_col, width=26),
          Panel(card_pos, border_style="cyan", width=26),
-         Panel(card_con, border_style="yellow", width=30)],
+         Panel(card_con, border_style="yellow", width=30),
+         Panel(card_grk, border_style="magenta", width=34)],
         equal=False, expand=False,
     ))
     console.print()
@@ -1081,10 +1103,67 @@ def _spot_cell(spot):
     return f"{spot:,.2f}" if spot is not None else "—"
 
 
+def _vert_width(legs):
+    sh = [l for l in legs if l.get("direction") == "SHORT" and l.get("option_type") not in (None, "STOCK")]
+    lo = [l for l in legs if l.get("direction") == "LONG"  and l.get("option_type") not in (None, "STOCK")]
+    if len(sh) == 1 and len(lo) == 1 and sh[0].get("strike") is not None and lo[0].get("strike") is not None:
+        return abs(sh[0]["strike"] - lo[0]["strike"])
+    return None
+
+def _ic_width(legs):
+    by = {}
+    for l in legs:
+        by[(l.get("leg_role") or "").upper()] = l
+    def _w(x, y):
+        A, B = by.get(x), by.get(y)
+        if A and B and A.get("strike") is not None and B.get("strike") is not None:
+            return abs(A["strike"] - B["strike"])
+        return None
+    cands = [w for w in (_w("SHORT_PUT", "LONG_PUT"), _w("SHORT_CALL", "LONG_CALL")) if w is not None]
+    return max(cands) if cands else None
+
+def _risk_cell(width, pos):
+    npx = abs(pos.get("net_premium") or 0)
+    ctr = pos.get("total_contracts") or 1
+    if not width:
+        return "—"
+    ml = width * 100 * ctr - npx
+    if ml <= 0:
+        return "—"
+    ror = npx / ml * 100
+    return f"${ml:,.0f}\n[dim]{ror:.0f}% RoR · {width:g}w[/dim]"
+
+
+def _pos_greek(a, legs, key):
+    lg = a.get("leg_greeks") or {}
+    tot = 0.0
+    have = False
+    for l in legs:
+        g = lg.get(l.get("id"))
+        v = g.get(key) if g else None
+        if v is None:
+            continue
+        have = True
+        tot += v * (1 if l.get("direction") == "LONG" else -1)
+    return tot if have else None
+
+def _greek_cell(a, legs, pos):
+    ctr = pos.get("total_contracts") or 1
+    th = _pos_greek(a, legs, "theta")
+    vg = _pos_greek(a, legs, "vega")
+    if th is None and vg is None:
+        return "[dim]— *[/dim]"
+    ths = f"{th * 100 * ctr:+,.0f}" if th is not None else "—"
+    vgs = f"{vg * 100 * ctr:+,.0f}" if vg is not None else "—"
+    return f"{ths}\n[dim]{vgs}[/dim]"
+
+def _ivr_cell(v):
+    return f"{v:.0f}" if v is not None else "—"
+
 def _render_csp(rows):
     t = _tbl([("ticker", dict(style="bold cyan", no_wrap=True)), ("dte", _R),
-              ("spot", _R), ("strike", _R), ("Δ put", _R), ("buf% s/be", _R), ("kept%", _R),
-              ("extr", _R), ("p&l", _R), ("credit", _R), ("b/e", _R)])
+              ("spot", _R), ("strike", _R), ("Δ put", _R), ("θ/ν", _R), ("buf% s/be", _R), ("kept%", _R),
+              ("extr", _R), ("p&l", _R), ("credit", _R), ("IVR", _R), ("b/e", _R)])
     # sort by |delta| desc (danger first); None deltas sink
     rows.sort(key=lambda r: (r["_delta"] is None, -abs(r["_delta"] or 0)))
     for r in rows:
@@ -1094,11 +1173,12 @@ def _render_csp(rows):
         be_val = (prim.get("strike") - cps) if prim.get("strike") else None
         extr = _extrinsic(a)
         t.add_row(
-            r["ticker"], _dte_cell(r["_dte"]), _spot_cell(a.get("underlying_price")), _spot_cell(prim.get("strike")), _delta_cell(r["_delta"]),
+            r["ticker"], _dte_cell(r["_dte"]), _spot_cell(a.get("underlying_price")), _spot_cell(prim.get("strike")), _delta_cell(r["_delta"]), _greek_cell(a, r["legs"], pos),
             _buf_stack(sp, be), _kept_cell(a.get("pnl_pct")),
             f"{extr:.2f}" if extr is not None else "—",
             _money(a.get("pnl_mtm")),
             f"${abs(pos.get('net_premium') or 0):,.0f}",
+            _ivr_cell(r.get("ivr")),
             f"{be_val:.2f}" if be_val is not None else "—",
         )
     console.print(t)
@@ -1133,28 +1213,30 @@ def _net_delta_cell(v):
 
 def _render_credit(rows):
     t = _tbl([("ticker", dict(style="bold cyan", no_wrap=True)), ("dte", _R),
-              ("spot", _R), ("strike", _R), ("Δ short", _R), ("buf% s/be", _R), ("kept%", _R),
-              ("p&l", _R), ("credit", _R), ("width", _R), ("b/e", _R)])
+              ("spot", _R), ("strike", _R), ("Δ short", _R), ("θ/ν", _R), ("buf% s/be", _R), ("kept%", _R),
+              ("p&l", _R), ("credit", _R), ("max loss", _R), ("IVR", _R), ("b/e", _R)])
     rows.sort(key=lambda r: (r["a"].get("pnl_pct") is None, r["a"].get("pnl_pct") or 0))
     for r in rows:
         a, pos = r["a"], r["pos"]
         sp, be = _buffers_single_short(a, pos, r["legs"])
         sl = _single_short_leg(r["legs"])
+        _w = _vert_width(r["legs"])
         be_val = pos.get("breakeven_high") or pos.get("breakeven_low")
         t.add_row(
-            r["ticker"], _dte_cell(r["_dte"]), _spot_cell(a.get("underlying_price")), _spot_cell(sl.get("strike") if sl else None), _delta_cell(_leg_delta(a, sl)),
+            r["ticker"], _dte_cell(r["_dte"]), _spot_cell(a.get("underlying_price")), _spot_cell(sl.get("strike") if sl else None), _delta_cell(_leg_delta(a, sl)), _greek_cell(a, r["legs"], pos),
             _buf_stack(sp, be), _kept_cell(a.get("pnl_pct")),
             _money(a.get("pnl_mtm")),
             f"${abs(pos.get('net_premium') or 0):,.0f}",
-            "—",                                     # width: not stored (HELM-073 kin)
+            _risk_cell(_w, pos),
+            _ivr_cell(r.get("ivr")),
             f"{be_val:.2f}" if be_val else "—",
         )
     console.print(t)
 
 def _render_ic(rows):
     t = _tbl([("ticker", dict(style="bold cyan", no_wrap=True)), ("dte", _R),
-              ("spot", _R), ("tested", _R), ("buf% s/be", _R), ("net Δ", _R), ("kept%", _R),
-              ("p&l", _R), ("short p/c", _R), ("b/e lo–hi", _R)])
+              ("spot", _R), ("tested", _R), ("buf% s/be", _R), ("net Δ", _R), ("θ/ν", _R), ("kept%", _R),
+              ("p&l", _R), ("short p/c", _R), ("max loss", _R), ("IVR", _R), ("b/e lo–hi", _R)])
     keyed = []
     for r in rows:
         side, buf, be, sp_K, sc_K = _ic_tested(r["a"], r["pos"], r["legs"])
@@ -1165,19 +1247,22 @@ def _render_ic(rows):
         a, pos = r["a"], r["pos"]
         side, buf, be, sp_K, sc_K = r["_ic"]
         blo, bhi = pos.get("breakeven_low"), pos.get("breakeven_high")
+        _w = _ic_width(r["legs"])
         t.add_row(
             r["ticker"], _dte_cell(r["_dte"]), _spot_cell(a.get("underlying_price")), side or "—",
-            _buf_stack(buf, be), _net_delta_cell(_net_delta(a, r["legs"])),
+            _buf_stack(buf, be), _net_delta_cell(_net_delta(a, r["legs"])), _greek_cell(a, r["legs"], pos),
             _kept_cell(a.get("pnl_pct")), _money(a.get("pnl_mtm")),
             (f"{sp_K:.0f}p / {sc_K:.0f}c" if sp_K and sc_K else "—"),
+            _risk_cell(_w, pos),
+            _ivr_cell(r.get("ivr")),
             (f"{blo:.0f}–{bhi:.0f}" if blo and bhi else "—"),
         )
     console.print(t)
 
 def _render_longcall(rows):
     t = _tbl([("ticker", dict(style="bold cyan", no_wrap=True)), ("dte", _R),
-              ("spot", _R), ("strike", _R), ("Δ", _R), ("vs strike / be", _R), ("extr", _R),
-              ("p&l", _R), ("debit", _R), ("b/e", _R), ("iv", _R)])
+              ("spot", _R), ("strike", _R), ("Δ", _R), ("θ/ν", _R), ("vs strike / be", _R), ("extr", _R),
+              ("p&l", _R), ("debit", _R), ("b/e", _R), ("iv", _R), ("IVR", _R)])
     rows.sort(key=lambda r: (r["_delta"] is None, abs(r["_delta"] or 0)))
     for r in rows:
         a, pos, prim = r["a"], r["pos"], r["a"].get("primary_leg") or {}
@@ -1194,12 +1279,13 @@ def _render_longcall(rows):
         extr = _extrinsic(a)
         iv = (a.get("opt_data") or {}).get("iv")
         t.add_row(
-            r["ticker"], _dte_cell(r["_dte"]), _spot_cell(a.get("underlying_price")), _spot_cell(prim.get("strike")), _delta_cell(r["_delta"]),
+            r["ticker"], _dte_cell(r["_dte"]), _spot_cell(a.get("underlying_price")), _spot_cell(prim.get("strike")), _delta_cell(r["_delta"]), _greek_cell(a, r["legs"], pos),
             vs, f"{extr:.2f}" if extr is not None else "—",
             _money(a.get("pnl_mtm")),
             f"-${abs(pos.get('net_premium') or 0):,.0f}",
             f"{be_val:.2f}" if be_val is not None else "—",
             f"{iv:.0f}" if iv is not None else "—",
+            _ivr_cell(r.get("ivr")),
         )
     console.print(t)
 
@@ -1230,7 +1316,17 @@ def cmd_check_all(args):
     positions = [dict(r) for r in conn.execute(
         "SELECT * FROM positions WHERE account_id = ? AND status = 'OPEN'" + bc
         + " ORDER BY strategy, ticker", (account_id, *bp)).fetchall()]
+    _tks = sorted({p["ticker"] for p in positions})
+    try:
+        _betas = {r["ticker"]: r["beta"] for r in conn.execute("SELECT ticker, beta FROM watchlist WHERE ticker IN (%s)" % ",".join(["?"] * len(_tks)), _tks)} if _tks else {}
+    except Exception:
+        _betas = {}
     conn.close()
+    try:
+        from helm.models.iv_history import IVHistory
+        _ivr = {k: (v.iv_rank if v else None) for k, v in IVHistory.for_tickers(_tks).items()}
+    except Exception:
+        _ivr = {}
 
     if not positions:
         console.print("[yellow]No open positions.[/yellow]")
@@ -1252,6 +1348,7 @@ def cmd_check_all(args):
             "pnl": a.get("pnl_mtm"),
             "_dte": dte(prim["expiration"]) if prim.get("expiration") else None,
             "_delta": (a.get("opt_data") or {}).get("delta"),
+            "ivr": _ivr.get(pos["ticker"]), "beta": _betas.get(pos["ticker"]),
         })
 
     console.print(" " * 40, end="\r")   # clear the progress line
@@ -1975,16 +2072,11 @@ def generate_guidance(pos: dict, primary: dict, assessment: dict, snap: dict,
 
 # ---- shared footer legend (used by cmd_check_all and cmd_check_one) --------
 def _check_footer():
-    console.print(
-        "[dim][green]Δ<.30[/green] [yellow].30–.60[/yellow] [red]≥.60[/red]"
-        "  danger gauge = short-strike delta · • = inside 21-day gamma zone[/dim]")
-    console.print(
-        "[dim]buf% = spot to short strike (top) / spot to breakeven (below, muted). "
-        "kept% = share of credit banked (≥50% = take-profit; negative = giving credit back). "
-        "— * on delta = no live greeks in this quote (e.g. off-hours).[/dim]")
-    console.print(
-        "[dim]live now: Δ (single-leg), buffers, P&L, credit/debit · "
-        "derived: kept%, breakeven, extrinsic. Δ short = tested short-leg delta · net Δ = position delta.[/dim]")
+    console.print("[dim][green]Δ<.30[/green] [yellow].30–.60[/yellow] [red]≥.60[/red]  danger gauge = short-strike delta · • = inside 21-day gamma zone · * = stale/off-hours greeks[/dim]")
+    console.print("[dim]strike = option strike (short leg on spreads) · buf% = spot→short strike (top) / →breakeven (below) · extr = extrinsic value[/dim]")
+    console.print("[dim]θ/ν = position theta $/day (top) / vega $/vol-pt (below), direction-adjusted · IVR = current 52-wk IV rank (0–100)[/dim]")
+    console.print("[dim]kept% = credit banked (≥50% = take-profit; neg = giving back) · max loss / RoR·Nw = max risk $, credit÷max-loss, width in pts[/dim]")
+    console.print("[dim]net greeks card = β-wtd $delta · net θ/day · net ν · Δ short = tested short-leg delta · net Δ = position delta[/dim]")
 
 
 def cmd_check_one(ticker: str, deep: bool = False):
