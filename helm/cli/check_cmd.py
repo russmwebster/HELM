@@ -1083,7 +1083,7 @@ def _spot_cell(spot):
 
 def _render_csp(rows):
     t = _tbl([("ticker", dict(style="bold cyan", no_wrap=True)), ("dte", _R),
-              ("spot", _R), ("Δ put", _R), ("buf% s/be", _R), ("kept%", _R),
+              ("spot", _R), ("strike", _R), ("Δ put", _R), ("buf% s/be", _R), ("kept%", _R),
               ("extr", _R), ("p&l", _R), ("credit", _R), ("b/e", _R)])
     # sort by |delta| desc (danger first); None deltas sink
     rows.sort(key=lambda r: (r["_delta"] is None, -abs(r["_delta"] or 0)))
@@ -1094,7 +1094,7 @@ def _render_csp(rows):
         be_val = (prim.get("strike") - cps) if prim.get("strike") else None
         extr = _extrinsic(a)
         t.add_row(
-            r["ticker"], _dte_cell(r["_dte"]), _spot_cell(a.get("underlying_price")), _delta_cell(r["_delta"]),
+            r["ticker"], _dte_cell(r["_dte"]), _spot_cell(a.get("underlying_price")), _spot_cell(prim.get("strike")), _delta_cell(r["_delta"]),
             _buf_stack(sp, be), _kept_cell(a.get("pnl_pct")),
             f"{extr:.2f}" if extr is not None else "—",
             _money(a.get("pnl_mtm")),
@@ -1133,7 +1133,7 @@ def _net_delta_cell(v):
 
 def _render_credit(rows):
     t = _tbl([("ticker", dict(style="bold cyan", no_wrap=True)), ("dte", _R),
-              ("spot", _R), ("Δ short", _R), ("buf% s/be", _R), ("kept%", _R),
+              ("spot", _R), ("strike", _R), ("Δ short", _R), ("buf% s/be", _R), ("kept%", _R),
               ("p&l", _R), ("credit", _R), ("width", _R), ("b/e", _R)])
     rows.sort(key=lambda r: (r["a"].get("pnl_pct") is None, r["a"].get("pnl_pct") or 0))
     for r in rows:
@@ -1142,7 +1142,7 @@ def _render_credit(rows):
         sl = _single_short_leg(r["legs"])
         be_val = pos.get("breakeven_high") or pos.get("breakeven_low")
         t.add_row(
-            r["ticker"], _dte_cell(r["_dte"]), _spot_cell(a.get("underlying_price")), _delta_cell(_leg_delta(a, sl)),
+            r["ticker"], _dte_cell(r["_dte"]), _spot_cell(a.get("underlying_price")), _spot_cell(sl.get("strike") if sl else None), _delta_cell(_leg_delta(a, sl)),
             _buf_stack(sp, be), _kept_cell(a.get("pnl_pct")),
             _money(a.get("pnl_mtm")),
             f"${abs(pos.get('net_premium') or 0):,.0f}",
@@ -1176,7 +1176,7 @@ def _render_ic(rows):
 
 def _render_longcall(rows):
     t = _tbl([("ticker", dict(style="bold cyan", no_wrap=True)), ("dte", _R),
-              ("spot", _R), ("Δ", _R), ("vs strike / be", _R), ("extr", _R),
+              ("spot", _R), ("strike", _R), ("Δ", _R), ("vs strike / be", _R), ("extr", _R),
               ("p&l", _R), ("debit", _R), ("b/e", _R), ("iv", _R)])
     rows.sort(key=lambda r: (r["_delta"] is None, abs(r["_delta"] or 0)))
     for r in rows:
@@ -1194,7 +1194,7 @@ def _render_longcall(rows):
         extr = _extrinsic(a)
         iv = (a.get("opt_data") or {}).get("iv")
         t.add_row(
-            r["ticker"], _dte_cell(r["_dte"]), _spot_cell(a.get("underlying_price")), _delta_cell(r["_delta"]),
+            r["ticker"], _dte_cell(r["_dte"]), _spot_cell(a.get("underlying_price")), _spot_cell(prim.get("strike")), _delta_cell(r["_delta"]),
             vs, f"{extr:.2f}" if extr is not None else "—",
             _money(a.get("pnl_mtm")),
             f"-${abs(pos.get('net_premium') or 0):,.0f}",
