@@ -106,7 +106,7 @@ def save_close_snapshot(
             INSERT OR IGNORE INTO lifecycle_events
                 (id, position_id, event_type, occurred_at,
                  spot_price, pnl_at_event, narrative)
-            VALUES (?, ?, 'NOTE', datetime('now'), ?, ?, ?)
+            VALUES (?, ?, 'CLOSED', datetime('now'), ?, ?, ?)
         """, (
             "LCE-CLOSE-" + uuid.uuid4().hex[:8].upper(),
             position_id,

@@ -79,6 +79,22 @@ def paperable_strategies() -> set:
     return {s for s in _PAPER_BOOKERS if s in STRATEGY_CONFIG}
 
 
+def _scan_from_sig(sig: dict) -> dict:
+    """Map an originating scan signal row to the scan_data keys the entry
+    snapshot expects, so paper entries capture ATR/RSI/EMA/SMA/bias at open
+    (HELM-023 Track B). Fields absent from the signal simply stay None."""
+    if not sig:
+        return {}
+    return {
+        'atr_14': sig.get('atr_14'),
+        'rsi_14': sig.get('rsi_14'),
+        'ema_20': sig.get('ema_20'),
+        'sma_50': sig.get('sma_50'),
+        'bias_score': sig.get('auto_bias_score'),
+        'bias_factors': sig.get('auto_bias_reasoning'),
+    }
+
+
 def _latest_run_passed_on() -> list:
     """Latest scan run's passed-on signals (russ_action not 'OPEN').
     Returns a list of dicts, one per signal."""
@@ -149,7 +165,7 @@ def paper_generate() -> dict:
             continue
 
         try:
-            pos_id = _PAPER_BOOKERS[strategy](ticker, strategy, spot)
+            pos_id = _PAPER_BOOKERS[strategy](ticker, strategy, spot, scan_data=_scan_from_sig(sig))
         except Exception as exc:  # one bad ticker must not kill the batch
             skipped.append((ticker, strategy, f"error: {type(exc).__name__}: {exc}"))
             continue
@@ -174,6 +190,14 @@ def paper_generate() -> dict:
                     )
             except Exception:
                 pass
+
+        # HELM-081: best-effort vol-context capture (hv_30d + skew) onto the
+        # entry snapshot, right after booking. Never blocks the paper batch.
+        try:
+            from helm.vol_context import backfill_entry_vol
+            backfill_entry_vol(pos_id, ticker)
+        except Exception:
+            pass
 
         booked.append((ticker, strategy, pos_id))
         seen.add((ticker, strategy))

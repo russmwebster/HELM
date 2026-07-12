@@ -247,6 +247,14 @@ def open_position_with_snapshot(
         except Exception:
             pass
 
+    if book == 'REAL':
+        # HELM-081: best-effort vol-context enrichment (hv_30d + skew) on real
+        # opens, after the snapshot is persisted. Never blocks the trade.
+        try:
+            from helm.vol_context import backfill_entry_vol
+            backfill_entry_vol(pos.id, ticker)
+        except Exception:
+            pass
     return pos.id, leg.id, snap_id
 
 
@@ -413,4 +421,11 @@ def open_multileg_with_snapshot(
         except Exception:
             pass
 
+    if book == 'REAL':
+        # HELM-081: best-effort vol-context enrichment on real opens.
+        try:
+            from helm.vol_context import backfill_entry_vol
+            backfill_entry_vol(pos.id, ticker)
+        except Exception:
+            pass
     return pos.id, leg_ids, snap_ids

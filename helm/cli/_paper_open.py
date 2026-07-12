@@ -22,7 +22,7 @@ from helm.cli.entry_snapshot import open_position_with_snapshot, open_multileg_w
 
 def paper_open_one(ticker: str, strategy: str, spot: Optional[float],
                    dte_target: Optional[int] = None, top_n: int = 3,
-                   contracts: int = 1) -> Optional[str]:
+                   contracts: int = 1, scan_data: Optional[dict] = None) -> Optional[str]:
     """Open HELM's top-ranked contract for (ticker, strategy) as a PAPER
     position. Returns the new position id, or None if nothing tradable."""
     if spot is None:
@@ -44,7 +44,7 @@ def paper_open_one(ticker: str, strategy: str, spot: Optional[float],
         contract=top,
         fill_price=fill,
         contracts=contracts,
-        scan_data=None,
+        scan_data=scan_data,
         book="PAPER",
     )
     return pos_id
@@ -52,7 +52,7 @@ def paper_open_one(ticker: str, strategy: str, spot: Optional[float],
 
 def paper_open_spread_one(ticker: str, strategy: str, spot: Optional[float],
                           dte_target: Optional[int] = None, top_n: int = 6,
-                          contracts: int = 1) -> Optional[str]:
+                          contracts: int = 1, scan_data: Optional[dict] = None) -> Optional[str]:
     """Open HELM's top-ranked vertical credit spread (BULL_PUT or BEAR_CALL)
     for (ticker, strategy) as a PAPER position. Mirrors paper_open_one but for
     two legs: fills conservatively (short -> bid, long -> ask) and books both
@@ -123,7 +123,7 @@ def paper_open_spread_one(ticker: str, strategy: str, spot: Optional[float],
         legs=legs,
         contracts=contracts,
         spot=spot,
-        scan_data=None,
+        scan_data=scan_data,
         book="PAPER",
         position_fields=position_fields,
         pricing_source="yfinance",
@@ -133,7 +133,7 @@ def paper_open_spread_one(ticker: str, strategy: str, spot: Optional[float],
 
 def paper_open_diagonal_one(ticker: str, strategy: str, spot: Optional[float],
                             dte_target: Optional[int] = None, top_n: int = 6,
-                            contracts: int = 1) -> Optional[str]:
+                            contracts: int = 1, scan_data: Optional[dict] = None) -> Optional[str]:
     """Open HELM's top-ranked diagonal (CALL: DIAGONAL/PMCC, PUT: DIAGONAL_PUT) as a PAPER
     position. Two legs at DIFFERENT expiries: long deeper-ITM back-month call
     (fill -> ask), short nearer-term higher-strike call (fill -> bid), so
@@ -178,7 +178,7 @@ def paper_open_diagonal_one(ticker: str, strategy: str, spot: Optional[float],
 
     pos_id, _leg_ids, _snap_ids = open_multileg_with_snapshot(
         ticker=ticker, strategy=strategy, legs=legs, contracts=contracts,
-        spot=spot, scan_data=None, book="PAPER",
+        spot=spot, scan_data=scan_data, book="PAPER",
         position_fields=position_fields, pricing_source="yfinance",
     )
     return pos_id
@@ -186,7 +186,7 @@ def paper_open_diagonal_one(ticker: str, strategy: str, spot: Optional[float],
 
 def paper_open_debit_spread_one(ticker: str, strategy: str, spot: Optional[float],
                                 dte_target: Optional[int] = None, top_n: int = 6,
-                                contracts: int = 1) -> Optional[str]:
+                                contracts: int = 1, scan_data: Optional[dict] = None) -> Optional[str]:
     """Open HELM's top-ranked vertical DEBIT spread (BEAR_PUT / BULL_CALL) for
     (ticker, strategy) as a PAPER position. Mirrors paper_open_spread_one but
     the position pays: fills conservatively (long -> ask, short -> bid) so the
@@ -248,7 +248,7 @@ def paper_open_debit_spread_one(ticker: str, strategy: str, spot: Optional[float
         legs=legs,
         contracts=contracts,
         spot=spot,
-        scan_data=None,
+        scan_data=scan_data,
         book="PAPER",
         position_fields=position_fields,
         pricing_source="yfinance",
@@ -258,7 +258,7 @@ def paper_open_debit_spread_one(ticker: str, strategy: str, spot: Optional[float
 
 def paper_open_condor_one(ticker: str, strategy: str, spot: Optional[float],
                           dte_target: Optional[int] = None, top_n: int = 6,
-                          contracts: int = 1) -> Optional[str]:
+                          contracts: int = 1, scan_data: Optional[dict] = None) -> Optional[str]:
     """Open HELM's top-ranked IRON_CONDOR for (ticker, strategy) as a PAPER
     position. Four legs (short put / long put / short call / long call) booked
     under one position via open_multileg_with_snapshot. Fills conservatively
@@ -339,7 +339,7 @@ def paper_open_condor_one(ticker: str, strategy: str, spot: Optional[float],
         legs=legs,
         contracts=contracts,
         spot=spot,
-        scan_data=None,
+        scan_data=scan_data,
         book="PAPER",
         position_fields=position_fields,
         pricing_source="yfinance",
@@ -349,7 +349,7 @@ def paper_open_condor_one(ticker: str, strategy: str, spot: Optional[float],
 
 def paper_open_straddle_one(ticker: str, strategy: str, spot: Optional[float],
                             dte_target: Optional[int] = None, top_n: int = 6,
-                            contracts: int = 1) -> Optional[str]:
+                            contracts: int = 1, scan_data: Optional[dict] = None) -> Optional[str]:
     """Open HELM's top-ranked long straddle (ATM call + ATM put, same strike
     and expiry) for (ticker, strategy) as a PAPER position. Both legs are LONG
     and fill conservatively at the ASK -- the paper book's long-leg convention --
@@ -402,7 +402,7 @@ def paper_open_straddle_one(ticker: str, strategy: str, spot: Optional[float],
         legs=legs,
         contracts=contracts,
         spot=spot,
-        scan_data=None,
+        scan_data=scan_data,
         book="PAPER",
         position_fields=position_fields,
         pricing_source="yfinance",
