@@ -1358,15 +1358,34 @@ def cmd_check_all(args):
 
     _pulse_header(rows)
 
-    # render each non-empty group in canonical order
+    # exit highlights: compute once (persists flags/history), colour flagged rows
+    import io as _io, shutil as _shutil
+    import helm.cli.check_cmd as _selfmod
+    from rich.console import Console as _CapConsole
+    from helm import exit_monitor as _xm
+    _hl_items = _xm.evaluate(rows, is_market_open())
+    _tcolors = _xm.row_colors(_hl_items, rows)
+    _W = _shutil.get_terminal_size((200, 50)).columns
+
+    # render each non-empty group in canonical order (capture plain, colour rows)
     for fam in _FAMILY_ORDER:
         grp = [r for r in rows if r["family"] == fam]
         if not grp:
             continue
         subtotal = sum(r["pnl"] for r in grp if r["pnl"] is not None)
-        _grp_header(fam, subtotal, len(grp))
-        _GROUP_RENDER[fam](grp)
+        _cap = _CapConsole(no_color=True, width=_W, file=_io.StringIO())
+        _orig = _selfmod.console
+        _selfmod.console = _cap
+        try:
+            _grp_header(fam, subtotal, len(grp))
+            _GROUP_RENDER[fam](grp)
+        finally:
+            _selfmod.console = _orig
+        sys.stdout.write(_xm.colorize_group(_cap.file.getvalue(),
+                                            {r["ticker"] for r in grp}, _tcolors))
         console.print()
+
+    _xm.render_panel(_hl_items)
 
     _check_footer()
 
