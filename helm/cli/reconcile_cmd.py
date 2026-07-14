@@ -79,61 +79,77 @@ def _fidpnl_cell(v):
 def parse_fidelity_positions(filepath: str) -> list:
     """
     Parse a Fidelity Portfolio_Positions CSV.
-    Returns list of position dicts with ticker, strike, expiration, opt_type, contracts.
+
+    Uses csv.DictReader (not pandas) so it is robust to Fidelity's trailing-comma
+    "ragged" rows (which shift pandas' index_col alignment so Description lands in
+    the Symbol column) and to header-casing changes. Column lookup is
+    case-insensitive. Returns position dicts with ticker, strike, expiration,
+    opt_type, contracts, value, total_gl.
     """
-    import pandas as pd
-    import warnings
-    warnings.filterwarnings("ignore")
+    import csv
+
+    def _norm(s):
+        return "".join(str(s).lower().split())
 
     try:
-        df = pd.read_csv(filepath, index_col=0, thousands=",")
+        fh = open(filepath, newline="", encoding="utf-8-sig")
     except Exception as e:
         raise ValueError(f"Cannot read file: {e}")
 
     positions = []
-    for idx, row in df.iterrows():
-        acct_name = str(row.get("Account Number", "")).strip()
-        symbol = str(row.get("Account Name", "")).strip()
+    with fh:
+        reader = csv.DictReader(fh)
+        colmap = {_norm(k): k for k in (reader.fieldnames or []) if k}
 
-        if not symbol or symbol in ("nan", "Pending Activity", "Account Total"):
-            continue
-        if "SPAXX" in symbol or "FXAIX" in symbol or "GLD" in symbol:
-            continue
+        def cell(row, *names, default=""):
+            for nm in names:
+                key = colmap.get(_norm(nm))
+                if key is not None and row.get(key) is not None:
+                    return str(row.get(key)).strip()
+            return default
 
-        parsed = parse_option_symbol(symbol)
-        if not parsed:
-            # Stock position
+        for row in reader:
+            symbol = cell(row, "Symbol")
+            if not symbol or symbol in ("nan", "Pending Activity", "Account Total"):
+                continue
+            if "SPAXX" in symbol or "FXAIX" in symbol or "GLD" in symbol:
+                continue
+
+            value = _money(cell(row, "Current value"))
+            total_gl = _money(cell(row, "Total gain/loss dollar"))
+            parsed = parse_option_symbol(symbol)
+
+            if not parsed:
+                positions.append({
+                    "ticker": symbol.strip(),
+                    "type": "STOCK",
+                    "strike": None,
+                    "expiration": None,
+                    "opt_type": None,
+                    "contracts": None,
+                    "symbol": symbol,
+                    "value": value,
+                    "total_gl": total_gl,
+                })
+                continue
+
+            qty_raw = cell(row, "Quantity")
+            try:
+                qty = abs(int(float(str(qty_raw).replace(",", ""))))
+            except (ValueError, TypeError):
+                qty = None
+
             positions.append({
-                "ticker": symbol.strip(),
-                "type": "STOCK",
-                "strike": None,
-                "expiration": None,
-                "opt_type": None,
-                "contracts": None,
+                "ticker": parsed["ticker"],
+                "type": "OPTION",
+                "strike": parsed["strike"],
+                "expiration": parsed["expiration"],
+                "opt_type": parsed["opt_type"],
+                "contracts": qty,
                 "symbol": symbol,
-                "value": _money(row.get("Last Price Change")),
-                "total_gl": _money(row.get("Today's Gain/Loss Percent")),
+                "value": value,
+                "total_gl": total_gl,
             })
-            continue
-
-        # Get quantity
-        qty_raw = row.get("Description", "")
-        try:
-            qty = abs(int(float(str(qty_raw).replace(",", ""))))
-        except (ValueError, TypeError):
-            qty = None
-
-        positions.append({
-            "ticker": parsed["ticker"],
-            "type": "OPTION",
-            "strike": parsed["strike"],
-            "expiration": parsed["expiration"],
-            "opt_type": parsed["opt_type"],
-            "contracts": qty,
-            "symbol": symbol,
-            "value": _money(row.get("Last Price Change")),
-            "total_gl": _money(row.get("Today's Gain/Loss Percent")),
-        })
 
     return positions
 
