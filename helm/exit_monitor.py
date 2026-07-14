@@ -102,23 +102,26 @@ def evaluate(rows, market_open: bool):
         tags = []
 
         f = flags.get(pid)
-        if f is None:
-            if kept <= STOP_LINE:
+        if kept < STOP_LINE:
+            if f is None:
                 conn.execute(
                     "INSERT OR REPLACE INTO check_exit_flags "
                     "(position_id, flag_kept_pct, flag_date, created_at) "
-                    "VALUES (?,?,?,?)", (pid, kept, sess, now_iso))
-                tags.append(("STOP?", "yellow"))
+                    "VALUES (?, ?, ?, ?)", (pid, kept, sess, now_iso))
+            _hrows = conn.execute(
+                "SELECT kept_pct FROM check_kept_hist "
+                "WHERE position_id=? AND session_date<? "
+                "ORDER BY session_date DESC", (pid, sess)).fetchall()
+            _ndays = 1
+            for _hr in _hrows:
+                if float(_hr["kept_pct"]) < STOP_LINE:
+                    _ndays += 1
+                else:
+                    break
+            tags.append((f"STOP {_ndays}d", "yellow"))
         else:
-            base = float(f["flag_kept_pct"])
-            if f["flag_date"] == sess:
-                tags.append(("STOP?", "yellow"))
-            elif kept <= base - DEAD_BAND:
-                tags.append(("CLOSE", "red"))
-            elif kept > STOP_LINE:
+            if f is not None:
                 conn.execute("DELETE FROM check_exit_flags WHERE position_id=?", (pid,))
-            else:
-                tags.append(("STOP?", "yellow"))
 
         raw_tp = a.get("profit_target_pct")
         if raw_tp is None:
@@ -136,7 +139,7 @@ def evaluate(rows, market_open: bool):
             ic = _safe(cc._ic_tested, a, pos, legs)
             be_pct = ic[2] if ic else None
         if be_pct is not None and be_pct < 0:
-            tags.append(("PAST B/E", "red"))
+            tags.append(("PAST B/E", "yellow"))
 
         if fam == "CSP":
             sp, _be = _safe(cc._buffers_single_short, a, pos, legs,
@@ -156,7 +159,7 @@ def evaluate(rows, market_open: bool):
         if prior is not None:
             dmove = kept - float(prior["kept_pct"])
             if abs(dmove) >= 0.5:
-                arrow, col = ("\u25b2", "green") if dmove > 0 else ("\u25bc", "red")
+                arrow, col = ("\u25b2", "green") if dmove > 0 else ("\u25bc", "yellow")
                 dstr = f" [{col}]{arrow}{abs(dmove):.0f}[/{col}]"
         conn.execute(
             "INSERT OR REPLACE INTO check_kept_hist (position_id, session_date, kept_pct) "
@@ -178,8 +181,9 @@ def evaluate(rows, market_open: bool):
 
 def _rank(item):
     names = [t[0] for t in item["tags"]]
-    return (0 if "CLOSE" in names else 1 if "STOP?" in names else
-            2 if "ASSIGN?" in names else 3, item["ticker"] or "")
+    def _has(p): return any(str(n).startswith(p) for n in names)
+    return (0 if _has("CLOSE") else 1 if _has("STOP") else
+            2 if _has("ASSIGN") else 3, item["ticker"] or "")
 
 
 def run_exit_monitor(rows, console, market_open: bool):
@@ -209,7 +213,7 @@ def run_exit_monitor(rows, console, market_open: bool):
         "\n".join(lines),
         title="[bold]exit highlights[/bold]  [dim]short premium - REAL - informational[/dim]",
         subtitle="[dim]STOP? · TAKE-PROFIT · ASSIGN? · PAST B/E · (delta) vs last session[/dim]",
-        border_style="red" if urgent else "yellow"))
+        border_style="yellow"))
     console.print()
 
 
@@ -219,11 +223,24 @@ _RESET = "\x1b[0m"
 
 
 def ticker_colors(items):
+    # Quiet by default. Orange only at key points (<=21 DTE manage, or a
+    # CSP stop-watch below -100%); green at take-profit; else no colour.
     out = {}
     for it in items:
         names = [t[0] for t in it["tags"]]
-        col = "green" if "TAKE-PROFIT" in names else "orange1"
-        if out.get(it["ticker"]) == "green":
+        kept = it.get("kept")
+        dte = it.get("dte")
+        manage = dte is not None and dte <= 21
+        stop = any(str(n).startswith("STOP") for n in names)
+        is_tp = (kept is not None and kept >= 50) or any(
+            str(n).startswith("TAKE-PROFIT") for n in names)
+        if manage or stop:
+            col = "orange1"
+        elif is_tp:
+            col = "green"
+        else:
+            continue
+        if out.get(it["ticker"]) == "orange1":
             continue
         out[it["ticker"]] = col
     return out
@@ -263,7 +280,7 @@ def render_panel(items):
         "\n".join(lines),
         title="[bold]exit highlights[/bold]  [dim]short premium - REAL - informational[/dim]",
         subtitle="[dim]STOP? - TAKE-PROFIT - ASSIGN? - PAST B/E - (delta) vs last session[/dim]",
-        border_style="red" if urgent else "yellow"))
+        border_style="yellow"))
     console.print()
 
 
@@ -273,17 +290,21 @@ DTE_MARK = 21
 
 
 def row_colors(items, rows):
-    """Box colours (green/orange) plus a yellow tier for premium REAL positions
-    inside the 21-DTE gamma zone that carry no stronger signal."""
+    """Box colours for REAL positions, quiet by default: orange at <=21 DTE
+    (manage) or a CSP stop-watch; green at take-profit (kept >= 50%); nothing
+    otherwise. Applies to every REAL strategy, long calls included."""
     out = ticker_colors(items)
     for r in rows:
         pos = r.get("pos") or {}
-        if pos.get("book") != REAL_BOOK or r.get("family") not in PREMIUM_FAMILIES:
+        if pos.get("book") != REAL_BOOK:
             continue
         tk = pos.get("ticker")
-        if tk in out:
+        if out.get(tk) == "orange1":
             continue
         dte = r.get("_dte")
+        kept = (r.get("a") or {}).get("pnl_pct")
         if dte is not None and dte <= DTE_MARK:
-            out[tk] = "yellow"
+            out[tk] = "orange1"
+        elif kept is not None and kept >= 50 and tk not in out:
+            out[tk] = "green"
     return out

@@ -561,77 +561,32 @@ def assess_position(pos: dict, legs: list, underlying_price: Optional[float],
                 else:  # CALL
                     intrinsic_buffer = round(_s_strike - underlying_price, 2)
 
-        # ── GREEN/YELLOW/RED logic ────────────────────────────────────────────
-        profit_target_raw = strategy_settings.get("profit_target_pct", 0.50) or 0.50
-        profit_target = profit_target_raw * 100 if profit_target_raw <= 1 else profit_target_raw
-        dte_exit = strategy_settings.get("dte_exit_threshold", 21) or 21
-
-        if days_left is not None and days_left < 0:
-            flags.append("RED")
-            reasons.append(f"EXPIRED {abs(days_left)}d ago")
-        elif days_left is not None and days_left <= 7:
-            flags.append("RED")
-            reasons.append(f"Only {days_left} DTE — expiration risk")
-        elif days_left is not None and days_left <= dte_exit:
+        # --- HELM quiet-flag rules (flags only at key decision points) ---
+        # No RED anywhere. Orange = a decision is due; bold green = take-profit;
+        # dim = holding (quiet). Orange wins over green when both apply.
+        _strat_u = (strategy or "").upper()
+        _is_csp = _strat_u in ("CSP", "CASH_SECURED_PUT")
+        if pnl_pct is not None and pnl_pct >= 50:
+            flags.append("GREEN")
+            reasons.append(f"Take profit: kept {pnl_pct:+.0f}%")
+        if days_left is not None and days_left <= 21:
             flags.append("YELLOW")
-            reasons.append(f"{days_left} DTE — approaching exit threshold ({dte_exit}d)")
-
-        if pnl_pct is not None and mark_confidence != "live":
-            # HELM-019: frozen/stale marks must not drive an actionable
-            # profit-target/stop signal. Show the number, cap at YELLOW,
-            # tell the trader to confirm at RTH.
+            reasons.append(f"Manage: {days_left} DTE")
+        if _is_csp and pnl_pct is not None and pnl_pct < -100:
             flags.append("YELLOW")
-            reasons.append(f"Frozen/stale marks ({mark_confidence}) — P&L {pnl_pct:+.0f}% unverified, confirm at RTH")
-        elif pnl_pct is not None:
-            if flag_direction == "SHORT" and pnl_pct >= profit_target:
-                flags.append("GREEN")
-                reasons.append(f"Profit target reached ({pnl_pct:.0f}% of {profit_target:.0f}%)")
-            elif flag_direction == "SHORT" and pnl_pct >= 25:
-                flags.append("GREEN")
-                reasons.append(f"Healthy gain ({pnl_pct:.0f}% of premium)")
-            elif flag_direction == "SHORT" and pnl_pct < -50:
-                flags.append("RED")
-                reasons.append(f"Significantly underwater ({pnl_pct:.0f}%) — consider closing or rolling")
-            elif flag_direction == "SHORT" and pnl_pct < -15:
-                flags.append("YELLOW")
-                reasons.append(f"Position losing ({pnl_pct:.0f}%) — monitor closely")
-            elif flag_direction == "LONG" and pnl_pct > 5:
-                flags.append("GREEN")
-                reasons.append(f"Long position profitable (+{pnl_pct:.0f}%)")
-            elif flag_direction == "LONG" and pnl_pct < -50:
-                flags.append("RED")
-                reasons.append(f"Long position down {pnl_pct:.0f}%")
-            elif flag_direction == "LONG" and pnl_pct < -25:
-                flags.append("YELLOW")
-                reasons.append(f"Long position down {pnl_pct:.0f}%")
+            reasons.append(f"Stop watch: kept {pnl_pct:+.0f}% (below -100%)")
 
-        if intrinsic_buffer is not None and flag_direction == "SHORT" and not is_multileg:
-            pct_buffer = (intrinsic_buffer / underlying_price * 100) if underlying_price else 0
-            if intrinsic_buffer < 0:
-                flags.append("RED")
-                reasons.append(f"ITM by ${abs(intrinsic_buffer):.2f} ({abs(pct_buffer):.1f}%)")
-            elif pct_buffer < 3:
-                flags.append("YELLOW")
-                reasons.append(f"Only {pct_buffer:.1f}% buffer to strike")
-            elif pct_buffer >= 10:
-                flags.append("GREEN")
-                reasons.append(f"{pct_buffer:.1f}% buffer to strike — comfortable")
-
-    # Determine final flag (worst case wins)
-    if "RED" in flags:
-        final_flag = "RED"
-        flag_style = "bold red"
-    elif "YELLOW" in flags:
+    # Final flag (no red): orange wins; else take-profit green; else quiet hold.
+    if "YELLOW" in flags:
         final_flag = "YELLOW"
         flag_style = "bold yellow"
     elif "GREEN" in flags:
         final_flag = "GREEN"
         flag_style = "bold green"
     elif underlying_price is not None:
-        # Have data but no specific condition triggered -- position is neutral/monitoring
-        final_flag = "YELLOW"
-        flag_style = "bold yellow"
-        reasons.append("Monitoring — no specific action needed")
+        final_flag = "GREEN"
+        flag_style = "dim"
+        reasons.append("Holding")
     else:
         final_flag = "UNKNOWN"
         flag_style = "dim"
@@ -906,7 +861,7 @@ def _dte_cell(days):
     if days is None:
         return "—"
     dot = " •" if days <= 21 else ""      # inside 21-day gamma zone
-    color = "red" if days <= 7 else "yellow" if days <= 21 else "green"
+    color = "yellow" if days <= 7 else "yellow" if days <= 21 else "green"
     return f"[{color}]{days}[/{color}]{dot}"
 
 def _delta_cell(delta, pending=False):
@@ -1402,7 +1357,7 @@ def cmd_check_all(args):
                                             {r["ticker"] for r in grp}, _tcolors))
         console.print()
 
-    _xm.render_panel(_hl_items)
+    # _xm.render_panel(_hl_items)  # HELM-069: exit-highlights box removed (row colours kept)
 
     _check_footer()
 
@@ -1746,7 +1701,7 @@ def cmd_check_deep_iron_condor(pos, legs, assessment, snap):
     be_low  = pos.get('breakeven_low')  or (round(float(sp_str) - per_contract, 2) if sp_str else None)
     be_high = pos.get('breakeven_high') or (round(float(sc_str) + per_contract, 2) if sc_str else None)
     days_left = dte(expiration) if expiration else None
-    dte_color = 'red' if (days_left or 99) <= 7 else 'yellow' if (days_left or 99) <= 21 else 'green'
+    dte_color = 'yellow' if (days_left or 99) <= 7 else 'yellow' if (days_left or 99) <= 21 else 'green'
     # Distance to short strikes
     dist_put  = round(float(spot) - float(sp_str), 2) if (spot and sp_str) else None
     dist_call = round(float(sc_str) - float(spot), 2) if (spot and sc_str) else None
