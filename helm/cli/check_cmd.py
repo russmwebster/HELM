@@ -1157,10 +1157,26 @@ def _greek_cell(a, legs, pos):
 def _ivr_cell(v):
     return f"{v:.0f}" if v is not None else "—"
 
+def _own_cell(ticker):
+    """Ownership Quality grade (A-F) from the cache; dash if not yet graded.
+    Read-only lookup -- run `helm quality` to populate/refresh the cache."""
+    try:
+        from helm.ownership import read_cached_grade
+        r = read_cached_grade(ticker)
+    except Exception:
+        r = None
+    if not r or not r.get("grade"):
+        return "[dim]\u2014[/dim]"
+    g = r["grade"]
+    color = {"A": "bold green", "B": "green", "C": "yellow",
+             "D": "red", "F": "bold red"}.get(g, "white")
+    return f"[{color}]{g}[/{color}]"
+
+
 def _render_csp(rows):
     t = _tbl([("ticker", dict(style="bold cyan", no_wrap=True)), ("dte", _R),
               ("spot", _R), ("strike", _R), ("Δ put", _R), ("θ/ν", _R), ("buf% s/be", _R), ("kept%", _R),
-              ("extr", _R), ("p&l", _R), ("credit", _R), ("IVR", _R), ("b/e", _R)])
+              ("extr", _R), ("p&l", _R), ("credit", _R), ("IVR", _R), ("b/e", _R), ("own", dict(justify="center", no_wrap=True))])
     # sort by |delta| desc (danger first); None deltas sink
     rows.sort(key=lambda r: (r["_delta"] is None, -abs(r["_delta"] or 0)))
     for r in rows:
@@ -1177,6 +1193,7 @@ def _render_csp(rows):
             f"${abs(pos.get('net_premium') or 0):,.0f}",
             _ivr_cell(r.get("ivr")),
             f"{be_val:.2f}" if be_val is not None else "—",
+            _own_cell(r["ticker"]),
         )
     console.print(t)
 

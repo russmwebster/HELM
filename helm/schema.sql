@@ -785,4 +785,17 @@ ALTER TABLE entry_snapshots ADD COLUMN bid_ask_spread_pct REAL;
 CREATE INDEX IF NOT EXISTS idx_ptx_hash ON processed_transactions(tx_hash);
 CREATE INDEX IF NOT EXISTS idx_ptx_date ON processed_transactions(run_date);
 
-
+-- Ownership Quality cache (helm quality / HELM ownership grade)
+CREATE TABLE IF NOT EXISTS ownership_quality (
+    ticker        TEXT NOT NULL,
+    date          TEXT NOT NULL,                       -- as-of date (YYYY-MM-DD)
+    grade         TEXT NOT NULL,                       -- A-F
+    composite     REAL,
+    lean          TEXT,
+    gates_failed  TEXT,                                -- comma-separated theme names
+    confidence    TEXT,                                -- high|medium|low
+    themes_json   TEXT,                                -- full breakdown, for drill-down
+    source        TEXT DEFAULT 'yfinance',
+    updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (ticker, date)
+);

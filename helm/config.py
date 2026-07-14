@@ -32,7 +32,7 @@ HELM_PYTHON = '/opt/anaconda3/envs/helm/bin/python3'
 # ── Schema version ───────────────────────────────────────────────────────────
 # Bump this when schema.sql changes. db.py uses it to detect migrations needed.
 
-SCHEMA_VERSION = '1.4'
+SCHEMA_VERSION = '1.5'
 
 # ── Runtime state ────────────────────────────────────────────────────────────
 # These can be overridden by CLI flags or environment variables.
