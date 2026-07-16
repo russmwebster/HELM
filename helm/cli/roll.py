@@ -60,6 +60,11 @@ def run():
     console.print(f"[bold]Roll[/bold] {ticker} -- Step 2/2: open replacement")
     console.print(f"[dim]  Launching helm open {ticker} {strategy} ...[/dim]\n")
 
+    # HELM-068: snapshot existing position ids for this ticker so we can
+    # identify the replacement `helm open` creates and parent it to the
+    # rolled-out position (roll lineage / cross-roll P&L / corpus continuity).
+    pre_ids = {p.id for p in Position.by_ticker(ticker)}
+
     try:
         # Inject args for open_cmd which also reads sys.argv
         sys.argv = [f"helm open"] + [ticker, strategy]
@@ -68,3 +73,28 @@ def run():
     except Exception as e:
         console.print(f"[red]Error launching helm open: {e}[/red]")
         console.print(f"[dim]  Run manually: [bold]helm open {ticker} {strategy}[/bold][/dim]\n")
+        return
+
+    # HELM-068: parent the newly-opened replacement to the rolled position.
+    new_pos = [
+        p for p in Position.by_ticker(ticker)
+        if p.id not in pre_ids and p.status in ("OPEN", "PENDING")
+    ]
+    if len(new_pos) == 1:
+        child = new_pos[0]
+        child.parent_position_id = pos.id
+        child.save()
+        console.print(
+            f"  [dim]Roll lineage recorded: {child.id} \u2192 parent {pos.id}[/dim]\n"
+        )
+    elif not new_pos:
+        console.print(
+            "  [yellow]Roll opened but no new position was found to parent "
+            "(HELM-068); set parent_position_id manually if needed.[/yellow]\n"
+        )
+    else:
+        ids = ", ".join(p.id for p in new_pos)
+        console.print(
+            f"  [yellow]Roll: {len(new_pos)} new positions found ({ids}); "
+            "parent not set automatically (HELM-068).[/yellow]\n"
+        )
