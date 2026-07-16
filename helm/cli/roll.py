@@ -7,6 +7,7 @@ for the same ticker and strategy.
 
 import sys
 from rich.console import Console
+from rich.prompt import Prompt
 from helm.config import get_active_account
 from helm.models.position import Position
 from helm.models.leg import Leg
@@ -30,14 +31,22 @@ def run():
         return
 
     positions = Position.by_ticker(ticker, status="OPEN")
+    # helm roll is a REAL-money action: never consider paper positions.
+    positions = [p for p in positions if getattr(p, "book", None) == "REAL"]
     if not positions:
-        console.print(f"\n[yellow]No open position found for {ticker}.[/yellow]\n")
+        console.print(f"\n[yellow]No open real position found for {ticker}.[/yellow]\n")
         return
 
-    if len(positions) > 1:
-        console.print(f"\n[yellow]Multiple open for {ticker} -- rolling most recent.[/yellow]")
-
-    pos = positions[-1]
+    if len(positions) == 1:
+        pos = positions[0]
+    else:
+        # Two or more real positions on this ticker -- let the user pick.
+        console.print(f"\n[yellow]{len(positions)} open real positions for {ticker} -- select one to roll:[/yellow]\n")
+        for i, p in enumerate(positions, 1):
+            console.print(f"  [bold]{i}[/bold]. {p.strategy}  \u00b7  opened {str(p.opened_at)[:10]}  \u00b7  {p.total_contracts} contract(s)")
+        console.print()
+        choice = Prompt.ask("  Position number", choices=[str(i) for i in range(1, len(positions) + 1)])
+        pos = positions[int(choice) - 1]
     legs = Leg.for_position(pos.id)
 
     if not legs:
