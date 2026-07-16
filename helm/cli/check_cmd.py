@@ -1202,6 +1202,77 @@ def _render_credit(rows):
         )
     console.print(t)
 
+# ---- HELM-085: iron-condor spot-vs-legs strip -----------------------------
+def _ic_strip_line(spot, legs, width=48):
+    """Compact Rich-markup number line: spot vs the four condor strikes.
+
+    Zones mirror render_csp_position_diagram: red outside the long wings,
+    yellow in the wing buffers, green inside the short-strike profit tent.
+    Markers: | long wing, ┃ short strike, ● spot. Returns a markup
+    string, or None if the data isn't a well-formed 4-leg condor with a spot.
+    """
+    try:
+        puts = sorted(l.get("strike") for l in legs
+                      if l.get("option_type") == "PUT" and l.get("strike") is not None)
+        calls = sorted(l.get("strike") for l in legs
+                       if l.get("option_type") == "CALL" and l.get("strike") is not None)
+    except Exception:
+        return None
+    if spot is None or len(puts) < 2 or len(calls) < 2:
+        return None
+    lp, sp = puts[0], puts[-1]      # long put (low), short put (high)
+    sc, lc = calls[0], calls[-1]    # short call (low), long call (high)
+    lo, hi = min(lp, spot), max(lc, spot)
+    pad = (hi - lo) * 0.08 or 1.0
+    lo -= pad
+    hi += pad
+    rng = hi - lo
+    if rng <= 0:
+        return None
+    W = int(width)
+
+    def px(p):
+        return max(0, min(W - 1, int((p - lo) / rng * (W - 1))))
+
+    # spot inserted last so it wins any column collision with a strike
+    marks = {}
+    for k, glyph, style in ((lp, "|", "bold"), (lc, "|", "bold"),
+                            (sp, "┃", "bold"), (sc, "┃", "bold"),
+                            (spot, "●", "bold green")):
+        marks[px(k)] = (glyph, style)
+    out = []
+    for i in range(W):
+        if i in marks:
+            g, st = marks[i]
+            out.append("[%s]%s[/%s]" % (st, g, st))
+        else:
+            pr = lo + (i / (W - 1)) * rng
+            if pr < lp or pr > lc:
+                out.append("[red]─[/red]")
+            elif pr < sp or pr > sc:
+                out.append("[yellow]─[/yellow]")
+            else:
+                out.append("[green]─[/green]")
+    return "".join(out)
+
+
+def _render_ic_strips(rows):
+    """Print a compact spot-vs-legs strip for each iron-condor position,
+    directly beneath the IC table (one full-width line per condor)."""
+    printed = False
+    for r in rows:
+        spot = r["a"].get("underlying_price")
+        strip = _ic_strip_line(spot, r["legs"])
+        if strip is None:
+            continue
+        if not printed:
+            console.print()
+            console.print("  [bold dim]spot vs legs[/bold dim]   "
+                          "[dim]| wing   ┃ short   ● spot[/dim]")
+            printed = True
+        console.print("  [bold cyan]%-5s[/bold cyan] %s" % (r["ticker"], strip))
+
+
 def _render_ic(rows):
     t = _tbl([("ticker", dict(style="bold cyan", no_wrap=True)), ("dte", _R),
               ("spot", _R), ("tested", _R), ("buf% s/be", _R), ("net Δ", _R), ("θ/ν", _R), ("kept%", _R),
@@ -1227,6 +1298,7 @@ def _render_ic(rows):
             (f"{blo:.0f}–{bhi:.0f}" if blo and bhi else "—"),
         )
     console.print(t)
+    _render_ic_strips(keyed)
 
 def _render_longcall(rows):
     t = _tbl([("ticker", dict(style="bold cyan", no_wrap=True)), ("dte", _R),
