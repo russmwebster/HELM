@@ -19,7 +19,7 @@ _Snapshot; refreshed each `helm checkpoint`, read via `helm status`._
 - **Next highest-leverage:** no single big rock; the frontier (HELM-023 Track A) stays **held on corpus maturity, not effort** — the exit-lever scorecard needs real DTE_MANAGE/STOP closes (0 genuine STOP + 7 DTE_MANAGE; rest quarantined seed artifact), which only accrue over calendar time. HELM-030's live edge is now handled (interim `ml_75` floor); its promote and Track A sit behind the same corpus wall. Of the remaining ungated candidates, **HELM-050** (earnings-cache cadence) is now the most substantive — HELM-033's actionable scope shipped s63 (opt-in book selector; only its standing whole-book coverage gap remains) (the s58 "IVR-coverage gap" was investigated s61 and retired as **HELM-052** — no pipeline gap).
 - **Last shipped (s77):** `helm close` now filters to the REAL book before selecting a position (was book-blind -- could grab a paper position on a shared ticker) and prompts to pick when more than one real position matches; dropped the misleading "using most recent". HELM-087; commit c17b1be.
 - **Blocked (market/RTH):** live re-pull of the deep-ITM spec CSPs (RKLB/IREN/OKLO/IONQ) still pending; HELM-031 `shadow_*` column population still wants a REAL `helm check` eyeball.
-- **Counts:** 22 active (12 OPEN · 10 DEFERRED) · last shipped s77 (helm close real-book filter + pick-on-multiple -- HELM-087; commit c17b1be). This session (s77): HELM-087 shipped + resolved.
+- **Counts:** 21 active (11 OPEN · 10 DEFERRED) · last shipped s77 (helm close real-book filter + pick-on-multiple -- HELM-087; commit c17b1be). This session (s77): HELM-087 shipped + resolved.
 - **Next RTH:** eyeball `shadow_*` columns populate on the next REAL `helm check` (a LONG_DEBIT position should stamp `shadow_signal='DEBIT_STOP_50'` + would_fire 0/1, else NULL); deep-ITM CSP re-pulls.
 
 _Last updated_: 2026-07-16 (s77 checkpoint. Shipped HELM-087: `helm close` real-book filter + pick-on-multiple, committed c17b1be and pushed. Earlier in the session (s76): reconciled HELM-086, retired HELM-072.)
@@ -115,28 +115,6 @@ _s46 (P2 c3): wired `evaluate_shadow_debit_stop` into the REAL check writer (`ch
 _s60: every `git …` via `helm.local:8766/exec` hangs and returns empty — no stdout/stderr, and a `> /tmp/x` redirect never even creates the file, while `echo`/`ls`/python/file-reads all work. Suspect the exec server's PATH/shell env (git needing a login shell or TTY). Workaround in use: read git state straight from `.git/` (HEAD, refs, packed-refs, `logs/HEAD` reflog) via python; Russ runs all real git. Fix: inspect the exec server's spawned-shell env/PATH and whether `/opt/homebrew/bin/git` runs under it._
 _Durable bridge constraints (true regardless of the git fix): commands run via `/bin/sh -c "…"`, so double-quotes in SQL/Python literals close the shell quote and break parsing — transmit python as hex (`echo <hex> | python3 -c "…unhexlify…exec"`); `/usr/bin` not on PATH (git/xxd absent) — use absolute paths or the anaconda python; `cd`/bare `pwd` return empty — use `git -C` / absolute paths; sockets wedge after ~20 calls/tab — rotate + re-nonce; `/exec` is async — poll until the echoed `cmd` matches._
 
-**HELM-019 · `OPS` · `OPEN` · Stale frozen marks → wrong multi-leg P&L when market closed**
-_Part 1 shipped s30 (`b49b7b5`): `helm reconcile` renders a per-position **Fid P&L** column (Fidelity Total Gain/Loss $ summed across a position's legs) — the broker oracle. Accessors (trailing-comma +1 shift): Current Value ← `Last Price Change`, Total G/L $ ← `Today's Gain/Loss Percent`. Part 2 (RTH): HELM `assess_position` `pnl_mtm` vs oracle + divergence delta; validate WELL/MCD live._
-Outside RTH, `helm check` on multi-leg positions reads `ibkr-frozen` last-close marks that are
-stale/noisy on thin OTM wings, so net P&L and any profit-target/stop signal off it can be
-materially wrong. Not a calc bug — HELM-018's net math is correct; garbage-frozen-in. Freshly
-booked WELL IC read +$80 vs Fidelity ~-$2,300 (~$2,400 gap); frozen MCD +$760 vs Fidelity
-~break-even. Fix: prefer live marks; tag frozen P&L low-confidence in `helm check`; build a
-HELM-vs-Fidelity mark/P&L reconcile (oracle = Fidelity CSV value + gain/loss). Re-validate
-WELL/MCD next RTH. (Sibling of HELM-006.)
-_v1+v1.1 shipped (2026-06-19, s24): `helm check` compact + condor deep views gate frozen/stale
-marks — no profit-target/stop close off non-live data; P&L shown + tagged, capped YELLOW,
-"confirm at RTH"; DTE + zone signals untouched. Remaining: the HELM-vs-Fidelity mark/P&L
-reconcile (oracle = Fidelity CSV value + gain/loss)._
-_Deferred (weakest-leg) — `check_one`'s leg_marks loop (`check_cmd.py` ~L617–626)
-stores only each leg's mid and discards its source, so v1 confidence uses the primary
-leg's `opt_source` as a market-state proxy (live / frozen / stale). Stamp per-leg source
-there when that loop is reworked; pairs with the carried "mid-only fast fetch for hedge
-legs" (HELM-018 follow-up)._
-_s60: weakest-leg deferral resolved — `check_one` now downgrades `mark_confidence` "live" → "stale" when any leg's mark isn't a live IBKR quote, via a pure `_weakest_leg_confidence` helper that consumes the per-leg `is_live` flags HELM-041 already stamps into `leg_marks_by_id` (fail-closed on a missing flag); 8-case truth table fixtured. The loop rework the deferral anticipated was unnecessary — the liveness data already existed; only the classifier (primary-leg-only) needed to use it. Still OPEN: the HELM-vs-Fidelity RTH mark/P&L reconcile prong._
-
----
-
 **HELM-035 · `DATA` · `RESOLVED (data + forward-fix s59)` · Check-history `pnl_pct` inflated by a contract-multiplier denominator (systemic, all families)**
 _Root cause (s48): `check_cmd` computed `pnl_pct = pnl_mtm / abs(premium)`; when `net_premium` was empty at write time it fell back to a SINGLE-contract cost (`primary.open_price * 100`) while `pnl_mtm`/`pnl_unrealized` are TOTALS across contracts — so stored `pnl_pct` = (contract count) × true. Confirmed: stored/recompute ratios cluster on integer contract counts (x2…x20). NOT the MCD-6/18 re-import first hypothesized — "basis normalizes after the 18th" was `net_premium` getting backfilled. Systemic (the 6/26 sweep flagged 152; full s48 analysis ~1,486, ~43% of `checks` with a computable `pnl_pct`), across CSP, LONG_CALL, IRON_CONDOR, BULL/BEAR_PUT_SPREAD, BEAR_CALL_SPREAD, DIAGONAL._
 _DATA REPAIR — DONE (s48), recompute `pnl_pct = pnl_unrealized / abs(net_premium) * 100`: Pass 1 (neg, 985 rows, `backfill_pnl_pct_neg_s48.py`, backup `helm.db.bak_20260702_190721`); Pass 2 (pos, 475 repaired + 26 quarantined via max-profit guard → HELM-045, `backfill_pnl_pct_pos_s48.py`, backup `helm.db.bak_20260702_202506`). Both /tmp-validated, integrity_check ok, readback clean. Post-repair: neg differing 0, pos differing 26 (all HELM-045); `pnl_pct < -100` 709 → 194 (legit losses preserved); `pnl_pct > 1000` 64 → 16 (all quarantined)._
@@ -189,6 +167,8 @@ _/health still renders strategy labels with its own informal shorthand, independ
 
 
 ## Resolved log
+
+- **HELM-019 · `OPS` · `WONTFIX` (s78, 2026-07-16)** — after-hours multi-leg mark-to-market P&L is an inherent market artifact, not a HELM bug. Equity options stop trading at 4:00pm ET (no post-close price discovery), so each leg reverts to a stale, independently-timed last mark with a blown-out overnight bid/ask; netting several noisy legs amplifies the error, and it self-corrects at the next open. (OCC end-of-day marks are a model value, explicitly "not tradable"; Option Alpha: post-close spreads widen into "wild misrepresentations" that realign next open.) The low-confidence tag already shipped s24 (frozen/stale gated, capped YELLOW, no stop/target close off non-live data). The remaining HELM-vs-Fidelity CSV reconcile prong is dropped: 2026-07-16 verification (market closed) showed the Fidelity-CSV accessor itself misreads — LRCX IC Fid P&L -$15,996 vs its $10,440 max loss, structurally impossible for a defined-risk condor — so the "oracle" can't be trusted. Do NOT re-raise off-hours multi-leg P&L accuracy.
 
 - **HELM-087 · `BUG` · `RESOLVED` (s77)** — `helm close` was book-blind: `Position.by_ticker` returns positions across both books and close took `positions[-1]` (the oldest, since the query is ORDER BY opened_at DESC), so once the paper book held positions on tickers also open in the real book it could select a paper trade (8 exposed: DAL/HD/JPM/META/MRK/NVDA/TGT/V). Fix in close_cmd.py: filter to book=='REAL', close the sole match, else print a numbered list and prompt; removed the false "using most recent". Latent gap exposed by the paper book growing onto real-book tickers -- close_cmd.py was unchanged since Jul 3, so no code regression. commit c17b1be.
 - **HELM-086 · `DATA` · `RESOLVED` (s76)** — AAPL/APLD long-call `total_contracts` disagreed with leg contracts (1 vs 3 / 1 vs 7). True size confirmed 3 (AAPL, Fidelity export) and 7 (APLD, Russ + net_premium math); corrected total_contracts to 3/7 via guarded UPDATE, DB backup helm.db.bak.helm086_20260716_082039, readback == legsum. net_premium was already full-size so P&L was unaffected; only the position-level count is repaired.
