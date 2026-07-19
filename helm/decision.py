@@ -57,7 +57,6 @@ def evaluate(pos, legs, marks: dict):
     s = _settings(pos.account_id, pos.strategy)
     pt = s.get('profit_target_pct') or DEFAULT_PROFIT_TARGET
     pt = pt if pt <= 1 else pt / 100.0
-    stop_mult = s.get('stop_loss_multiplier') or DEFAULT_STOP_MULT
     dte_exit = s.get('dte_exit_threshold') or DEFAULT_DTE_EXIT
 
     dtes = [dte(l.expiration) for l in legs if l.expiration]
@@ -66,18 +65,14 @@ def evaluate(pos, legs, marks: dict):
     fam = _family(pos.strategy)
     reason = None
     if fam == CREDIT_FAMILY:
-        # Premium-sellers: keep a fraction of credit; stop at a multiple of it.
+        # HELM-094 (2026-07-19, Russ): the 2x-credit acting/advisory stop is
+        # REMOVED. Credit-family exits are PROFIT_TARGET or the calendar only;
+        # loss-side guidance is advisory (-100% kept, 2-consecutive-day
+        # confirmation -- exit_monitor STOP_LINE + the PG day counter).
+        # Counterfactual stop arms (evaluate_arms) keep recording so HELM-030
+        # can calibrate WHERE the advisory should speak, not an acting stop.
         if credit and (total_pnl / abs(credit)) >= pt:
             reason = 'PROFIT_TARGET'
-        elif credit:
-            stop_dollars = stop_mult * abs(credit)
-            if pos.max_loss:
-                cap = abs(pos.max_loss)
-                if pos.strategy in DEFINED_RISK_SPREADS:
-                    cap = INTERIM_DR_STOP_FRAC * cap  # HELM-030 interim: real stop below max loss
-                stop_dollars = min(stop_dollars, cap)
-            if total_pnl <= -stop_dollars and not _ab_suppresses_stop(pos):
-                reason = 'STOP'
     elif fam == LONG_DEBIT_FAMILY:
         # Long single options: profit is % gain on premium paid; max loss is the
         # premium itself, so no credit-style stop. Otherwise exit on the calendar.
