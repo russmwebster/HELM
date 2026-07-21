@@ -461,8 +461,12 @@ def core_verdict(pos, legs, opt_legs, primary, opt_data, leg_marks):
         if lg["id"] in marks:
             continue
         key = (lg.get("option_type"), lg.get("strike"))
-        if key in leg_marks:
-            marks[lg["id"]] = leg_marks[key]
+        if key in leg_marks and leg_marks[key] is not None:
+            marks[lg["id"]] = leg_marks[key]  # HELM-095: skip None-valued marks
+    # HELM-095: a present-but-None mark (intermittent illiquid multi-leg quote)
+    # must count as INCOMPLETE, not crash evaluate() on `open_price - None`.
+    # The is-not-None guard above drops it from `marks`, so this check catches it
+    # and we return None (hold) cleanly -- mirrors paper_manage's incomplete gate.
     if any(lg["id"] not in marks for lg in opt_legs):
         return None  # incomplete marks -> no verdict (mirrors paper_manage)
     _nspos = _ns_pos(pos)
