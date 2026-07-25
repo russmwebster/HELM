@@ -15,8 +15,11 @@ What one run does (weekdays 15:55 ET, after the 15:45 snapshot):
   used), stamping the verdict as exit_reason.
 
 Doctrine guards:
-  - NO STOPS: HELM-094 removed stops from the decision core; nothing here
-    re-adds them. PT / DTE / EXPIRY only.
+  - NO RESTING STOPS: HELM-094 removed the 2x-credit stop from the decision
+    core; nothing here re-adds one. Credit families still act on PT / DTE /
+    EXPIRY only. LONG_* families act on exit doctrine v2 (THESIS_BREAK /
+    PROFIT_FLOOR / DTE_GATE / CATASTROPHE_STOP) -- all mark-time decisions
+    evaluated from the daily read, never orders left with a broker.
   - REAL book untouched, ever (HELM-093 advisory-only).
   - Paper fills are modeled at mid by definition; closes use yfinance mids
     (same convention as the trial's agent — symmetric for the comparison).
@@ -37,7 +40,14 @@ ROOT = Path(__file__).resolve().parent          # lives in the helm repo root
 os.environ.setdefault("HELM_ROOT", str(ROOT))
 sys.path.insert(0, str(ROOT))
 
-ACT_REASONS = {"PROFIT_TARGET", "DTE_MANAGE", "EXPIRY"}
+# HELM-101 §4 (s82): the LONG_* families speak exit doctrine v2, so the acting
+# set gains their verdicts. HELM-094 boundary, explicitly: what it banned was a
+# RESTING 2x-credit stop order. Every verdict below is a decision taken at mark
+# time from a full daily read -- including CATASTROPHE_STOP, which is a -50%
+# backstop for gaps that outrun the 2-day thesis confirmation, not a standing
+# order. Real book stays advisory (HELM-093); only paper acts.
+ACT_REASONS = {"PROFIT_TARGET", "DTE_MANAGE", "EXPIRY",
+               "THESIS_BREAK", "PROFIT_FLOOR", "DTE_GATE", "CATASTROPHE_STOP"}
 DRY = ("--dry-run" in sys.argv) or os.environ.get("HELM_PAPER_DRY") == "1"
 
 

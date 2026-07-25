@@ -842,3 +842,26 @@ CREATE TABLE IF NOT EXISTS earnings_history (
     fetched_at  TEXT NOT NULL DEFAULT (datetime('now')),
     PRIMARY KEY (ticker, earn_date)
 );
+
+-- HELM-101 §4 (2026-07-25, s82): exit doctrine v2 for the LONG_* families.
+-- THESIS_BREAK exits on information, so each long position needs the directional
+-- read that justified it recorded at open. entry_snapshots is per-LEG and carries
+-- only vol/greeks/liquidity, so the thesis lives in its own per-position table.
+CREATE TABLE IF NOT EXISTS entry_thesis (
+    position_id          TEXT PRIMARY KEY,
+    captured_at          TEXT NOT NULL DEFAULT (datetime('now')),
+    source               TEXT,    -- signals | reconstructed | live
+    signals_generated_at TEXT,    -- provenance when source='signals'
+    bias_score           REAL,
+    spot_price           REAL,
+    sma_50               REAL,
+    sma_200              REAL,
+    adx                  REAL,
+    notes                TEXT
+);
+
+-- Daily thesis-test state, journal-native (same shape as the HELM-093 Nd counter):
+-- the confirmation streak is counted from consecutive trailing checks, and every
+-- LONG_* verdict records which rules were armed so alternatives stay scorable.
+ALTER TABLE checks ADD COLUMN thesis_broken INTEGER;  -- 1 broken / 0 intact / NULL n/a
+ALTER TABLE checks ADD COLUMN lc_arms_json TEXT;      -- counterfactual arm record

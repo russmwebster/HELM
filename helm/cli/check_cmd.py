@@ -250,6 +250,17 @@ def save_check(position_id: str, assessment: dict, pos: dict, leg_marks_by_id: O
     try:
         with _tx() as conn:
             _sh = assessment.get("shadow") or {}
+            # HELM-101 §4: journal-native thesis state. thesis_broken is the
+            # daily bit the confirmation streak is counted from; lc_arms_json
+            # is the mandatory counterfactual record (what was armed, what fired).
+            _arms_rec = assessment.get("arms") or {}
+            _th = (_arms_rec.get("thesis") or {}) if _arms_rec else {}
+            _tb = _th.get("broken_today")
+            _thesis_broken = None if _tb is None else (1 if _tb else 0)
+            _arms_json = None
+            if _arms_rec:
+                from helm.long_exit import arms_json as _aj
+                _arms_json = _aj(_arms_rec)
             conn.execute("""
                 INSERT INTO checks (
                     id, position_id, checked_at,
@@ -264,8 +275,9 @@ def save_check(position_id: str, assessment: dict, pos: dict, leg_marks_by_id: O
                     buffer_dollars, buffer_pct,
                     narrative,
                     created_at,
-                    shadow_signal, shadow_would_fire, shadow_loss_pct
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    shadow_signal, shadow_would_fire, shadow_loss_pct,
+                    thesis_broken, lc_arms_json
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, ?, ?)
             """, (
                 check_id, position_id, now,
                 spot, days_left, days_open, days_to_earnings,
@@ -283,6 +295,7 @@ def save_check(position_id: str, assessment: dict, pos: dict, leg_marks_by_id: O
                 _sh.get("signal"),
                 (1 if _sh.get("would_fire") else 0) if _sh else None,
                 _sh.get("loss_pct"),
+                _thesis_broken, _arms_json,
             ))
             _persist_real_leg_marks(conn, check_id, position_id, leg_marks_by_id)
     except Exception:
@@ -470,11 +483,13 @@ def core_verdict(pos, legs, opt_legs, primary, opt_data, leg_marks):
     if any(lg["id"] not in marks for lg in opt_legs):
         return None  # incomplete marks -> no verdict (mirrors paper_manage)
     _nspos = _ns_pos(pos)
+    _arms = {}          # HELM-101 §4: counterfactual arm record (LONG_* only)
     reason, total_pnl = _core_evaluate(
-        _nspos, [_ns_leg(l) for l in opt_legs], marks
+        _nspos, [_ns_leg(l) for l in opt_legs], marks, arms_out=_arms
     )
     return {"reason": reason, "core_pnl": total_pnl,
-            "shadow": evaluate_shadow_debit_stop(_nspos, total_pnl)}
+            "shadow": evaluate_shadow_debit_stop(_nspos, total_pnl),
+            "arms": _arms or None}
 
 
 def assess_position(pos: dict, legs: list, underlying_price: Optional[float],
@@ -780,6 +795,7 @@ def check_one(pos: dict, legs: list, deep: bool = False, persist: bool = False) 
             assessment["core_reason"] = _cv["reason"]
             assessment["core_pnl"] = _cv["core_pnl"]
             assessment["shadow"] = _cv.get("shadow")
+            assessment["arms"] = _cv.get("arms")  # HELM-101 §4
             _ib = assessment.get("intrinsic_buffer")
             _ev = {
                 "pnl_pct": assessment.get("pnl_pct"),
@@ -2094,6 +2110,10 @@ def cmd_check_deep(pos: dict, legs: list, assessment: dict, snap: dict):
 
 _GUIDANCE = {
     "PROFIT_TARGET": "Profit target hit — consider closing to bank the gain.",
+    "THESIS_BREAK": "Entry thesis broken (bias gone or below the 50-day), confirmed over consecutive checks.",
+    "PROFIT_FLOOR": "Ratcheted profit floor hit — the run gave back a step from its high-water mark.",
+    "DTE_GATE": "30 DTE — forced decision point for a long option; close or re-qualify as a new trade.",
+    "CATASTROPHE_STOP": "-50% of debit — gap backstop, not the primary loser rule.",
     "STOP":          "Stop breached — close or roll to cap the loss.",
     "DTE_MANAGE":    "In the management window — close or roll before expiry week.",
     "EXPIRY":        "At or past expiry — act now to avoid assignment.",

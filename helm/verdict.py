@@ -19,6 +19,12 @@ _REASON_HEADLINE = {
     "STOP":          ("RED",    "Stop breached — close or roll"),
     "EXPIRY":        ("RED",    "Expiring — act now"),
     "DTE_MANAGE":    ("YELLOW", "In management window"),
+    # HELM-101 §4: exit doctrine v2 (LONG_* families). Thesis loss and the
+    # -50% backstop are distress; floor and gate are orderly management.
+    "THESIS_BREAK":     ("RED",    "Thesis broken — direction gone"),
+    "PROFIT_FLOOR":     ("YELLOW", "Profit floor hit — bank the ratchet"),
+    "DTE_GATE":         ("YELLOW", "30-DTE decision point"),
+    "CATASTROPHE_STOP": ("RED",    "-50% backstop — close"),
 }
 _FLAG_STYLE = {"GREEN": "bold green", "YELLOW": "bold yellow", "RED": "bold red"}
 
@@ -121,6 +127,8 @@ def band_for(reason, evidence=None):
 def _ns_pos(pos):
     """Wrap a check-side pos dict in the attribute surface evaluate() reads."""
     return SimpleNamespace(
+        id=pos.get("id"),            # HELM-101 §4: entry-thesis lookup
+        ticker=pos.get("ticker"),    # HELM-101 §4: market-context lookup
         account_id=pos.get("account_id"),
         strategy=pos.get("strategy"),
         net_premium=pos.get("net_premium"),

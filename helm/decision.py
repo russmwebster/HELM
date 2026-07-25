@@ -43,7 +43,40 @@ def _settings(account_id: str, strategy: str) -> dict:
     return dict(row) if row else {}
 
 
-def evaluate(pos, legs, marks: dict):
+def _long_v2(pos, dte_now, total_pnl, arms_out=None):
+    """HELM-101 §4 exit doctrine v2 for LONG_CALL / LONG_PUT.
+
+    Mark-time decision rules, never resting orders (the HELM-094 boundary), and
+    advisory on the REAL book per HELM-093 -- only the paper book acts on them.
+    All context reads are defensive: a missing entry thesis or an unavailable
+    market read leaves THESIS_BREAK unarmed rather than guessing, and the
+    P&L-only verdicts still apply."""
+    from helm import long_exit
+    entry = cur = None
+    jst = {}
+    try:
+        conn = get_conn()
+        try:
+            pid = getattr(pos, 'id', None)
+            entry = long_exit.entry_thesis(conn, pid) if pid else None
+            jst = long_exit.journal_state(conn, pid) if pid else {}
+            tk = getattr(pos, 'ticker', None)
+            cur = long_exit.current_context(conn, tk) if tk else None
+        finally:
+            conn.close()
+    except Exception:
+        pass
+    reason, arms = long_exit.long_verdict(
+        total_pnl, getattr(pos, 'net_premium', None), dte_now, entry, cur, jst)
+    if arms_out is not None:
+        try:
+            arms_out.update(arms)
+        except Exception:
+            pass
+    return reason
+
+
+def evaluate(pos, legs, marks: dict, arms_out=None):
     """Return (reason, total_pnl). reason is None to hold."""
     credit = pos.net_premium or 0.0
     total_pnl = 0.0
@@ -74,10 +107,12 @@ def evaluate(pos, legs, marks: dict):
         if credit and (total_pnl / abs(credit)) >= pt:
             reason = 'PROFIT_TARGET'
     elif fam == LONG_DEBIT_FAMILY:
-        # Long single options: profit is % gain on premium paid; max loss is the
-        # premium itself, so no credit-style stop. Otherwise exit on the calendar.
-        if credit and (total_pnl / abs(credit)) >= pt:
-            reason = 'PROFIT_TARGET'
+        # HELM-101 §4 (s82): exit doctrine v2 replaces the 50%-of-premium
+        # PROFIT_TARGET here. A long call is a directional bet, so it exits on
+        # the thesis first, manages winners with a ratcheted floor instead of a
+        # fixed target, forces a decision at 30 DTE, and keeps -50% only as a
+        # gap backstop. Precedence and rationale: the execution addendum §4.
+        reason = _long_v2(pos, dte_now, total_pnl, arms_out)
     elif fam == DEBIT_SPREAD_FAMILY:
         # Debit spreads are defined-reward: target a fraction of MAX PROFIT, not of
         # the debit. No stop (max loss is the defined debit). Otherwise calendar.
