@@ -70,11 +70,14 @@ STRATEGY_CONFIG = {
     "LONG_CALL": {
         "option_type": "CALL",
         "direction": "LONG",
-        "delta_min": 0.40,   # industry standard: ATM/slightly ITM for better R/R
-        "delta_max": 0.70,
-        "delta_sweet": (0.45, 0.60),
-        "dte_min": 60,       # minimum 60 DTE to give move time to develop
-        "dte_max": 90,
+        # HELM-101 §3 (s82): stock-replacement shape. ITM avoids the lottery-ticket
+        # overpricing documented for OTM calls (Boyer & Vorkink; Bali & Murray) and
+        # cuts theta drag; the longer window gives the directional thesis time.
+        "delta_min": 0.65,
+        "delta_max": 0.85,
+        "delta_sweet": (0.70, 0.80),
+        "dte_min": 90,
+        "dte_max": 180,
         "label": "Long Call",
     },
     "LONG_PUT": {

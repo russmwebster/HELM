@@ -198,10 +198,12 @@ def bias_to_strategy(score: int, rsi=None, ivr=None):
 
     if score >= 2:  # Bullish
         if (ivr_buyable or ivr_unknown) and not ivr_rich:
-            if ivr_val is not None and ivr_val < 60:
-                return 'LONG_CALL', 'Strong bullish bias + IVR confirms reasonable premium'
-            else:
-                return 'LONG_CALL', 'Strong bullish bias + reasonable IV'
+            # HELM-100 (s82): the buy side no longer routes off the seller's
+            # measures. Direction does not decide buy-vs-sell premium; vol state
+            # does. Until long_call_screen() ships (HELM-101 step 4), a bullish
+            # read with non-rich vol is NOT a sell setup either -- so this is a
+            # no-trade, surfaced rather than silently rerouted.
+            return 'NO_BUY_PATH', 'buy path retired pending HELM-100 split -- buying premium is negative-EV on the vol leg; needs its own screen, not the seller road'
         if ivr_rich:
             return 'CSP', 'Bullish bias + elevated IVR — ideal for cash-secured put'
         return 'BULL_PUT_SPREAD', 'Bullish bias, moderate IV — defined risk spread'
@@ -214,14 +216,23 @@ def bias_to_strategy(score: int, rsi=None, ivr=None):
         if ivr_moderate and rsi_momentum:
             return 'DIAGONAL', 'Mildly bullish + moderate IVR + momentum — diagonal spread'
         if ivr_cheap:
-            return 'LONG_CALL', 'Mildly bullish + low IVR — long call while options cheap'
+            # HELM-100/101: a 1-of-3 directional vote is not a thesis worth
+            # paying theta for. Retired with the rest of the buy path.
+            return 'NO_BUY_PATH', 'buy path retired pending HELM-100 split -- buying premium is negative-EV on the vol leg; needs its own screen, not the seller road'
         return 'BULL_PUT_SPREAD', 'Mildly bullish — defined risk spread preferred'
 
     elif score == 0:
         if ivr_rich:
             return 'IRON_CONDOR', 'Neutral + elevated IVR — iron condor (IRA-safe defined risk)'
         if ivr_cheap:
-            return 'LONG_STRADDLE', 'Neutral + low IVR — buy cheap volatility on both sides'
+            # HELM-100 (s82): retired with the rest of the buy side. This is the
+            # most defensible premium purchase HELM had -- buying vol when implied
+            # sits under realized is the one case the VRP research endorses -- but
+            # it is still a premium purchase with no catalyst behind it, and no buy
+            # route runs until the split gives the buy side its own reasoning.
+            # Reinstate deliberately in Phase C if it earns a place.
+            return 'NO_BUY_PATH', ('buy path retired pending HELM-100 split -- cheap vol '
+                                   'alone is not a thesis; revisit as a vol-buy path')
         return 'IRON_CONDOR', 'Neutral, moderate IV — defined risk condor'
 
     elif score == -1:
