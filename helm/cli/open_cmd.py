@@ -540,6 +540,60 @@ def fetch_chain_from_ibkr(ticker, opt_type, target_exps, spot, atr,
     return results
 
 
+
+# ── HELM-106 (s82): entry-runway invariant ────────────────────────────────────
+# A position must not be opened inside, or within touching distance of, its own
+# management window. In June 2026 iron condors and CSPs were booked at 21-25 DTE
+# against a 21-DTE management rule: the next daily check fired DTE_MANAGE and
+# closed them after a mean of 3 days, each close paying a round-trip spread.
+# 42 closed condors, 10% win rate, -$6,107 — while the same structure entered to
+# spec won 73%. See claude/HELM-condor-loss-root-cause.md.
+#
+# The fault was two hand-maintained numbers drifting apart: STRATEGY_CONFIG's
+# dte_min (what the open path enforces) and strategy_settings.dte_exit_threshold
+# (what the exit path acts on). Rather than patch one strategy, derive the floor
+# so the two cannot disagree again.
+DTE_RUNWAY_MARGIN = 7          # minimum days of runway past the management line
+_DTE_EXIT_CACHE = {}
+
+
+def _manage_threshold(strategy):
+    """The DTE at which this strategy starts being managed, from settings."""
+    if strategy in _DTE_EXIT_CACHE:
+        return _DTE_EXIT_CACHE[strategy]
+    thr = None
+    try:
+        from helm.db import get_conn
+        conn = get_conn()
+        try:
+            row = conn.execute(
+                "SELECT dte_exit_threshold FROM strategy_settings "
+                "WHERE strategy = ? AND dte_exit_threshold IS NOT NULL "
+                "ORDER BY is_default DESC LIMIT 1", (strategy,)).fetchone()
+            thr = row[0] if row else None
+        finally:
+            conn.close()
+    except Exception:
+        thr = None
+    _DTE_EXIT_CACHE[strategy] = thr
+    return thr
+
+
+def _entry_dte_floor(strategy, dte_min):
+    """Raise dte_min so an entry always clears its management line by a margin.
+
+    Returns dte_min unchanged when the threshold cannot be read -- a guard that
+    cannot look up its own rule should not silently invent one.
+    """
+    thr = _manage_threshold(strategy)
+    if thr is None:
+        return dte_min
+    floor = int(thr) + DTE_RUNWAY_MARGIN
+    if dte_min is None:
+        return floor
+    return max(int(dte_min), floor)
+
+
 def evaluate_contracts(ticker: str, strategy: str, config: dict,
                        dte_target: Optional[int] = None,
                        top_n: int = 8) -> list:
@@ -561,6 +615,8 @@ def evaluate_contracts(ticker: str, strategy: str, config: dict,
     if dte_target:
         dte_min = max(7, dte_target - 7)
         dte_max = dte_target + 7
+    # HELM-106: a targeted DTE may not undercut the management line either
+    dte_min = _entry_dte_floor(strategy, dte_min)
 
     tk = yf.Ticker(ticker)
     info = tk.fast_info
@@ -1133,6 +1189,8 @@ def evaluate_condors(ticker: str, strategy: str, config: dict,
     if dte_target:
         dte_min = max(7, dte_target - 7)
         dte_max = dte_target + 7
+    # HELM-106: a targeted DTE may not undercut the management line either
+    dte_min = _entry_dte_floor(strategy, dte_min)
 
     tk = yf.Ticker(ticker)
     info = tk.fast_info
@@ -1629,6 +1687,8 @@ def evaluate_strangles(ticker: str, strategy: str, config: dict,
     if dte_target:
         dte_min = max(7, dte_target - 7)
         dte_max = dte_target + 7
+    # HELM-106: a targeted DTE may not undercut the management line either
+    dte_min = _entry_dte_floor(strategy, dte_min)
 
     tk = yf.Ticker(ticker)
     info = tk.fast_info
@@ -1914,6 +1974,8 @@ def evaluate_spreads(ticker: str, strategy: str, config: dict,
     if dte_target:
         dte_min = max(7, dte_target - 7)
         dte_max = dte_target + 7
+    # HELM-106: a targeted DTE may not undercut the management line either
+    dte_min = _entry_dte_floor(strategy, dte_min)
 
     tk = yf.Ticker(ticker)
     info = tk.fast_info
@@ -2087,6 +2149,7 @@ def evaluate_straddles(ticker, strategy, config, dte_target=None, top_n=5):
     spot = tk.fast_info.get('last_price') or tk.fast_info.get('previous_close', 0)
     if not spot: return []
     dte_min = config.get('dte_min', 30)
+    dte_min = _entry_dte_floor(strategy, dte_min)  # HELM-106 entry-runway invariant
     dte_max = config.get('dte_max', 90)
     dte_sweet = config.get('dte_sweet', 45)
     today = date.today()
@@ -2341,6 +2404,7 @@ def evaluate_debit_spreads(ticker, strategy, config, dte_target=None, top_n=5):
     if not spot:
         return []
     dte_min = config.get('dte_min', 30)
+    dte_min = _entry_dte_floor(strategy, dte_min)  # HELM-106 entry-runway invariant
     dte_max = config.get('dte_max', 90)
     dte_sweet = config.get('dte_sweet', 60)
     widths = config.get('spread_widths', [5, 10, 15, 20, 25])
