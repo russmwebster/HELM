@@ -68,6 +68,27 @@ class Signal:
     # ATR sizing
     atr_1x_price:        Optional[float] = None
     atr_2x_price:        Optional[float] = None
+    # HELM-090 p1 (display-only): realized vol + VRP context at scan time
+    hv_30:        Optional[float] = None   # 30d realized vol (%), from scan closes
+    vrp:          Optional[float] = None   # iv_current - hv_30 (vol pts)
+    vrp_ratio:    Optional[float] = None   # iv_current / hv_30
+    vol_bucket:   Optional[str] = None     # rich | moderate | cheap
+    # HELM-103 (s82): momentum_bias() regime inputs, persisted for back-test
+    adx:          Optional[float]   = None   # ADX(14) trend strength
+    plus_di:      Optional[float]   = None   # +DI(14)
+    minus_di:     Optional[float]   = None   # -DI(14)
+    obv_trend:    Optional[int]     = None   # +1 rising / -1 falling / 0 flat
+    # HELM-101 (s82): buy-side vol-gate inputs + long-call screen verdict
+    hv_90:            Optional[float] = None   # plain 90d realized vol (%)
+    hv_90_ex_earn:    Optional[float] = None   # 90d RV, earnings moves removed
+    hv_90_source:     Optional[str]   = None   # dates | dates-none | plain
+    hv_252:           Optional[float] = None   # 1y realized vol (%), G5 ceiling
+    iv_hv90_ratio:    Optional[float] = None   # iv_current / hv_90_ex_earn (G3)
+    lc_screen_pass:   Optional[int]   = None   # 1 pass / 0 reject / None not run
+    lc_screen_rank:   Optional[int]   = None
+    lc_screen_reject: Optional[str]   = None   # first gate failed (G1..G5)
+    lc_rank_score:    Optional[float] = None
+    lc_gates_json:    Optional[str]   = None   # per-gate values, audit trail
     suggested_contracts: Optional[int]   = None
 
     # Earnings

@@ -247,6 +247,51 @@ def score_label(score: int) -> str:
 
 # ── Technical indicator fetch ─────────────────────────────────────────────────
 
+# ── HELM-090 p1: realized vol + VRP context (DISPLAY-ONLY — no routing/gating) ──
+# Mirrors helm-trial free_vol.hv30_from_closes / vrp_context exactly, so live and
+# trial VRP reads stay comparable for the referee experiment.
+VRP_RICH_SPREAD_PTS = 4.0   # rich if IV - HV >= this (vol points)
+VRP_RICH_RATIO      = 1.25  # ... or IV / HV >= this
+
+
+# HELM-101 G3/G5: earnings-history cache loader (one DB read per process).
+_EARN_HIST_CACHE = {}
+_EARN_HIST_LOADED = False
+
+
+def _earnings_hist(ticker):
+    """Past earnings dates for a ticker from the cache; [] when unavailable."""
+    global _EARN_HIST_LOADED
+    if not _EARN_HIST_LOADED:
+        try:
+            from helm.db import get_conn
+            from helm.hv_earnings import load_earnings_map
+            _conn = get_conn()
+            try:
+                _EARN_HIST_CACHE.update(load_earnings_map(_conn))
+            finally:
+                _conn.close()
+        except Exception:
+            pass
+        _EARN_HIST_LOADED = True
+    return _EARN_HIST_CACHE.get(str(ticker).upper(), [])
+
+
+def _hv30_from_closes(close):
+    """Annualized 30-trading-day historical vol (%) from daily closes."""
+    import math
+    try:
+        c = close.dropna()
+        if len(c) < 31:
+            return None
+        rets = (c / c.shift(1)).apply(math.log).dropna().iloc[-30:]
+        if len(rets) < 20:
+            return None
+        return round(float(rets.std(ddof=1)) * math.sqrt(252) * 100, 1)
+    except Exception:
+        return None
+
+
 def fetch_technicals(ticker: str, ivr_record=None) -> dict:
     """
     Fetch technical indicators for a ticker using yfinance.
@@ -341,6 +386,20 @@ def fetch_technicals(ticker: str, ivr_record=None) -> dict:
         )
         atr = float(tr.rolling(14).mean().iloc[-1])
         result["atr_14"] = round(atr, 2)
+        result["hv_30"] = _hv30_from_closes(close)  # HELM-090 p1
+        # HELM-101 G3/G5 (persist-only -- no routing until the LC screen ships):
+        # 90d realized vol with earnings prints removed, plus the 1y RV feeding
+        # the underlying-vol ceiling. hv_90_source records how honest the
+        # ex-earnings number is (dates | dates-none | plain).
+        try:
+            from helm.hv_earnings import hv_from_closes, hv_ex_earnings
+            result["hv_90"] = hv_from_closes(close, 90)
+            _hv90x, _hv90src = hv_ex_earnings(close, _earnings_hist(ticker), 90)
+            result["hv_90_ex_earn"] = _hv90x
+            result["hv_90_source"] = _hv90src
+            result["hv_252"] = hv_from_closes(close, 252)
+        except Exception:
+            pass
 
         # ── HELM-042 capability: MACD/OBV/ADX (additive, shadow — no scorer reads these yet) ──
         _ema12 = close.ewm(span=12, adjust=False).mean()
@@ -497,6 +556,27 @@ def fetch_technicals(ticker: str, ivr_record=None) -> dict:
 
         if result.get("ivr_stale"):
             result["bias_factors"].insert(0, f"⚠ IVR stale (as-of {result.get('ivr_date')}) — run helm ivr refresh")
+        # HELM-090 p1: VRP context (IV vs realized) — display-only, mirrors trial cutoffs
+        try:
+            _iv, _hv = result.get("iv_current"), result.get("hv_30")
+            if _iv is not None and 0 < float(_iv) <= 3:
+                _iv = float(_iv) * 100  # decimal-IV guard (IVHistory rows can be fractional)
+            if _iv and _hv and float(_hv) > 0:
+                _vrp = round(float(_iv) - float(_hv), 1)
+                _ratio = round(float(_iv) / float(_hv), 2)
+                result["vrp"] = _vrp
+                result["vrp_ratio"] = _ratio
+                if _vrp >= VRP_RICH_SPREAD_PTS or _ratio >= VRP_RICH_RATIO:
+                    result["vol_bucket"] = "rich"
+                elif _vrp <= 0:
+                    result["vol_bucket"] = "cheap"
+                else:
+                    result["vol_bucket"] = "moderate"
+            _hv90x = result.get("hv_90_ex_earn")  # HELM-101 G3 vol gate input
+            if _iv and _hv90x and float(_hv90x) > 0:
+                result["iv_hv90_ratio"] = round(float(_iv) / float(_hv90x), 3)
+        except Exception:
+            pass
         return result
 
     except Exception as e:

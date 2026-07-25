@@ -799,3 +799,46 @@ CREATE TABLE IF NOT EXISTS ownership_quality (
     updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
     PRIMARY KEY (ticker, date)
 );
+
+-- ---------------------------------------------------------------------------
+-- Signals scan-context migrations
+--   HELM-090 p1 (2026-07-24) -- backfilled into schema 2026-07-25 (s82): these
+--   four were ALTERed onto the live DB only, so a fresh init from this file was
+--   missing columns the Signal dataclass declares (every save() would fail).
+-- ---------------------------------------------------------------------------
+ALTER TABLE signals ADD COLUMN hv_30 REAL;        -- 30d realized vol (%), scan closes
+ALTER TABLE signals ADD COLUMN vrp REAL;          -- iv_current - hv_30 (vol pts)
+ALTER TABLE signals ADD COLUMN vrp_ratio REAL;    -- iv_current / hv_30
+ALTER TABLE signals ADD COLUMN vol_bucket TEXT;   -- rich | moderate | cheap
+
+-- HELM-103 (2026-07-25, s82): persist the momentum_bias() regime inputs so a
+-- score of 0 is distinguishable from range-gated, and ADX gating/ranking is
+-- back-testable. Prerequisite for HELM-101 G2.
+ALTER TABLE signals ADD COLUMN adx REAL;          -- ADX(14) trend strength
+ALTER TABLE signals ADD COLUMN plus_di REAL;      -- +DI(14)
+ALTER TABLE signals ADD COLUMN minus_di REAL;     -- -DI(14)
+ALTER TABLE signals ADD COLUMN obv_trend INTEGER; -- +1 rising / -1 falling / 0 flat
+
+-- HELM-101 §2/§7 (2026-07-25, s82): buy-side screen persistence. The vol-gate
+-- inputs (G3/G5) and the long-call screen's own verdict/rank/gate audit trail,
+-- so screen outcomes are scorable rather than eyeball-able.
+ALTER TABLE signals ADD COLUMN hv_90 REAL;             -- plain 90d realized vol (%)
+ALTER TABLE signals ADD COLUMN hv_90_ex_earn REAL;     -- 90d RV, earnings moves removed
+ALTER TABLE signals ADD COLUMN hv_90_source TEXT;      -- dates | dates-none | plain
+ALTER TABLE signals ADD COLUMN hv_252 REAL;            -- 1y realized vol (%), G5 ceiling
+ALTER TABLE signals ADD COLUMN iv_hv90_ratio REAL;     -- iv_current / hv_90_ex_earn (G3)
+ALTER TABLE signals ADD COLUMN lc_screen_pass INTEGER; -- 1 pass / 0 reject / NULL not run
+ALTER TABLE signals ADD COLUMN lc_screen_rank INTEGER; -- rank within the passing field
+ALTER TABLE signals ADD COLUMN lc_screen_reject TEXT;  -- first gate failed (G1..G5)
+ALTER TABLE signals ADD COLUMN lc_rank_score REAL;     -- 0.6*vol cheapness + 0.4*trend
+ALTER TABLE signals ADD COLUMN lc_gates_json TEXT;     -- per-gate values, audit trail
+
+-- HELM-101 G3 support: past earnings dates, so HV90 can exclude print moves.
+-- Refreshed by helm.hv_earnings.refresh_earnings_history (weekly cadence).
+CREATE TABLE IF NOT EXISTS earnings_history (
+    ticker      TEXT NOT NULL,
+    earn_date   TEXT NOT NULL,           -- YYYY-MM-DD
+    source      TEXT DEFAULT 'yfinance',
+    fetched_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (ticker, earn_date)
+);
