@@ -179,75 +179,78 @@ def momentum_bias(price, sma_50, sma_200, ema_20, macd_hist, obv_trend, adx):
     return max(-3, min(3, score)), factors
 
 
-def bias_to_strategy(score: int, rsi=None, ivr=None):
+def bias_to_strategy(score: int, rsi=None, ivr=None, ivp=None):
     """
-    Map directional bias + IV environment to best strategy.
-    IVR threshold for premium selling lowered to 35 (from 50).
+    Map directional bias + vol environment to a strategy.
+
+    HELM-105 (s82, Russ): the premium-selling gate is IVR >= 50 AND IVP >= 50.
+    The rank threshold goes back to the conventional 50 (it had been lowered to
+    35, which admitted trades standard practice would skip), and percentile is
+    added as a second condition. Rank alone is distorted by a single vol spike
+    in the trailing year -- the spike widens the range the rank divides by, so a
+    name can read low-rank on IV that is genuinely high. Percentile is immune to
+    that. Requiring both is the conservative reading of standard practice.
+    A missing percentile does NOT veto: IVP is absent only when IVR is, and the
+    NO_ASSESS_IVR guard already covers that case.
+
+    HELM-100 (s82): direction no longer decides buy-vs-sell premium. Vol state
+    decides whether there is an edge to harvest at all; direction decides which
+    side to position on. Every route that BOUGHT premium -- long call, long
+    straddle, bear put debit spread -- is retired pending the buy/sell split.
+
+    Also s82: the neutral and mildly-bearish branches used to fall back to an
+    iron condor with no vol condition at all, so raising the sell threshold
+    actually INCREASED condor count (29 -> 31 on the 7/24 board) by pushing
+    de-ranked names into the one structure currently losing money. Those
+    fallbacks now require rich vol like every other credit structure.
     """
-    ivr_val      = float(ivr) if ivr is not None else None
-    ivr_rich     = ivr_val is not None and ivr_val >= 35   # sell premium (lowered from 50)
-    ivr_moderate = ivr_val is not None and 15 <= ivr_val < 35
-    ivr_cheap    = ivr_val is not None and ivr_val < 15
-    ivr_buyable  = ivr_val is not None and ivr_val < 60
-    ivr_unknown  = ivr_val is None  # No IBKR data — defer strategy, use score only
-    rsi_val      = float(rsi) if rsi is not None else None
-    rsi_oversold = rsi_val is not None and rsi_val < 30
-    rsi_bullish  = rsi_val is not None and rsi_val < 60
+    ivr_val = float(ivr) if ivr is not None else None
+    ivp_val = float(ivp) if ivp is not None else None
+    ivr_rich = (ivr_val is not None and ivr_val >= IVR_RICH_MIN
+                and (ivp_val is None or ivp_val >= IVP_RICH_MIN))
+    ivr_moderate = ivr_val is not None and 15 <= ivr_val < IVR_RICH_MIN
+    ivr_cheap = ivr_val is not None and ivr_val < 15
+    rsi_val = float(rsi) if rsi is not None else None
     rsi_momentum = rsi_val is not None and 40 <= rsi_val <= 65
-    rsi_overbought = rsi_val is not None and rsi_val > 65
+
+    NO_BUY = ('NO_BUY_PATH', 'buy path retired pending HELM-100 split -- buying '
+              'premium is negative-EV on the vol leg; needs its own screen')
+    NO_EDGE = ('NO_EDGE_VOL', 'vol not rich enough to sell (IVR<50 or IVP<50) and '
+               'no buy path -- no edge to harvest, so no trade')
 
     if score >= 2:  # Bullish
-        if (ivr_buyable or ivr_unknown) and not ivr_rich:
-            # HELM-100 (s82): the buy side no longer routes off the seller's
-            # measures. Direction does not decide buy-vs-sell premium; vol state
-            # does. Until long_call_screen() ships (HELM-101 step 4), a bullish
-            # read with non-rich vol is NOT a sell setup either -- so this is a
-            # no-trade, surfaced rather than silently rerouted.
-            return 'NO_BUY_PATH', 'buy path retired pending HELM-100 split -- buying premium is negative-EV on the vol leg; needs its own screen, not the seller road'
         if ivr_rich:
-            return 'CSP', 'Bullish bias + elevated IVR — ideal for cash-secured put'
-        return 'BULL_PUT_SPREAD', 'Bullish bias, moderate IV — defined risk spread'
+            return 'CSP', 'Bullish bias + rich vol (IVR>=50, IVP>=50) — cash-secured put'
+        if ivr_cheap:
+            # Selling a credit spread into IVR<15 is selling cheap premium, which
+            # is the thing this whole gate exists to stop. The mildly-bullish
+            # branch already guarded this; the strongly-bullish one did not.
+            return NO_EDGE
+        return 'BULL_PUT_SPREAD', 'Bullish bias, vol not rich — defined-risk credit spread'
 
     elif score == 1:  # Mildly bullish
-        # CSP takes priority when IVR >= 35
         if ivr_rich:
-            return 'CSP', 'Mildly bullish + elevated IVR — CSP with comfortable strike'
-        # DIAGONAL when IVR is moderate and momentum present
+            return 'CSP', 'Mildly bullish + rich vol — CSP with comfortable strike'
         if ivr_moderate and rsi_momentum:
-            return 'DIAGONAL', 'Mildly bullish + moderate IVR + momentum — diagonal spread'
+            return 'DIAGONAL', 'Mildly bullish + moderate vol + momentum — diagonal spread'
         if ivr_cheap:
-            # HELM-100/101: a 1-of-3 directional vote is not a thesis worth
-            # paying theta for. Retired with the rest of the buy path.
-            return 'NO_BUY_PATH', 'buy path retired pending HELM-100 split -- buying premium is negative-EV on the vol leg; needs its own screen, not the seller road'
+            return NO_BUY
         return 'BULL_PUT_SPREAD', 'Mildly bullish — defined risk spread preferred'
 
-    elif score == 0:
+    elif score == 0:  # Neutral
         if ivr_rich:
-            return 'IRON_CONDOR', 'Neutral + elevated IVR — iron condor (IRA-safe defined risk)'
-        if ivr_cheap:
-            # HELM-100 (s82): retired with the rest of the buy side. This is the
-            # most defensible premium purchase HELM had -- buying vol when implied
-            # sits under realized is the one case the VRP research endorses -- but
-            # it is still a premium purchase with no catalyst behind it, and no buy
-            # route runs until the split gives the buy side its own reasoning.
-            # Reinstate deliberately in Phase C if it earns a place.
-            return 'NO_BUY_PATH', ('buy path retired pending HELM-100 split -- cheap vol '
-                                   'alone is not a thesis; revisit as a vol-buy path')
-        return 'IRON_CONDOR', 'Neutral, moderate IV — defined risk condor'
+            return 'IRON_CONDOR', 'Neutral + rich vol — iron condor (IRA-safe defined risk)'
+        return NO_EDGE
 
-    elif score == -1:
+    elif score == -1:  # Mildly bearish
         if ivr_rich:
-            return 'BEAR_CALL_SPREAD', 'Mildly bearish + elevated IVR — bear call credit spread'
-        if ivr_cheap:
-            return 'BEAR_PUT_SPREAD', 'Mildly bearish + low IVR — buy cheap puts via debit spread'
-        return 'IRON_CONDOR', 'Mildly bearish, moderate IV — iron condor for range-bound move'
+            return 'BEAR_CALL_SPREAD', 'Mildly bearish + rich vol — bear call credit spread'
+        return NO_EDGE
 
     else:  # score <= -2, Bearish
         if ivr_rich:
-            return 'BEAR_CALL_SPREAD', 'Bearish + elevated IVR — bear call credit spread'
-        return 'BEAR_PUT_SPREAD', 'Bearish + low IVR — buy cheap puts via debit spread'
-
-
+            return 'BEAR_CALL_SPREAD', 'Bearish + rich vol — bear call credit spread'
+        return NO_EDGE
 def score_label(score: int) -> str:
     if score >= 2:   return "[green]Bullish[/green]"
     elif score == 1: return "[cyan]Mildly bullish[/cyan]"
@@ -261,6 +264,11 @@ def score_label(score: int) -> str:
 # ── HELM-090 p1: realized vol + VRP context (DISPLAY-ONLY — no routing/gating) ──
 # Mirrors helm-trial free_vol.hv30_from_closes / vrp_context exactly, so live and
 # trial VRP reads stay comparable for the referee experiment.
+# HELM-105 (s82): premium-selling gate. Conventional rank threshold restored
+# (was 35) and percentile added as a second condition -- see bias_to_strategy.
+IVR_RICH_MIN = 50.0
+IVP_RICH_MIN = 50.0
+
 VRP_RICH_SPREAD_PTS = 4.0   # rich if IV - HV >= this (vol points)
 VRP_RICH_RATIO      = 1.25  # ... or IV / HV >= this
 
@@ -540,7 +548,8 @@ def fetch_technicals(ticker: str, ivr_record=None) -> dict:
         result["bias_score"] = result["momentum_bias_score"]
         result["bias_factors"] = result["momentum_bias_factors"]
 
-        strategy, rationale = bias_to_strategy(result["bias_score"], rsi=result.get("rsi_14"), ivr=result.get("iv_rank"))
+        strategy, rationale = bias_to_strategy(result["bias_score"], rsi=result.get("rsi_14"),
+                                       ivr=result.get("iv_rank"), ivp=result.get("iv_pct"))
         conv_score = compute_conviction(result["bias_score"], result.get("iv_rank"), strategy)
         result["conviction_score"] = conv_score
         result["conviction"] = conviction_label(conv_score)
