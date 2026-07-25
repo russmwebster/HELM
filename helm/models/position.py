@@ -27,6 +27,10 @@ class Position:
     earnings_date:        Optional[str] = None
     company_name:         Optional[str] = None
     total_contracts:      int = 1
+    # HELM-107 (s82): days from open to the nearest expiry, computed from the
+    # legs at open. Stores the fact; v_learning_positions derives whether the
+    # entry had enough runway to clear its own management line.
+    entry_dte:           Optional[int]   = None
     net_premium:          Optional[float] = None
     realized_pnl:         Optional[float] = None
     max_profit:           Optional[float] = None

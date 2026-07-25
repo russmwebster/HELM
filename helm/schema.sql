@@ -865,3 +865,52 @@ CREATE TABLE IF NOT EXISTS entry_thesis (
 -- LONG_* verdict records which rules were armed so alternatives stay scorable.
 ALTER TABLE checks ADD COLUMN thesis_broken INTEGER;  -- 1 broken / 0 intact / NULL n/a
 ALTER TABLE checks ADD COLUMN lc_arms_json TEXT;      -- counterfactual arm record
+
+-- HELM-107 (s82): entry runway fact + artifact judgement.
+ALTER TABLE positions ADD COLUMN entry_dte INTEGER;
+
+-- HELM-107 (s82): entry runway, and the artifact rule derived from it.
+-- positions.entry_dte stores the FACT (days from open to the nearest expiry,
+-- computed from legs). This view derives the JUDGEMENT, so the rule can be
+-- changed in one place without rewriting stored data.
+--
+-- Why it exists: in June 2026 condors and CSPs were opened at 21-25 DTE against
+-- a 21-DTE management rule and were force-closed within days, each close paying
+-- a round-trip spread. ~80 of 190 closed positions are that artifact and were
+-- being counted as evidence. See claude/HELM-condor-loss-root-cause.md.
+--
+-- NOTE: the 7-day margin mirrors open_cmd.DTE_RUNWAY_MARGIN. If one moves, move
+-- the other -- this is the one place the two are deliberately coupled.
+DROP VIEW IF EXISTS v_learning_positions;
+CREATE VIEW v_learning_positions AS
+SELECT p.*,
+       (SELECT s.dte_exit_threshold FROM strategy_settings s
+         WHERE s.strategy = p.strategy AND s.dte_exit_threshold IS NOT NULL
+         ORDER BY s.is_default DESC LIMIT 1)                    AS manage_dte,
+       p.entry_dte - (SELECT s.dte_exit_threshold FROM strategy_settings s
+         WHERE s.strategy = p.strategy AND s.dte_exit_threshold IS NOT NULL
+         ORDER BY s.is_default DESC LIMIT 1)                    AS entry_runway,
+       CASE
+         WHEN p.entry_dte IS NULL THEN NULL
+         WHEN p.entry_dte - COALESCE((SELECT s.dte_exit_threshold FROM strategy_settings s
+              WHERE s.strategy = p.strategy AND s.dte_exit_threshold IS NOT NULL
+              ORDER BY s.is_default DESC LIMIT 1), 21) < 7 THEN 1
+         ELSE 0
+       END                                                      AS dte_artifact
+FROM positions p;
+
+-- HELM-107 (s82): keep entry_dte true for every future position, whichever code
+-- path opens it. Legs are written after the position row, so the trigger fires
+-- on leg insert and keeps the NEAREST expiry -- matching how the exit rules read
+-- DTE. Self-maintaining: no open path has to remember to set it.
+DROP TRIGGER IF EXISTS trg_positions_entry_dte;
+CREATE TRIGGER trg_positions_entry_dte
+AFTER INSERT ON legs
+WHEN NEW.expiration IS NOT NULL
+BEGIN
+  UPDATE positions
+     SET entry_dte = CAST(julianday(NEW.expiration) - julianday(date(opened_at)) AS INTEGER)
+   WHERE id = NEW.position_id
+     AND (entry_dte IS NULL
+          OR entry_dte > CAST(julianday(NEW.expiration) - julianday(date(opened_at)) AS INTEGER));
+END;
