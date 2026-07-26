@@ -79,3 +79,19 @@ data/helm.db*mode=ro
 /ws[0-9]*.py
 /ws_*.py
 /ib_data_probe.py
+
+# -- s85 sweep (2026-07-26): session scratch that kept surfacing as untracked --
+# Applied one-off scripts and their output moved to archive/scratch-2026-07-26/.
+# These patterns stop the same classes accumulating at the root again.
+/_*.txt
+/_*.json
+/read.json
+/_s[0-9][0-9]/
+/logs/
+/verify_*.py
+/probe_*.py
+/smoketest_*.py
+/sample_mktdata.py
+/vol_context_prototype.py
+/_s[0-9][0-9]_smoke.py
+/_to_delete/

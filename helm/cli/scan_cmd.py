@@ -179,6 +179,62 @@ def momentum_bias(price, sma_50, sma_200, ema_20, macd_hist, obv_trend, adx):
     return max(-3, min(3, score)), factors
 
 
+# HELM-113 (s85): the routing sentinels are not strategies -- they are HELM
+# declining to trade. They must not rank, must not consume --top slots, and must
+# not count in the strategy summary as though they were routes. They keep their
+# content in a Declined section instead (_print_declined).
+SENTINEL_STRATEGIES = ("NO_BUY_PATH", "NO_EDGE_VOL", "NO_ASSESS_IVR")
+
+SENTINEL_LABELS = {
+    "NO_BUY_PATH":   "no buy path",
+    "NO_EDGE_VOL":   "no vol edge",
+    "NO_ASSESS_IVR": "IVR unknown",
+}
+
+
+def _print_declined(declined):
+    """Render the names HELM declined to trade, grouped by reason (HELM-113).
+
+    A decline is a finding: the trader is owed what HELM saw and why it stood
+    down. `strategy_shadow`, where present, is the route HELM had chosen before
+    a sentinel overrode it -- that only exists for NO_ASSESS_IVR, because the
+    other two are returned by the router itself and have no route behind them.
+    """
+    if not declined:
+        return
+    groups = {}
+    for r in declined:
+        groups.setdefault(r.get("strategy"), []).append(r)
+
+    console.print(f"[dim]Declined — {len(declined)} name(s) HELM would not "
+                  f"trade today[/dim]")
+    console.print()
+    t = Table(box=box.SIMPLE_HEAD, show_header=True, padding=(0, 1), width=180)
+    t.add_column("Declined", width=13, no_wrap=True)
+    t.add_column("N", justify="right", width=4, no_wrap=True)
+    t.add_column("Why", width=60)
+    t.add_column("Names", width=88)
+    for sent, rows in sorted(groups.items(), key=lambda kv: -len(kv[1])):
+        rows.sort(key=lambda r: -abs(r.get("bias_score") or 0))
+        why = rows[0].get("strategy_rationale") or "--"
+        shown = []
+        for r in rows[:14]:
+            _sh = r.get("strategy_shadow")
+            # Only a REAL route is worth showing. A name with no IVR often had
+            # NO_EDGE_VOL behind it too, and rendering "SOFI/NO_EDGE_VOL" reads
+            # as a route HELM would have taken when it is just a second decline.
+            if _sh in SENTINEL_STRATEGIES:
+                _sh = None
+            _code = STRATEGY_CODES.get(_sh, _sh) if _sh else None
+            shown.append(f"{r['ticker']}[dim]/{_code}[/dim]" if _code
+                         else r["ticker"])
+        more = f" [dim]+{len(rows) - 14} more[/dim]" if len(rows) > 14 else ""
+        t.add_row(f"[yellow]{SENTINEL_LABELS.get(sent, sent)}[/yellow]",
+                  str(len(rows)), f"[dim]{why}[/dim]", "  ".join(shown) + more)
+    console.print(t)
+    console.print()
+
+
 def bias_to_strategy(score: int, rsi=None, ivr=None, ivp=None):
     """
     Map directional bias + vol environment to a strategy.
@@ -556,9 +612,12 @@ def fetch_technicals(ticker: str, ivr_record=None) -> dict:
         result["strategy"] = strategy
         result["strategy_rationale"] = rationale
         # HELM-042 unknown-IVR guard (s58): no vol read -> HELM refuses to assess.
-        # Keep the row visible/ranked but mark it; the sentinel is not a real
-        # strategy, so paper generation (fail-closed) will not book it.
+        # The sentinel is not a real strategy, so paper generation (fail-closed)
+        # will not book it. HELM-113 (s85): the row is no longer RANKED either --
+        # it moves to the Declined section -- and `strategy_shadow` preserves the
+        # route the sentinel overrode, so the decline keeps its content.
         if result.get("iv_rank") is None:
+            result["strategy_shadow"] = strategy
             result["strategy"] = "NO_ASSESS_IVR"
             result["strategy_rationale"] = "IVR missing -- run helm ivr refresh, then re-scan"
 
@@ -747,11 +806,21 @@ def run():
 
     valid.sort(key=lambda r: (-abs(r["bias_score"]), -r["bias_score"]))
 
+    # HELM-113 (s85): split the declines out BEFORE --top truncation, so a
+    # sentinel can never consume a slot a tradeable name could have used.
+    # Asking for one by --strategy is an explicit request, so honour that.
+    declined = []
+    if strategy_filter not in SENTINEL_STRATEGIES:
+        declined = [r for r in valid if r.get("strategy") in SENTINEL_STRATEGIES]
+        valid = [r for r in valid if r.get("strategy") not in SENTINEL_STRATEGIES]
+
     if top_n:
         valid = valid[:top_n]
 
     if not valid:
-        console.print("[yellow]No candidates found matching criteria.[/yellow]")
+        console.print("[yellow]No tradeable candidates found matching criteria.[/yellow]")
+        console.print()
+        _print_declined(declined)
         return
 
     # Results table
@@ -858,8 +927,13 @@ def run():
     counts = Counter(r.get("strategy") for r in valid if r.get("strategy"))
     summary = "  ".join(f"[{strategy_colors.get(s,'white')}]{s}[/{strategy_colors.get(s,'white')}]: {n}"
                         for s, n in counts.most_common())
+    if declined:
+        # HELM-113 (s85): declines are counted, just not as strategies.
+        summary += ("  " if summary else "") + f"declined: {len(declined)}"
     console.print(f"[dim]{summary}[/dim]")
     console.print()
+
+    _print_declined(declined)
 
     if errors:
         console.print(f"[dim]{len(errors)} ticker(s) had errors: {', '.join(r['ticker'] for r in errors[:5])}[/dim]")

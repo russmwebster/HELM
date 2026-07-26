@@ -44,6 +44,15 @@ from helm.strategies import resolve_strategy
 
 console = Console()
 
+# ── HELM-101 s84: buy-side constants ──────────────────────────────────────────
+# The single-leg debit family. Kept separate from the router's LONG_DEBIT_FAMILY
+# so the open layer can gate contracts without importing the decision core.
+LONG_SINGLE_FAMILY = ("LONG_CALL", "LONG_PUT")
+LONG_SPREAD_PCT_MAX = 5.0    # relative spread is the binding liquidity control
+LONG_BE_MOVE_MAX = 1.0       # breakeven may not exceed a 1-sigma move
+LONG_OPTION_TARGET = 5000.0  # notional cap per ticket
+LONG_STOP_FRACTION = 0.5     # CATASTROPHE_STOP at -50% halves risk per ticket
+
 # ── Strategy configuration ────────────────────────────────────────────────────
 
 STRATEGY_CONFIG = {
@@ -277,7 +286,172 @@ def fetch_ibkr_greeks(contracts: list) -> dict:  # DEPRECATED
     return results
 
 
-def score_contract(row: dict, direction: str, delta_sweet: tuple) -> float:
+def expected_move(spot, hv_annual_pct, dte):
+    """One-sigma move in dollars over `dte` calendar days.
+
+    `hv_annual_pct` is annualised realized vol in percent -- the convention
+    shared with helm.hv_earnings.hv_from_closes and scan_cmd._hv30_from_closes,
+    so this number is comparable to the scan's hv_90.
+
+    Returns None on any missing input, so callers fail closed: an unknown
+    expected move must never read as a cheap one.
+    """
+    try:
+        if not spot or not hv_annual_pct or not dte or float(dte) <= 0:
+            return None
+        return float(spot) * (float(hv_annual_pct) / 100.0) * math.sqrt(float(dte) / 365.0)
+    except Exception:
+        return None
+
+
+def breakeven_price(row):
+    """Breakeven at expiry for a single-leg contract, or None.
+
+    Strike +/- premium. The same price for either side of the trade -- what
+    differs is who profits beyond it -- so this takes no direction argument.
+    """
+    try:
+        k = float(row.get("strike") or 0)
+        m = float(row.get("mid") or 0)
+        if not k or not m:
+            return None
+        return k + m if row.get("opt_type") == "CALL" else k - m
+    except Exception:
+        return None
+
+
+def annotate_longs(contracts, direction, spot, hv_annual_pct):
+    """Attach breakeven / expected-move / be_ratio to each contract.
+
+    be_ratio is the move the breakeven demands expressed in units of the
+    expected move: 1.0 means the underlying must deliver a full 1-sigma move
+    over the holding window just to return the debit.
+    """
+    for c in contracts:
+        be = breakeven_price(c)
+        em = expected_move(spot, hv_annual_pct, c.get("dte"))
+        c["breakeven"] = round(be, 2) if be else None
+        c["exp_move"] = round(em, 2) if em else None
+        c["be_move"] = round(abs(be - spot), 2) if (be and spot) else None
+        c["be_ratio"] = (round(abs(be - spot) / em, 3)
+                         if (be and spot and em and em > 0) else None)
+    return contracts
+
+
+# HELM-101 s85: every buy-side decline is recorded here so the CLI can say WHICH
+# gate emptied the board and by how much. Written by gate_longs, read only by
+# _summarize_long_rejects. Module-level rather than threaded through the return
+# value deliberately: HELM PG imports evaluate_contracts read-only and must keep
+# receiving a plain list.
+LAST_LONG_REJECTS = []
+
+
+def _long_reject_reason(c):
+    """The first gate a buy-side candidate fails, or None if it passes all.
+
+    Returns (gate, detail, metric): `gate` is the stable grouping label,
+    `detail` what this contract measured, `metric` the number to rank
+    near-misses by (lower = closer to passing) or None when unmeasurable.
+    Gate ORDER is load-bearing -- it decides which reason a contract reports --
+    and is unchanged from s84.
+    """
+    sp = c.get("spread_pct")
+    if sp is None:
+        return ("spread unmeasurable", "no bid/ask", None)
+    if sp > LONG_SPREAD_PCT_MAX:
+        return (f"spread > {LONG_SPREAD_PCT_MAX:.0f}%", f"{sp:.1f}%", float(sp))
+    if c.get("delta") is None:
+        # The delta-band filter upstream only applies when delta is known,
+        # so an unpriced contract would otherwise arrive here ungated.
+        return ("delta unknown", "not priced", None)
+    br = c.get("be_ratio")
+    if br is None:
+        return ("breakeven unmeasurable", "no expected move", None)
+    if br > LONG_BE_MOVE_MAX:
+        return (f"breakeven > {LONG_BE_MOVE_MAX:.2f}x expected move",
+                f"{br:.2f}x", float(br))
+    return None
+
+
+def gate_longs(contracts, strategy, reset=True):
+    """HELM-101 s84 hard gates for the buy side.
+
+    Fails CLOSED: a contract whose spread or breakeven cannot be measured is
+    rejected, not admitted. An unmeasurable gate is not a passing one.
+
+    s85: each decline is also recorded in LAST_LONG_REJECTS with its gate and
+    measurement. Pass reset=False on the post-enrichment pass, so re-gating the
+    survivors does not erase the pre-scoring declines.
+    """
+    if strategy not in LONG_SINGLE_FAMILY:
+        return contracts
+    if reset:
+        LAST_LONG_REJECTS.clear()
+    kept = []
+    for c in contracts:
+        verdict = _long_reject_reason(c)
+        if verdict is None:
+            kept.append(c)
+            continue
+        gate, detail, metric = verdict
+        c["reject"] = f"{gate} ({detail})"
+        LAST_LONG_REJECTS.append({
+            "gate": gate, "detail": detail, "metric": metric,
+            "strike": c.get("strike"), "expiration": c.get("expiration"),
+            "dte": c.get("dte"),
+        })
+    return kept
+
+
+def _summarize_long_rejects(compact=False):
+    """Report why the buy-side gates declined candidates (HELM-101/113 s85).
+
+    compact=True is the one-line footer used when a board did render. Otherwise
+    a grouped table with the closest miss per gate, so a gate missed by a hair
+    reads differently from one missed by a mile -- the difference between "wait
+    for vol to cool" and "this name is not a buy at any strike".
+    """
+    if not LAST_LONG_REJECTS:
+        return
+    groups = {}
+    for r in LAST_LONG_REJECTS:
+        groups.setdefault(r["gate"], []).append(r)
+    ranked = sorted(groups.items(), key=lambda kv: -len(kv[1]))
+
+    if compact:
+        parts = [f"{len(v)} {k}" for k, v in ranked]
+        console.print("[dim]Also declined "
+                      f"{len(LAST_LONG_REJECTS)}: " + "  ".join(parts) + "[/dim]")
+        return
+
+    t = Table(box=box.SIMPLE_HEAD, show_header=True, padding=(0, 1))
+    t.add_column("Gate", width=38)
+    t.add_column("Declined", justify="right", width=9)
+    t.add_column("Closest miss", width=40)
+    for gate, rows in ranked:
+        measured = [r for r in rows if r["metric"] is not None]
+        if measured:
+            best = min(measured, key=lambda r: r["metric"])
+            exp = (best["expiration"] or "")[5:]
+            where = f"   ${best['strike']:.1f} {exp}" if best["strike"] else ""
+            miss = f"{best['detail']}{where}"
+        else:
+            miss = "[dim]unmeasurable[/dim]"
+        t.add_row(gate, str(len(rows)), miss)
+    console.print(t)
+    console.print("[dim]Gates fail closed -- an unmeasurable spread, delta or "
+                  "breakeven is a decline, not a pass.[/dim]")
+
+
+def score_contract(row: dict, direction: str, delta_sweet: tuple,
+                   be_ratio=None) -> float:
+    """Rank a single-leg contract.
+
+    The SHORT branch is unchanged from the seller-era scorer -- the live credit
+    book is calibrated against it and must not move. The LONG branch (HELM-101
+    s84) is separate, because a buyer pays the spread, pays theta and must
+    outrun the breakeven: those are costs here, not merely withheld points.
+    """
     score = 0.0
     delta   = abs(row.get("delta", 0) or 0)
     theta   = abs(row.get("theta", 0) or 0)
@@ -299,22 +473,51 @@ def score_contract(row: dict, direction: str, delta_sweet: tuple) -> float:
     elif oi >= 500:  score += 10
     elif oi >= 100:  score += 5
 
-    # Spread tightness (as % of mid)
+    if not is_long:
+        # ── SHORT: seller scoring, unchanged ──────────────────────────────────
+        # Spread tightness (as % of mid)
+        if spread_pct is not None:
+            if spread_pct <= 5:    score += 20
+            elif spread_pct <= 10: score += 14
+            elif spread_pct <= 15: score += 8
+            elif spread_pct <= 20: score += 3
+            # > 20%: no points, but not penalized here (flagged in display)
+
+        # Theta (for short positions, higher theta = better)
+        if theta > 0:
+            if theta >= 0.05:   score += 15
+            elif theta >= 0.02: score += 8
+            elif theta >= 0.01: score += 3
+
+        # Premium sanity (not too cheap, not too wide)
+        if premium >= 0.50: score += 5
+
+        return round(score, 1)
+
+    # ── LONG: the buyer's cost structure ─────────────────────────────────────
+    # Spread is a round-trip cost, so beyond the gate it subtracts rather than
+    # merely withholding points (Muravyev & Pearson: relative spread, not OI,
+    # is the binding liquidity control for a buyer).
     if spread_pct is not None:
-        if spread_pct <= 5:    score += 20
-        elif spread_pct <= 10: score += 14
-        elif spread_pct <= 15: score += 8
-        elif spread_pct <= 20: score += 3
-        # > 20%: no points, but not penalized here (flagged in display)
+        if spread_pct <= 2.0:   score += 20
+        elif spread_pct <= 5.0: score += 12
+        else:                   score -= min(30.0, (spread_pct - 5.0) * 3.0)
 
-    # Theta (for short positions, higher theta = better)
-    if not is_long and theta > 0:
-        if theta >= 0.05:   score += 15
-        elif theta >= 0.02: score += 8
-        elif theta >= 0.01: score += 3
+    # Theta as daily bleed, charged against what was paid rather than shown as
+    # a raw dollar figure.
+    if premium > 0 and theta > 0:
+        bleed = theta / premium
+        if bleed <= 0.002:   score += 10
+        elif bleed <= 0.004: score += 5
+        elif bleed <= 0.008: pass
+        else:                score -= min(20.0, (bleed - 0.008) * 1500.0)
 
-    # Premium sanity (not too cheap, not too wide)
-    if premium >= 0.50: score += 5
+    # Breakeven against the expected move over the holding window.
+    if be_ratio is not None:
+        if be_ratio <= 0.50:   score += 25
+        elif be_ratio <= 0.75: score += 16
+        elif be_ratio <= 1.00: score += 6
+        else:                  score -= min(30.0, (be_ratio - 1.0) * 40.0)
 
     return round(score, 1)
 
@@ -349,7 +552,12 @@ def suggest_contracts(strategy: str, strike: float, mid: float,
                       account_id: str, ticker: str = "") -> int:
     """
     Suggest number of contracts based on risk_pct_per_trade and buying power.
+
+    Returns 0 when the position cannot be sized at all -- today only
+    COVERED_CALL against a holding of fewer than 100 shares. Callers must treat
+    0 as a decline (HELM-110 s85), not as "one contract".
     """
+    conn = None
     try:
         conn = get_conn()
         settings = conn.execute(
@@ -359,7 +567,6 @@ def suggest_contracts(strategy: str, strike: float, mid: float,
         account = conn.execute(
             "SELECT * FROM accounts WHERE id = ?", (account_id,)
         ).fetchone()
-        conn.close()
 
         if not settings or not account:
             return 1
@@ -370,23 +577,34 @@ def suggest_contracts(strategy: str, strike: float, mid: float,
         if portfolio_value <= 0:
             return 1
 
-        # Covered call: cap contracts at shares owned / 100
-        if strategy == "COVERED_CALL" and ticker:
+        # Covered call: shares owned // 100 is a PHYSICAL cap, not a preference
+        # -- you cannot cover a call you have no shares for. HELM-110 s85: this
+        # returns 0 rather than 1 when the holding is short of a round lot, so a
+        # naked call is declined instead of quietly suggested. No ticker means
+        # the holding is unknowable here, which is also a decline.
+        if strategy == "COVERED_CALL":
+            if not ticker:
+                return 0
             sp = conn.execute(
                 "SELECT shares FROM stock_positions WHERE ticker=? AND account_id=?",
                 (ticker.upper(), account_id)
             ).fetchone()
-            if sp:
-                return max(1, sp["shares"] // 100)
+            shares = int(sp["shares"] or 0) if sp else 0
+            return shares // 100
+
+        if strategy in LONG_SINGLE_FAMILY:
+            # HELM-101 s84: size on stop-adjusted risk, not notional. The -50%
+            # CATASTROPHE_STOP halves true risk per ticket, so the debit is
+            # charged at LONG_STOP_FRACTION against the same risk budget every
+            # other strategy uses. LONG_OPTION_TARGET stays as a notional cap so
+            # one ticket cannot dominate the book.
+            if mid <= 0:
+                max_contracts = 1
             else:
-                return 1  # no stock position found
-
-        # Long options: fixed dollar target (~$5,000)
-        # This will be user-configurable in setup in a future version
-        LONG_OPTION_TARGET = 5000.0
-
-        if strategy in ("LONG_CALL", "LONG_PUT"):
-            max_contracts = int(LONG_OPTION_TARGET / (mid * 100)) if mid > 0 else 1
+                risk_per_contract = mid * 100 * LONG_STOP_FRACTION
+                by_risk = int((portfolio_value * risk_pct) / risk_per_contract)
+                by_notional = int(LONG_OPTION_TARGET / (mid * 100))
+                max_contracts = min(by_risk, by_notional)
         elif strategy in ("CSP", "IRON_CONDOR"):
             # CSP: max collateral = strike * 100 * contracts
             max_risk = portfolio_value * risk_pct
@@ -399,6 +617,15 @@ def suggest_contracts(strategy: str, strike: float, mid: float,
         return max(1, min(max_contracts, 20))  # cap at 20 for sanity
     except Exception:
         return 1
+    finally:
+        # HELM-110 s85: the connection outlives every early return above, so it
+        # is closed here rather than mid-function. Closing it early is what made
+        # the COVERED_CALL branch raise into the bare except and size to 1.
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 # ── Main fetch and evaluation ─────────────────────────────────────────────────
@@ -639,6 +866,23 @@ def evaluate_contracts(ticker: str, strategy: str, config: dict,
     except Exception:
         pass
 
+    # HELM-101 s84: realized vol for the expected-move test. Same convention as
+    # helm.hv_earnings so this is comparable to the scan's hv_90. Left as None
+    # on any failure -- gate_longs() fails closed on a missing be_ratio.
+    # Long family only: the sell side has no use for it, and paper generation
+    # books in a loop -- an extra 1y history per name would be pure throttling
+    # risk for no benefit.
+    hv_annual = None
+    if strategy in LONG_SINGLE_FAMILY:
+        try:
+            from helm.hv_earnings import hv_from_closes
+            _h1y = tk.history(period="1y", interval="1d")
+            if not _h1y.empty:
+                hv_annual = (hv_from_closes(_h1y["Close"], 90)
+                             or hv_from_closes(_h1y["Close"], 30))
+        except Exception:
+            hv_annual = None
+
     today = date.today()
     expirations = tk.options
     target_exps = []
@@ -681,9 +925,13 @@ def evaluate_contracts(ticker: str, strategy: str, config: dict,
         except Exception:
             pass
 
-        # Score IBKR contracts
+        # Score IBKR contracts. HELM-101 s84: the buy side is annotated with
+        # breakeven/expected-move and gated before scoring.
+        annotate_longs(contracts, direction, spot, hv_annual)
+        contracts = gate_longs(contracts, strategy)
         for c in contracts:
-            c["score"] = score_contract(c, direction, delta_sweet)
+            c["score"] = score_contract(c, direction, delta_sweet,
+                                        be_ratio=c.get("be_ratio"))
         contracts.sort(key=lambda x: -x["score"])
         return contracts[:top_n]
 
@@ -762,6 +1010,14 @@ def evaluate_contracts(ticker: str, strategy: str, config: dict,
         except Exception:
             continue
 
+    # HELM-101 s84: annotate + gate the buy side before spending enrichment
+    # slots on contracts that cannot survive the breakeven test.
+    annotate_longs(contracts, direction, spot, hv_annual)
+    contracts = gate_longs(contracts, strategy)
+    for c in contracts:
+        c["score"] = score_contract(c, direction, delta_sweet,
+                                    be_ratio=c.get("be_ratio"))
+
     # Enrich top contracts with live IBKR Greeks
     contracts.sort(key=lambda c: -c["score"])
     top_contracts = contracts[:top_n]
@@ -787,13 +1043,21 @@ def evaluate_contracts(ticker: str, strategy: str, config: dict,
             if "mid" in g:
                 c["premium_total"] = round(g["mid"] * 100, 2)
             # Rescore with live data
-            c["score"] = score_contract(c, c["direction"], 
-                                         STRATEGY_CONFIG[top_contracts[0].get("strategy", "CSP")]["delta_sweet"]
-                                         if top_contracts else (0.25, 0.35))
+            # HELM-101 s84 FIX: rescore against THIS strategy's band.
+            # The previous line resolved to CSP's (0.25, 0.35) for every
+            # strategy -- contract dicts carry no "strategy" key -- which
+            # inverted the delta term for a 0.70-0.80 long call.
+            annotate_longs([c], c["direction"], spot, hv_annual)
+            c["score"] = score_contract(c, c["direction"], delta_sweet,
+                                        be_ratio=c.get("be_ratio"))
             c["source"] = "ibkr-live"
         else:
             c["source"] = "yfinance"
     
+    # Re-gate after enrichment: a live spread can breach a gate the yfinance
+    # quote passed. reset=False so the pre-scoring declines survive (s85).
+    top_contracts = gate_longs(top_contracts, strategy, reset=False)
+
     # Re-sort after IBKR enrichment
     top_contracts.sort(key=lambda c: -c["score"])
     return top_contracts
@@ -862,9 +1126,25 @@ def confirm_and_log(ticker: str, strategy: str, contracts: list, config: dict,
         console.print("[red]Invalid price. Aborting.[/red]")
         return
 
-    # Get number of contracts
+    # Get number of contracts. HELM-110 s85: pass the ticker. Without it the
+    # COVERED_CALL shares cap was unreachable on the one path that actually
+    # books a position -- the board showed the cap, the confirm flow ignored it.
+    account_for_sizing = get_active_account()
     suggested = suggest_contracts(strategy, selected["strike"], fill_price,
-                                  get_active_account())
+                                  account_for_sizing, ticker=ticker)
+    if suggested <= 0:
+        console.print()
+        console.print(
+            f"[red]Cannot size {strategy} on {ticker}.[/red] "
+            f"stock_positions holds no round lot for this name, so a call here "
+            f"would be naked, not covered."
+        )
+        console.print(
+            "[dim]Record the shares (helm stock) if you do own them, or choose "
+            "a strategy that does not require them.[/dim]"
+        )
+        console.print()
+        return
     contracts_str = Prompt.ask(
         f"  Number of contracts",
         default=str(suggested)
@@ -873,6 +1153,10 @@ def confirm_and_log(ticker: str, strategy: str, contracts: list, config: dict,
         num_contracts = int(contracts_str)
     except ValueError:
         num_contracts = suggested
+    if num_contracts <= 0:
+        console.print("[dim]Cancelled -- zero contracts.[/dim]")
+        console.print()
+        return
 
     # Final confirmation
     total_premium = round(fill_price * 100 * num_contracts, 2)
@@ -2773,6 +3057,17 @@ def run():
         return
 
     if not contracts:
+        # HELM-101/113 s85: a declined name keeps its content. When the buy-side
+        # gates emptied the board, name the gate and the closest miss -- "try
+        # --dte" is the wrong lever for a breakeven needing 1.4x the expected
+        # move, and pointing at it wastes the trader's next move.
+        if strategy in LONG_SINGLE_FAMILY and LAST_LONG_REJECTS:
+            console.print(f"[yellow]No {strategy} contracts pass the buy-side "
+                          f"gates for {ticker}.[/yellow]")
+            console.print()
+            _summarize_long_rejects()
+            console.print()
+            return
         console.print(f"[yellow]No contracts found matching criteria.[/yellow]")
         console.print(f"[dim]Try --dte with a different target, or check helm screen output.[/dim]")
         return
@@ -2784,24 +3079,49 @@ def run():
         console.print(f"  {spot_str}{atr_str}")
         console.print()
 
-    # Results table
-    t = Table(box=box.SIMPLE_HEAD, show_header=True, padding=(0,1), width=170)
-    t.add_column("Rank",     width=5, no_wrap=True)
-    t.add_column("Exp",      width=8, no_wrap=True)
-    t.add_column("DTE",      justify="right", width=5, no_wrap=True)
-    t.add_column("Strike",   justify="right", width=8, no_wrap=True)
-    t.add_column("Bid",      justify="right", width=6, no_wrap=True)
-    t.add_column("Ask",      justify="right", width=6, no_wrap=True)
-    t.add_column("Mid",      justify="right", width=6, no_wrap=True)
-    t.add_column("Spread%",  justify="right", width=8, no_wrap=True)
-    t.add_column("Delta",    justify="right", width=7, no_wrap=True)
-    t.add_column("Theta",    justify="right", width=7, no_wrap=True)
-    t.add_column("IV%",      justify="right", width=5, no_wrap=True)
-    t.add_column("OI",       justify="right", width=7, no_wrap=True)
-    t.add_column("Premium",  justify="right", width=9, no_wrap=True)
-    t.add_column("Score",    justify="right", width=6, no_wrap=True)
-    t.add_column("Contracts",justify="right", width=9, no_wrap=True)
-    t.add_column("Source",   width=10, no_wrap=True)
+    # Results table. HELM-101 s84: the buy side gets its own column set --
+    # what a debit costs, what it must outrun, and how much of it is air.
+    _is_long_single = strategy in LONG_SINGLE_FAMILY
+
+    if _is_long_single:
+        t = Table(box=box.SIMPLE_HEAD, show_header=True, padding=(0,1), width=170)
+        t.add_column("#",         width=4, no_wrap=True)
+        t.add_column("Exp",       width=6, no_wrap=True)
+        t.add_column("DTE",       justify="right", width=5, no_wrap=True)
+        t.add_column("Strike",    justify="right", width=8, no_wrap=True)
+        t.add_column("Mid",       justify="right", width=7, no_wrap=True)
+        t.add_column("Spread%",   justify="right", width=8, no_wrap=True)
+        t.add_column("Delta",     justify="right", width=7, no_wrap=True)
+        t.add_column("θ/day",     justify="right", width=8, no_wrap=True)
+        t.add_column("IV%",       justify="right", width=5, no_wrap=True)
+        t.add_column("OI",        justify="right", width=7, no_wrap=True)
+        t.add_column("Cost",      justify="right", width=10, no_wrap=True)
+        t.add_column("B/E",       justify="right", width=8, no_wrap=True)
+        t.add_column("Move%",     justify="right", width=7, no_wrap=True)
+        t.add_column("ExpMv%",    justify="right", width=7, no_wrap=True)
+        t.add_column("BE/Exp",    justify="right", width=7, no_wrap=True)
+        t.add_column("Extr",      justify="right", width=9, no_wrap=True)
+        t.add_column("Score",     justify="right", width=6, no_wrap=True)
+        t.add_column("N",         justify="right", width=4, no_wrap=True)
+        t.add_column("Source",    width=9, no_wrap=True)
+    else:
+        t = Table(box=box.SIMPLE_HEAD, show_header=True, padding=(0,1), width=170)
+        t.add_column("Rank",     width=5, no_wrap=True)
+        t.add_column("Exp",      width=8, no_wrap=True)
+        t.add_column("DTE",      justify="right", width=5, no_wrap=True)
+        t.add_column("Strike",   justify="right", width=8, no_wrap=True)
+        t.add_column("Bid",      justify="right", width=6, no_wrap=True)
+        t.add_column("Ask",      justify="right", width=6, no_wrap=True)
+        t.add_column("Mid",      justify="right", width=6, no_wrap=True)
+        t.add_column("Spread%",  justify="right", width=8, no_wrap=True)
+        t.add_column("Delta",    justify="right", width=7, no_wrap=True)
+        t.add_column("Theta",    justify="right", width=7, no_wrap=True)
+        t.add_column("IV%",      justify="right", width=5, no_wrap=True)
+        t.add_column("OI",       justify="right", width=7, no_wrap=True)
+        t.add_column("Premium",  justify="right", width=9, no_wrap=True)
+        t.add_column("Score",    justify="right", width=6, no_wrap=True)
+        t.add_column("Contracts",justify="right", width=9, no_wrap=True)
+        t.add_column("Source",   width=10, no_wrap=True)
 
     for rank, c in enumerate(contracts, 1):
         # Suggest contracts
@@ -2818,28 +3138,79 @@ def run():
         # Rank indicator
         rank_str = "[green]#1[/green]" if rank == 1 else                    "[cyan]#2[/cyan]" if rank == 2 else                    "[yellow]#3[/yellow]" if rank == 3 else f"#{rank}"
 
-        t.add_row(
-            rank_str,
-            c["expiration"][5:],  # MM-DD
-            str(c["dte"]),
-            f"${c['strike']:.1f}",
-            f"${c['bid']:.2f}",
-            f"${c['ask']:.2f}",
-            f"${c['mid']:.2f}",
-            spread_str,
-            delta_str,
-            theta_str,
-            iv_str,
-            f"{c['oi']:,}",
-            premium_str,
-            score_str,
-            f"[bold]{suggested}[/bold]",
-            f"[dim]{c.get('source', 'yf')}[/dim]",
-        )
+        if _is_long_single:
+            # Cost is money leaving, so it is never green here.
+            cost_str = f"[red]${(c.get('premium_total') or c.get('mid',0)*100):,.0f}[/red]"
+            _th = abs(c.get("theta") or 0)
+            theta_day = f"[red]-${_th*100:,.0f}[/red]" if _th else "--"
+            be = c.get("breakeven")
+            be_str = f"${be:.2f}" if be else "--"
+            move_pct = ((be - spot) / spot * 100) if (be and spot) else None
+            move_str = f"{move_pct:+.1f}%" if move_pct is not None else "--"
+            em = c.get("exp_move")
+            em_str = f"{(em / spot * 100):.1f}%" if (em and spot) else "--"
+            br = c.get("be_ratio")
+            if br is None:
+                br_str = "--"
+            elif br <= 0.75:
+                br_str = f"[green]{br:.2f}x[/green]"
+            elif br <= 1.00:
+                br_str = f"[yellow]{br:.2f}x[/yellow]"
+            else:
+                br_str = f"[red]{br:.2f}x[/red]"
+            # Extrinsic = the part of the debit that is pure time value.
+            _k = c.get("strike") or 0
+            _intrinsic = (max(0.0, spot - _k) if c.get("opt_type") == "CALL"
+                          else max(0.0, _k - spot)) if spot else 0.0
+            _extr = (c.get("mid") or 0) - _intrinsic
+            extr_str = f"${_extr*100:,.0f}"
+
+            t.add_row(
+                rank_str,
+                c["expiration"][5:],  # MM-DD
+                str(c["dte"]),
+                f"${c['strike']:.1f}",
+                f"${c['mid']:.2f}",
+                spread_str,
+                delta_str,
+                theta_day,
+                iv_str,
+                f"{c['oi']:,}",
+                cost_str,
+                be_str,
+                move_str,
+                em_str,
+                br_str,
+                extr_str,
+                score_str,
+                f"[bold]{suggested}[/bold]",
+                f"[dim]{c.get('source', 'yf')}[/dim]",
+            )
+        else:
+            t.add_row(
+                rank_str,
+                c["expiration"][5:],  # MM-DD
+                str(c["dte"]),
+                f"${c['strike']:.1f}",
+                f"${c['bid']:.2f}",
+                f"${c['ask']:.2f}",
+                f"${c['mid']:.2f}",
+                spread_str,
+                delta_str,
+                theta_str,
+                iv_str,
+                f"{c['oi']:,}",
+                premium_str,
+                score_str,
+                f"[bold]{suggested}[/bold]",
+                f"[dim]{c.get('source', 'yf')}[/dim]",
+            )
 
     console.print(f"[bold]Top {len(contracts)} contracts — {ticker} {strategy}[/bold]")
     console.print()
     console.print(t)
+    if _is_long_single and LAST_LONG_REJECTS:
+        _summarize_long_rejects(compact=True)
     console.print()
 
     # Best contract summary
@@ -2847,17 +3218,51 @@ def run():
     suggested = suggest_contracts(strategy, best["strike"], best["mid"], account_id, ticker=ticker)
     total_premium = round(best["mid"] * 100 * suggested, 2)
 
-    console.print(Panel(
-        f"[bold green]Top pick:[/bold green] {ticker} {best['opt_type']} "
-        f"${best['strike']:.1f} {best['expiration']} ({best['dte']}d)\n"
-        f"  Mid: ${best['mid']:.2f}  |  Delta: {best.get('delta', '--')}  |  "
-        f"Spread: {best.get('spread_pct', '--')}%  |  OI: {best['oi']:,}\n"
-        f"  Suggested: [bold]{suggested} contract(s)[/bold] @ ${best['mid']:.2f} = "
-        f"[green]${total_premium:.0f} premium[/green]\n\n"
-        f"[dim]To open: [bold]helm open {ticker} {strategy} --confirm[/bold][/dim]",
-        title="Recommendation",
-        border_style="green"
-    ))
+    # HELM-110 s85: 0 means sizing DECLINED -- today only a covered call with no
+    # round lot behind it. Printing "0 contract(s) = $0 premium" would read as a
+    # rounding artefact rather than a refusal, so say what is actually wrong.
+    if suggested <= 0:
+        _size_line = (f"  [red]Not sizeable:[/red] stock_positions holds no "
+                      f"round lot for {ticker}, so this call would be naked "
+                      f"rather than covered\n")
+    elif _is_long_single:
+        _size_line = (f"  Suggested: [bold]{suggested} contract(s)[/bold] @ "
+                      f"${best['mid']:.2f} = [red]${total_premium:,.0f} cost "
+                      f"-- this is the max loss[/red]\n")
+    else:
+        _size_line = (f"  Suggested: [bold]{suggested} contract(s)[/bold] @ "
+                      f"${best['mid']:.2f} = "
+                      f"[green]${total_premium:.0f} premium[/green]\n")
+
+    if _is_long_single:
+        # HELM-101 s84: for a buyer that figure is the max loss, not income.
+        _be = best.get("breakeven")
+        _br = best.get("be_ratio")
+        _be_line = (f"  B/E: ${_be:.2f}"
+                    + (f"  ({((_be-spot)/spot*100):+.1f}% from spot)" if spot else "")
+                    + (f"  |  {_br:.2f}x the expected move" if _br else "")
+                    + "\n") if _be else ""
+        console.print(Panel(
+            f"[bold green]Top pick:[/bold green] {ticker} {best['opt_type']} "
+            f"${best['strike']:.1f} {best['expiration']} ({best['dte']}d)\n"
+            f"  Mid: ${best['mid']:.2f}  |  Delta: {best.get('delta', '--')}  |  "
+            f"Spread: {best.get('spread_pct', '--')}%  |  OI: {best['oi']:,}\n"
+            + _be_line + _size_line + "\n"
+            + f"[dim]To open: [bold]helm open {ticker} {strategy} --confirm[/bold][/dim]",
+            title="Recommendation",
+            border_style="green"
+        ))
+    else:
+        console.print(Panel(
+            f"[bold green]Top pick:[/bold green] {ticker} {best['opt_type']} "
+            f"${best['strike']:.1f} {best['expiration']} ({best['dte']}d)\n"
+            f"  Mid: ${best['mid']:.2f}  |  Delta: {best.get('delta', '--')}  |  "
+            f"Spread: {best.get('spread_pct', '--')}%  |  OI: {best['oi']:,}\n"
+            + _size_line + "\n"
+            + f"[dim]To open: [bold]helm open {ticker} {strategy} --confirm[/bold][/dim]",
+            title="Recommendation",
+            border_style="green"
+        ))
     console.print()
 
     # --confirm flow
