@@ -41,6 +41,26 @@ def _open_real_tickers() -> list:
         conn.close()
 
 
+def _watchlist_tickers(missing_only: bool = False) -> list:
+    """Active watchlist names; with missing_only, just the ungraded ones.
+
+    The grade is only ever shown on `helm check`'s CSP rows, and only for names
+    already in the book -- so a name you are *considering* has no grade until
+    someone asks for one. This is how you ask for a batch of them ahead of time.
+    An ungraded name is a data gap, never a verdict.
+    """
+    from helm.db import get_conn
+    conn = get_conn()
+    try:
+        sql = "SELECT ticker FROM watchlist WHERE active = 1"
+        if missing_only:
+            sql += (" AND NOT EXISTS (SELECT 1 FROM ownership_quality o "
+                    "WHERE o.ticker = watchlist.ticker)")
+        return [r[0] for r in conn.execute(sql + " ORDER BY ticker").fetchall()]
+    finally:
+        conn.close()
+
+
 def _verdict(res: dict) -> str:
     """Short verdict tag from the lean sentence (OWNABLE / MARGINAL / BAIL / ...)."""
     lean = res.get("lean", "")
@@ -118,13 +138,28 @@ def run() -> None:
         console.print("  helm quality                     grade every open real-book underlying")
         console.print("  helm quality TICKER [TICKER ...] grade specific tickers (detailed)")
         console.print("  helm quality --detail            detailed view for the whole book")
+        console.print("  helm quality --watchlist         grade every active watchlist name")
+        console.print("  helm quality --watchlist --missing   grade only the ungraded ones")
         console.print("  [dim]--json for machine-readable output[/dim]\n")
         return
 
     as_json = "--json" in args
     detail = "--detail" in args
+    watchlist = "--watchlist" in args
+    missing_only = "--missing" in args
     tickers = [a.upper() for a in args if not a.startswith("-")]
     explicit = bool(tickers)
+
+    if not tickers and watchlist:
+        tickers = _watchlist_tickers(missing_only=missing_only)
+        if not tickers:
+            console.print("[green]Every active watchlist name already has a "
+                          "grade.[/green]" if missing_only else
+                          "[yellow]No active watchlist names found.[/yellow]")
+            return
+        console.print(f"[dim]Grading {len(tickers)} "
+                      f"{'ungraded ' if missing_only else ''}active watchlist "
+                      f"name(s) — one network call each.[/dim]")
 
     if not tickers:
         tickers = _open_real_tickers()
