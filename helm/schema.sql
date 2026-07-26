@@ -914,3 +914,59 @@ BEGIN
      AND (entry_dte IS NULL
           OR entry_dte > CAST(julianday(NEW.expiration) - julianday(date(opened_at)) AS INTEGER));
 END;
+
+
+-- ---------------------------------------------------------------------------
+-- W4 (s86, 2026-07-26): three tables the live DB has had for weeks and this
+-- file did not, so HELM-002's "faithfully builds live" claim was no longer
+-- true. DDL copied verbatim from the live sqlite_master.
+--
+-- check_exit_flags / check_kept_hist are ALSO created at runtime by
+-- helm/exit_monitor.py::_ensure() (CREATE TABLE IF NOT EXISTS, called from
+-- evaluate()), so a rebuilt database self-heals on the first `helm check` and
+-- the exit monitor does NOT fail without them. They belong here anyway: a
+-- schema file that omits a third of the check-side tables is not a description
+-- of the database. NOTE THE DUAL DEFINITION -- change one, change the other.
+--
+-- stop_arm_events is the HELM-030 stop A/B recorder. It holds 198 rows frozen
+-- 2026-06-29..2026-07-02 and has NO writer anywhere in live code (the recorder
+-- lived in the retired paper_manage path; decision.evaluate_arms is still
+-- defined but is called by nothing). Kept in the schema so a rebuild does not
+-- silently lose the data model for the experiment HELM-030 is waiting on --
+-- but see HELM-030: what it is waiting for stopped accruing on 2026-07-02.
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS check_exit_flags (
+    position_id   TEXT PRIMARY KEY,
+    flag_kept_pct REAL NOT NULL,
+    flag_date     TEXT NOT NULL,
+    created_at    TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS check_kept_hist (
+    position_id  TEXT NOT NULL,
+    session_date TEXT NOT NULL,
+    kept_pct     REAL NOT NULL,
+    PRIMARY KEY (position_id, session_date)
+);
+
+CREATE TABLE IF NOT EXISTS stop_arm_events (
+    id                TEXT PRIMARY KEY,             -- '{position_id}:{arm}'
+    position_id       TEXT NOT NULL REFERENCES positions(id),
+    arm               TEXT NOT NULL,                -- no_stop | ml_50 | ml_75 | cr_2x | cr_3x
+    basis             TEXT NOT NULL,                -- MAX_LOSS | CREDIT_MULT
+    threshold_dollars REAL,                         -- frozen at entry; NULL for no_stop
+    triggered_ts      TEXT,                         -- first-touch tick ts; NULL if never
+    pnl_at_trigger    REAL,                         -- pnl at first-touch
+    natural_exit_ts   TEXT,                         -- acting (no-stop) close ts
+    natural_exit_pnl  REAL,                         -- realized pnl at natural exit
+    status            TEXT NOT NULL DEFAULT 'ACTIVE',  -- ACTIVE | CLOSED
+    created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at        TEXT NOT NULL DEFAULT (datetime('now')),
+    CHECK (arm    IN ('no_stop','ml_50','ml_75','cr_2x','cr_3x')),
+    CHECK (basis  IN ('MAX_LOSS','CREDIT_MULT')),
+    CHECK (status IN ('ACTIVE','CLOSED'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_sae_position ON stop_arm_events(position_id);
+CREATE INDEX IF NOT EXISTS idx_sae_status   ON stop_arm_events(status);
