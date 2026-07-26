@@ -32,7 +32,7 @@ COMMANDS = {
     'stock':     ('helm.cli.stock_cmd',     'run', 'Manage stock positions for covered call sizing'),
     'status':    ('helm.cli.status_cmd',    'run', 'Portfolio dashboard — positions, P&L, activity'),
     'paper':     ('helm.cli.paper_cmd',   'run',  'Paper book — generate picks from the latest scan'),
-    'restart':   ('helm.cli.server_cmd',   'run', 'Restart the HELM server (launchd com.helm.server)'),
+    'restart':   ('helm.cli.server_cmd',   'run', 'Restart a HELM service — pg (web dashboard) | trial | all; default engine server'),
 }
 
 def print_help():
