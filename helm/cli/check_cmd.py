@@ -991,41 +991,197 @@ def _ic_tested(a, pos, legs):
     return (side, buf / spot * 100, be_buf / spot * 100, sp_K, sc_K)
 
 
-# ---- portfolio pulse header ------------------------------------------------
-def _pulse_header(rows):
-    """rows: list of dicts with keys ticker, family, pnl (a['pnl_mtm'])."""
-    pnls = [r["pnl"] for r in rows if r["pnl"] is not None]
-    total = sum(pnls) if pnls else 0
-    up = sum(1 for p in pnls if p > 0)
-    down = sum(1 for p in pnls if p <= 0)
+# ---- portfolio pulse: one computation, two surfaces ------------------------
+# W9 (s86): the CLI computed these inline and helm-pg re-derived them in its own
+# mirror, so the two could drift silently. This is now the single source; PG
+# imports it. Read-only and defensive throughout -- anything that cannot be
+# computed comes back None and the card degrades to "--" rather than taking the
+# whole panel down.
+#
+# Risk basis follows the HELM-023 convention Outcomes already uses:
+#   CSP          -> strike x 100 x contracts (the collateral actually tied up)
+#   defined risk -> max_loss
+#   long premium -> the debit paid
+def _position_risk(pos, legs):
+    """Capital genuinely committed by one position."""
+    try:
+        if (pos.get("strategy") or "") == "CSP":
+            return sum((l.get("strike") or 0) * 100 * (l.get("contracts") or 1)
+                       for l in legs if l.get("direction") == "SHORT")
+        if pos.get("max_loss"):
+            return abs(float(pos["max_loss"]))
+        return abs(float(pos.get("net_premium") or 0))
+    except (TypeError, ValueError):
+        return 0.0
 
-    # concentration: largest strategy-family share of total drawdown.
-    # NOTE: this is a strategy-group proxy for the hand-identified "correlated
-    # cluster" (e.g. spec-name CSPs). A thematic-ticker map would sharpen it --
-    # flagged for Russ (see accompanying notes).
-    draw = {}
+
+def portfolio_pulse(rows, account_id=None):
+    """Portfolio-wide aggregates for the pulse header.
+
+    `rows` are the check rows (ticker, pos, legs, a, family, pnl, beta).
+    Returns a plain dict, so the CLI can render it with rich and the web app can
+    serialise it without either surface owning the arithmetic.
+    """
+    import datetime as _dt
+
+    out = {"n": len(rows), "total_pnl": 0.0, "capital_at_work": 0.0,
+           "capital_pct": None, "uncommitted": None, "portfolio_value": None,
+           "assigned_value": 0.0, "assigned_pct": None,
+           "pnl_pct_of_capital": None, "concentration": None,
+           "net_greeks": None, "earnings": [], "manage": [], "next_expiry": None}
+
+    pnls = [r["pnl"] for r in rows if r["pnl"] is not None]
+    out["total_pnl"] = sum(pnls) if pnls else 0.0
+
+    # --- capital committed ---------------------------------------------------
+    for r in rows:
+        pos, legs = r.get("pos") or {}, r.get("legs") or []
+        risk = _position_risk(pos, legs)
+        out["capital_at_work"] += risk
+        if (pos.get("strategy") or "") == "CSP":
+            out["assigned_value"] += risk
+
+    earn_map = {}
+    pv = None
+    try:
+        conn = get_conn()
+        try:
+            acct = account_id or get_active_account()
+            row = conn.execute(
+                "SELECT portfolio_value FROM accounts WHERE id = ?", (acct,)).fetchone()
+            pv = float(row[0]) if row and row[0] else None
+            earn_map = {w[0]: w[1] for w in conn.execute(
+                "SELECT ticker, next_earnings FROM watchlist "
+                "WHERE next_earnings IS NOT NULL").fetchall()}
+        finally:
+            conn.close()
+    except Exception:
+        pass
+
+    if pv:
+        out["portfolio_value"] = pv
+        out["capital_pct"] = out["capital_at_work"] / pv * 100
+        out["uncommitted"] = pv - out["capital_at_work"]
+        out["assigned_pct"] = out["assigned_value"] / pv * 100
+    if out["capital_at_work"]:
+        out["pnl_pct_of_capital"] = out["total_pnl"] / out["capital_at_work"] * 100
+
+    # --- what is about to want attention ------------------------------------
+    today = _dt.date.today()
+    for r in rows:
+        legs = r.get("legs") or []
+        exps = [str(l.get("expiration"))[:10] for l in legs if l.get("expiration")]
+        if not exps:
+            continue
+        try:
+            first = _dt.date.fromisoformat(min(exps))
+        except ValueError:
+            continue
+        d = (first - today).days
+        if d <= 21:
+            out["manage"].append({"ticker": r["ticker"], "dte": d})
+        elif out["next_expiry"] is None or d < out["next_expiry"]["dte"]:
+            out["next_expiry"] = {"ticker": r["ticker"], "dte": d}
+        ed = earn_map.get(r["ticker"])
+        if ed:
+            try:
+                edd = _dt.date.fromisoformat(str(ed)[:10])
+            except (ValueError, TypeError):
+                continue
+            # A print BETWEEN now and expiry is the one that matters: the IV
+            # ramp and the gap both land while the position is still open.
+            if today <= edd <= first:
+                out["earnings"].append({"ticker": r["ticker"],
+                                        "date": edd.isoformat(),
+                                        "days": (edd - today).days})
+    out["manage"].sort(key=lambda x: x["dte"])
+    out["earnings"].sort(key=lambda x: x["days"])
+
+    # --- concentration: share of DRAWDOWN, not of capital --------------------
+    # The label matters. This has always measured which family holds most of the
+    # current loss, but read as a share of capital it misleads badly: long calls
+    # can be 58% of the drawdown while being 6% of the money at risk. Both
+    # numbers are returned now so the surface can say which one it means.
+    draw, fam_cap = {}, {}
     for r in rows:
         if r["pnl"] is not None and r["pnl"] < 0:
             draw[r["family"]] = draw.get(r["family"], 0) + r["pnl"]
-    conc_pct = conc_lbl = None
+        fam_cap[r["family"]] = fam_cap.get(r["family"], 0) + _position_risk(
+            r.get("pos") or {}, r.get("legs") or [])
     total_draw = sum(draw.values())
     if total_draw < 0:
         fam, worst = min(draw.items(), key=lambda kv: kv[1])
-        conc_pct = round(worst / total_draw * 100)
         n = sum(1 for r in rows if r["family"] == fam and (r["pnl"] or 0) < 0)
-        conc_lbl = f"{n} {_FAMILY_META[fam][1]} ({_money(worst)})"
+        out["concentration"] = {
+            "pct": round(worst / total_draw * 100), "family": fam,
+            "label": _FAMILY_META[fam][0], "code": _FAMILY_META[fam][1],
+            "n": n, "drawdown": worst,
+            "capital_pct": (round(fam_cap.get(fam, 0) / out["capital_at_work"] * 100)
+                            if out["capital_at_work"] else None),
+        }
+    return out
+
+
+# ---- portfolio pulse header ------------------------------------------------
+def _pulse_header(rows):
+    """rows: list of dicts with keys ticker, family, pnl (a['pnl_mtm'])."""
+    P = portfolio_pulse(rows)
+    total = P["total_pnl"]
 
     pnl_col = "green" if total >= 0 else "red"
+    _pnl_sub = (f"{P['pnl_pct_of_capital']:+.1f}% of capital at work"
+                if P["pnl_pct_of_capital"] is not None
+                else f"{len(rows)} open positions")
     card_pnl = (f"[dim]open p&l[/dim]\n[bold {pnl_col}]"
                 f"{'+' if total>=0 else '-'}${abs(total):,.0f}[/bold {pnl_col}]\n"
-                f"[dim]{len(rows)} open positions[/dim]")
-    card_pos = (f"[dim]positions[/dim]\n[bold]{up} up · {down} down[/bold]\n"
-                f"[dim]by open p&l[/dim]")
-    if conc_pct is not None:
-        card_con = (f"[dim]concentration[/dim]\n[bold]{conc_pct}%[/bold]\n"
-                    f"[dim]largest {_FAMILY_META[fam][0].lower()} cluster[/dim]")
+                f"[dim]{_pnl_sub}[/dim]")
+
+    # W9: replaces the up/down count. "6 up · 13 down" is the expected shape of
+    # a premium book mid-life and cannot tell a position 2% down from one 90%
+    # down -- it was the card least able to change a decision. How much of the
+    # account is committed, and how much is not, is the number that answers
+    # "can I take the next trade".
+    if P["capital_pct"] is not None:
+        card_cap = (f"[dim]capital at work[/dim]\n"
+                    f"[bold]${P['capital_at_work']:,.0f}[/bold]\n"
+                    f"[dim]{P['capital_pct']:.0f}% · ${P['uncommitted']:,.0f} free"
+                    + (f" · ${P['assigned_value']:,.0f} if assigned"
+                       if P["assigned_value"] else "") + "[/dim]")
     else:
-        card_con = "[dim]concentration[/dim]\n[bold]--[/bold]\n[dim]no drawdown[/dim]"
+        card_cap = (f"[dim]capital at work[/dim]\n"
+                    f"[bold]${P['capital_at_work']:,.0f}[/bold]\n"
+                    f"[dim]{len(rows)} open positions[/dim]")
+
+    # W9: say WHICH share this is. It has always been the share of the current
+    # drawdown, but "58% largest long calls cluster" reads as a capital share,
+    # and by capital that sleeve is nearer 6%.
+    c = P["concentration"]
+    if c:
+        _cap = (f" · {c['capital_pct']}% of capital"
+                if c.get("capital_pct") is not None else "")
+        card_con = (f"[dim]drawdown concentration[/dim]\n[bold]{c['pct']}%[/bold]\n"
+                    f"[dim]{c['n']} {c['label'].lower()}{_cap}[/dim]")
+    else:
+        card_con = "[dim]drawdown concentration[/dim]\n[bold]--[/bold]\n[dim]no drawdown[/dim]"
+
+    # W9: what is about to want attention. Deliberately quiet -- with nothing
+    # inside 21 days and no print before an expiry this reads "clear", which is
+    # what keeps it worth reading on the days it does not.
+    _e, _m = P["earnings"], P["manage"]
+    if _e or _m:
+        _head = " · ".join(
+            ([f"{len(_e)} earnings"] if _e else []) +
+            ([f"{len(_m)} at ≤21d"] if _m else []))
+        _bits = [f"{x['ticker']} {x['date'][5:]}" for x in _e[:3]]
+        if not _bits:
+            _bits = [f"{x['ticker']} {x['dte']}d" for x in _m[:3]]
+        card_soon = (f"[dim]coming up[/dim]\n[bold yellow]{_head}[/bold yellow]\n"
+                     f"[dim]{' · '.join(_bits)}[/dim]")
+    else:
+        _nx = P["next_expiry"]
+        card_soon = (f"[dim]coming up[/dim]\n[bold]clear[/bold]\n[dim]"
+                     + (f"next: {_nx['ticker']} in {_nx['dte'] - 21}d"
+                        if _nx else "nothing scheduled") + "[/dim]")
 
     _nth = _nvg = _bwd = 0.0
     _has_g = False
@@ -1045,14 +1201,23 @@ def _pulse_header(rows):
     def _gk(v):
         return ("+" if v >= 0 else "-") + "$" + format(abs(v) / 1000, ",.0f") + "k"
     if _has_g:
-        card_grk = ("[dim]net greeks (β-wtd)[/dim]\n[bold]Δ " + _gk(_bwd) + "[/bold]\n[dim]θ " + _gs(_nth) + "/day · ν " + _gs(_nvg) + "[/dim]")
+        # W9: give the greeks their denominators. "Δ +$488k" begs "against
+        # what?" -- as a share of the account it is directly comparable over
+        # time, and theta reads better as the monthly income it actually is.
+        _pv = P.get("portfolio_value")
+        _dsub = f" · {_bwd / _pv * 100:.0f}% net long" if _pv else ""
+        card_grk = ("[dim]net greeks (β-wtd)[/dim]\n[bold]Δ " + _gk(_bwd)
+                    + f"[/bold]{_dsub}\n[dim]θ " + _gs(_nth) + "/day ("
+                    + _gs(_nth * 21) + "/mo) · ν " + _gs(_nvg) + "[/dim]")
     else:
         card_grk = "[dim]net greeks[/dim]\n[bold]— *[/bold]\n[dim]no live greeks[/dim]"
+    _soon_col = "yellow" if (P["earnings"] or P["manage"]) else "cyan"
     console.print(Columns(
         [Panel(card_pnl, border_style=pnl_col, width=26),
-         Panel(card_pos, border_style="cyan", width=26),
+         Panel(card_cap, border_style="cyan", width=34),
          Panel(card_con, border_style="yellow", width=30),
-         Panel(card_grk, border_style="magenta", width=34)],
+         Panel(card_soon, border_style=_soon_col, width=30),
+         Panel(card_grk, border_style="magenta", width=38)],
         equal=False, expand=False,
     ))
     console.print()
