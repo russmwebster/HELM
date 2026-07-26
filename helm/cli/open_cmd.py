@@ -2553,6 +2553,24 @@ def evaluate_diagonals(ticker: str, strategy: str, config: dict,
     max_debit_pct = config.get("max_debit_pct", 0.75)
     is_put = (str(side).upper() == "PUT")
 
+    # HELM-109 (s85, Russ): the entry-runway invariant (HELM-106) applies here
+    # too. This was the one evaluate_* that never called _entry_dte_floor, so a
+    # diagonal could open inside its own management window. It binds on the
+    # SHORT leg -- that is the leg carrying the exit threshold; the long back
+    # leg is structural and is not managed to a DTE line.
+    #
+    # Sequencing matters: DIAGONAL/DIAGONAL_PUT carried dte_exit_threshold = 30,
+    # which would have floored entry at 37 against a 21-45 short window and
+    # quietly reshaped the strategy. The threshold was re-based to 21 first
+    # (s85, matching PMCC), so the floor lands at 28 and the sweet spot at 30
+    # still routes. A front leg designed to live 21-45 days and be managed by
+    # rolling should not carry an exit gate that fires before it is halfway
+    # through its intended life.
+    #
+    # Still unwired here (HELM-109 tail): dte_target is ignored by this
+    # function, so `helm open X DIAGONAL --dte N` does not retarget the legs.
+    s_dte_min = _entry_dte_floor(strategy, s_dte_min)
+
     tk = yf.Ticker(ticker)
     spot = getattr(tk.fast_info, "last_price", None)
     if not spot:

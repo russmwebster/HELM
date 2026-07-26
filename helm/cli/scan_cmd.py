@@ -259,6 +259,13 @@ def bias_to_strategy(score: int, rsi=None, ivr=None, ivp=None):
     actually INCREASED condor count (29 -> 31 on the 7/24 board) by pushing
     de-ranked names into the one structure currently losing money. Those
     fallbacks now require rich vol like every other credit structure.
+
+    HELM-111 (s85, Russ): the two BULLISH fall-throughs did NOT, which made the
+    paragraph above false for them -- BULL_PUT_SPREAD had become the catch-all
+    still selling cheap vol (128 routings in the 45 days to 2026-07-26, zero at
+    IVR>=50, and never once booked). Both now return NO_EDGE_VOL, so every
+    credit route in this function is gated on the same condition. The DIAGONAL
+    route at moderate vol survives: it is not a credit structure.
     """
     ivr_val = float(ivr) if ivr is not None else None
     ivp_val = float(ivp) if ivp is not None else None
@@ -277,12 +284,12 @@ def bias_to_strategy(score: int, rsi=None, ivr=None, ivp=None):
     if score >= 2:  # Bullish
         if ivr_rich:
             return 'CSP', 'Bullish bias + rich vol (IVR>=50, IVP>=50) — cash-secured put'
-        if ivr_cheap:
-            # Selling a credit spread into IVR<15 is selling cheap premium, which
-            # is the thing this whole gate exists to stop. The mildly-bullish
-            # branch already guarded this; the strongly-bullish one did not.
-            return NO_EDGE
-        return 'BULL_PUT_SPREAD', 'Bullish bias, vol not rich — defined-risk credit spread'
+        # HELM-111 (s85, Russ): the bullish fall-through is gated on vol like
+        # every other credit structure. It was the last route selling cheap
+        # premium -- 128 routings in the 45 days to 2026-07-26, none of them at
+        # IVR>=50 -- which is precisely what HELM-105 exists to stop. BPS had
+        # never been booked in either book, so nothing realized is given up.
+        return NO_EDGE
 
     elif score == 1:  # Mildly bullish
         if ivr_rich:
@@ -291,7 +298,10 @@ def bias_to_strategy(score: int, rsi=None, ivr=None, ivp=None):
             return 'DIAGONAL', 'Mildly bullish + moderate vol + momentum — diagonal spread'
         if ivr_cheap:
             return NO_BUY
-        return 'BULL_PUT_SPREAD', 'Mildly bullish — defined risk spread preferred'
+        # HELM-111 (s85, Russ): same gate as the strongly-bullish branch above.
+        # The DIAGONAL route at moderate vol + momentum is untouched -- this
+        # closes the credit-spread fall-through only.
+        return NO_EDGE
 
     elif score == 0:  # Neutral
         if ivr_rich:
