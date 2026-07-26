@@ -1015,6 +1015,70 @@ def _position_risk(pos, legs):
         return 0.0
 
 
+# ---- earnings, per position (W11) ------------------------------------------
+# ONE source: positions.earnings_date, refreshed on the pre-market ivr run
+# (helm.earnings._refresh_earnings), populated on 90 of 93 open positions.
+# The pulse card previously read watchlist.next_earnings instead, and the two
+# disagreed on six open positions -- HON and RTX among them, where the POSITION
+# row held the fresher date and the watchlist cache had gone stale. Two sources
+# for one fact on one screen is the defect W9 removed from the pulse arithmetic;
+# this removes the same shape from the earnings read.
+#
+# Display only. Nothing here gates, blocks or refuses an entry: the question a
+# trader asks of this column is "is a print due while I still hold this", and
+# the answer is information, not permission.
+def _earnings_state(pos, legs, today=None):
+    """(iso_date, days_to, before_expiry) for one position, from its own row.
+
+    before_expiry is True when the print lands between today and the nearest
+    leg expiry -- the case that matters, since the IV ramp and the gap both
+    arrive while the position is still open. It is None when there is no
+    expiry to compare against, which is not the same as False.
+
+    A stored date that has already passed is returned with a negative days
+    figure rather than discarded: "no date on file" and "the date we had has
+    gone by" are different states and must not render identically.
+    """
+    import datetime as _dt
+    today = today or _dt.date.today()
+    raw = (pos or {}).get("earnings_date")
+    if not raw:
+        return (None, None, None)
+    try:
+        ed = _dt.date.fromisoformat(str(raw)[:10])
+    except (ValueError, TypeError):
+        return (None, None, None)
+    exps = [str(l.get("expiration"))[:10] for l in (legs or []) if l.get("expiration")]
+    before = None
+    if exps:
+        try:
+            before = today <= ed <= _dt.date.fromisoformat(min(exps))
+        except ValueError:
+            before = None
+    return (ed.isoformat(), (ed - today).days, before)
+
+
+def _earn_cell(pos, legs):
+    """Positions-table cell. '07-29 (3d) !' when the print falls before expiry.
+
+    Never blank, and never colour. A blank would read as "no earnings risk"
+    where it may mean "no date on file" -- the same reason the entry banner in
+    helm/earnings.py prints 'unknown' rather than nothing. The distinction is
+    carried by weight instead: the rows that matter render plain, everything
+    else dim, so the eye finds them without spending a colour. Dates are
+    unconfirmed yfinance estimates throughout.
+    """
+    ed, days, before = _earnings_state(pos, legs)
+    if ed is None:
+        return "[dim]no date[/dim]"
+    stamp = ed[5:]                       # MM-DD: the year is never in question
+    if days < 0:
+        return f"[dim]{stamp} passed[/dim]"
+    if before:
+        return f"{stamp} ({days}d) [bold]![/bold]"
+    return f"[dim]{stamp} ({days}d)[/dim]"
+
+
 def portfolio_pulse(rows, account_id=None):
     """Portfolio-wide aggregates for the pulse header.
 
@@ -1028,7 +1092,8 @@ def portfolio_pulse(rows, account_id=None):
            "capital_pct": None, "uncommitted": None, "portfolio_value": None,
            "assigned_value": 0.0, "assigned_pct": None,
            "pnl_pct_of_capital": None, "concentration": None,
-           "net_greeks": None, "earnings": [], "manage": [], "next_expiry": None}
+           "net_greeks": None, "earnings": [], "manage": [], "next_expiry": None,
+           "earnings_unknown": []}
 
     pnls = [r["pnl"] for r in rows if r["pnl"] is not None]
     out["total_pnl"] = sum(pnls) if pnls else 0.0
@@ -1041,7 +1106,6 @@ def portfolio_pulse(rows, account_id=None):
         if (pos.get("strategy") or "") == "CSP":
             out["assigned_value"] += risk
 
-    earn_map = {}
     pv = None
     try:
         conn = get_conn()
@@ -1050,9 +1114,6 @@ def portfolio_pulse(rows, account_id=None):
             row = conn.execute(
                 "SELECT portfolio_value FROM accounts WHERE id = ?", (acct,)).fetchone()
             pv = float(row[0]) if row and row[0] else None
-            earn_map = {w[0]: w[1] for w in conn.execute(
-                "SELECT ticker, next_earnings FROM watchlist "
-                "WHERE next_earnings IS NOT NULL").fetchall()}
         finally:
             conn.close()
     except Exception:
@@ -1082,20 +1143,23 @@ def portfolio_pulse(rows, account_id=None):
             out["manage"].append({"ticker": r["ticker"], "dte": d})
         elif out["next_expiry"] is None or d < out["next_expiry"]["dte"]:
             out["next_expiry"] = {"ticker": r["ticker"], "dte": d}
-        ed = earn_map.get(r["ticker"])
-        if ed:
-            try:
-                edd = _dt.date.fromisoformat(str(ed)[:10])
-            except (ValueError, TypeError):
-                continue
+        # W11: read from the position row, the same source the table cell uses,
+        # so the header count and the ticked rows can never disagree.
+        ed, e_days, e_before = _earnings_state(r.get("pos") or {}, legs, today)
+        if ed and e_before:
             # A print BETWEEN now and expiry is the one that matters: the IV
             # ramp and the gap both land while the position is still open.
-            if today <= edd <= first:
-                out["earnings"].append({"ticker": r["ticker"],
-                                        "date": edd.isoformat(),
-                                        "days": (edd - today).days})
+            out["earnings"].append({"ticker": r["ticker"], "date": ed,
+                                    "days": e_days})
+        elif ed is None or (e_days is not None and e_days < 0):
+            # Counted, not hidden. Without this the card's silence about the
+            # other positions reads as "those are clear" when some of them are
+            # simply unmeasured -- the failure mode this whole item existed to
+            # fix, reintroduced one level up.
+            out["earnings_unknown"].append(r["ticker"])
     out["manage"].sort(key=lambda x: x["dte"])
     out["earnings"].sort(key=lambda x: x["days"])
+    out["earnings_unknown"] = sorted(set(out["earnings_unknown"]))
 
     # --- concentration: share of DRAWDOWN, not of capital --------------------
     # The label matters. This has always measured which family holds most of the
@@ -1168,20 +1232,33 @@ def _pulse_header(rows):
     # inside 21 days and no print before an expiry this reads "clear", which is
     # what keeps it worth reading on the days it does not.
     _e, _m = P["earnings"], P["manage"]
+    # W11: positions whose earnings date is missing or has gone by. Carried on
+    # the card because a count of what IS known, presented alone, implies the
+    # rest were checked and found clear.
+    _u = P.get("earnings_unknown") or []
     if _e or _m:
         _head = " · ".join(
             ([f"{len(_e)} earnings"] if _e else []) +
             ([f"{len(_m)} at ≤21d"] if _m else []))
-        _bits = [f"{x['ticker']} {x['date'][5:]}" for x in _e[:3]]
+        _cap = 2 if _u else 3
+        _bits = [f"{x['ticker']} {x['date'][5:]}" for x in _e[:_cap]]
         if not _bits:
-            _bits = [f"{x['ticker']} {x['dte']}d" for x in _m[:3]]
+            _bits = [f"{x['ticker']} {x['dte']}d" for x in _m[:_cap]]
+        if _u:
+            _bits.append(f"{len(_u)} no date")
         card_soon = (f"[dim]coming up[/dim]\n[bold yellow]{_head}[/bold yellow]\n"
                      f"[dim]{' · '.join(_bits)}[/dim]")
     else:
         _nx = P["next_expiry"]
-        card_soon = (f"[dim]coming up[/dim]\n[bold]clear[/bold]\n[dim]"
-                     + (f"next: {_nx['ticker']} in {_nx['dte'] - 21}d"
-                        if _nx else "nothing scheduled") + "[/dim]")
+        _tail = (f"next: {_nx['ticker']} in {_nx['dte'] - 21}d"
+                 if _nx else "nothing scheduled")
+        if _u:
+            _tail += f" · {len(_u)} no date"
+        # "clear" is a claim that everything was measured. With dates missing
+        # the honest version is weaker, and says so.
+        card_soon = (f"[dim]coming up[/dim]\n[bold]"
+                     + ("clear" if not _u else "clear so far") + "[/bold]\n"
+                     f"[dim]{_tail}[/dim]")
 
     _nth = _nvg = _bwd = 0.0
     _has_g = False
@@ -1314,7 +1391,7 @@ def _own_cell(ticker):
 
 
 def _render_csp(rows):
-    t = _tbl([("ticker", dict(style="bold cyan", no_wrap=True)), ("dte", _R),
+    t = _tbl([("ticker", dict(style="bold cyan", no_wrap=True)), ("dte", _R), ("earnings", _R),
               ("spot", _R), ("strike", _R), ("Δ put", _R), ("θ/ν", _R), ("buf% s/be", _R), ("kept%", _R),
               ("extr", _R), ("p&l", _R), ("credit", _R), ("IVR", _R), ("b/e", _R), ("own", dict(justify="center", no_wrap=True))])
     # sort by |delta| desc (danger first); None deltas sink
@@ -1326,7 +1403,7 @@ def _render_csp(rows):
         be_val = (prim.get("strike") - cps) if prim.get("strike") else None
         extr = _extrinsic(a)
         t.add_row(
-            r["ticker"], _dte_cell(r["_dte"]), _spot_cell(a.get("underlying_price")), _spot_cell(prim.get("strike")), _delta_cell(r["_delta"]), _greek_cell(a, r["legs"], pos),
+            r["ticker"], _dte_cell(r["_dte"]), _earn_cell(pos, r["legs"]), _spot_cell(a.get("underlying_price")), _spot_cell(prim.get("strike")), _delta_cell(r["_delta"]), _greek_cell(a, r["legs"], pos),
             _buf_stack(sp, be), _kept_cell(a.get("pnl_pct")),
             f"{extr:.2f}" if extr is not None else "—",
             _money(a.get("pnl_mtm")),
@@ -1366,7 +1443,7 @@ def _net_delta_cell(v):
 
 
 def _render_credit(rows):
-    t = _tbl([("ticker", dict(style="bold cyan", no_wrap=True)), ("dte", _R),
+    t = _tbl([("ticker", dict(style="bold cyan", no_wrap=True)), ("dte", _R), ("earnings", _R),
               ("spot", _R), ("strike", _R), ("Δ short", _R), ("θ/ν", _R), ("buf% s/be", _R), ("kept%", _R),
               ("p&l", _R), ("credit", _R), ("max loss", _R), ("IVR", _R), ("b/e", _R)])
     rows.sort(key=lambda r: (r["a"].get("pnl_pct") is None, r["a"].get("pnl_pct") or 0))
@@ -1377,7 +1454,7 @@ def _render_credit(rows):
         _w = _vert_width(r["legs"])
         be_val = pos.get("breakeven_high") or pos.get("breakeven_low")
         t.add_row(
-            r["ticker"], _dte_cell(r["_dte"]), _spot_cell(a.get("underlying_price")), _spot_cell(sl.get("strike") if sl else None), _delta_cell(_leg_delta(a, sl)), _greek_cell(a, r["legs"], pos),
+            r["ticker"], _dte_cell(r["_dte"]), _earn_cell(pos, r["legs"]), _spot_cell(a.get("underlying_price")), _spot_cell(sl.get("strike") if sl else None), _delta_cell(_leg_delta(a, sl)), _greek_cell(a, r["legs"], pos),
             _buf_stack(sp, be), _kept_cell(a.get("pnl_pct")),
             _money(a.get("pnl_mtm")),
             f"${abs(pos.get('net_premium') or 0):,.0f}",
@@ -1459,7 +1536,7 @@ def _render_ic_strips(rows):
 
 
 def _render_ic(rows):
-    t = _tbl([("ticker", dict(style="bold cyan", no_wrap=True)), ("dte", _R),
+    t = _tbl([("ticker", dict(style="bold cyan", no_wrap=True)), ("dte", _R), ("earnings", _R),
               ("spot", _R), ("tested", _R), ("buf% s/be", _R), ("net Δ", _R), ("θ/ν", _R), ("kept%", _R),
               ("p&l", _R), ("short p/c", _R), ("max loss", _R), ("IVR", _R), ("b/e lo–hi", _R)])
     keyed = []
@@ -1474,7 +1551,7 @@ def _render_ic(rows):
         blo, bhi = pos.get("breakeven_low"), pos.get("breakeven_high")
         _w = _ic_width(r["legs"])
         t.add_row(
-            r["ticker"], _dte_cell(r["_dte"]), _spot_cell(a.get("underlying_price")), side or "—",
+            r["ticker"], _dte_cell(r["_dte"]), _earn_cell(pos, r["legs"]), _spot_cell(a.get("underlying_price")), side or "—",
             _buf_stack(buf, be), _net_delta_cell(_net_delta(a, r["legs"])), _greek_cell(a, r["legs"], pos),
             _kept_cell(a.get("pnl_pct")), _money(a.get("pnl_mtm")),
             (f"{sp_K:.0f}p / {sc_K:.0f}c" if sp_K and sc_K else "—"),
@@ -1486,7 +1563,7 @@ def _render_ic(rows):
     _render_ic_strips(keyed)
 
 def _render_longcall(rows):
-    t = _tbl([("ticker", dict(style="bold cyan", no_wrap=True)), ("dte", _R),
+    t = _tbl([("ticker", dict(style="bold cyan", no_wrap=True)), ("dte", _R), ("earnings", _R),
               ("spot", _R), ("strike", _R), ("Δ", _R), ("θ/ν", _R), ("vs strike / be", _R), ("extr", _R),
               ("p&l", _R), ("debit", _R), ("b/e", _R), ("iv", _R), ("IVR", _R)])
     rows.sort(key=lambda r: (r["_delta"] is None, abs(r["_delta"] or 0)))
@@ -1505,7 +1582,7 @@ def _render_longcall(rows):
         extr = _extrinsic(a)
         iv = (a.get("opt_data") or {}).get("iv")
         t.add_row(
-            r["ticker"], _dte_cell(r["_dte"]), _spot_cell(a.get("underlying_price")), _spot_cell(prim.get("strike")), _delta_cell(r["_delta"]), _greek_cell(a, r["legs"], pos),
+            r["ticker"], _dte_cell(r["_dte"]), _earn_cell(pos, r["legs"]), _spot_cell(a.get("underlying_price")), _spot_cell(prim.get("strike")), _delta_cell(r["_delta"]), _greek_cell(a, r["legs"], pos),
             vs, f"{extr:.2f}" if extr is not None else "—",
             _money(a.get("pnl_mtm")),
             f"-${abs(pos.get('net_premium') or 0):,.0f}",
@@ -1517,11 +1594,12 @@ def _render_longcall(rows):
 
 def _render_other(rows):
     t = _tbl([("ticker", dict(style="bold cyan", no_wrap=True)), ("strategy", dict(no_wrap=True)),
-              ("dte", _R), ("spot", _R), ("kept%", _R), ("p&l", _R), ("credit/debit", _R)])
+              ("dte", _R), ("earnings", _R), ("spot", _R), ("kept%", _R), ("p&l", _R), ("credit/debit", _R)])
     rows.sort(key=lambda r: (r["a"].get("pnl_mtm") is None, r["a"].get("pnl_mtm") or 0))
     for r in rows:
         a, pos = r["a"], r["pos"]
-        t.add_row(r["ticker"], pos.get("strategy", ""), _dte_cell(r["_dte"]), _spot_cell(a.get("underlying_price")),
+        t.add_row(r["ticker"], pos.get("strategy", ""), _dte_cell(r["_dte"]),
+                  _earn_cell(pos, r["legs"]), _spot_cell(a.get("underlying_price")),
                   _kept_cell(a.get("pnl_pct")), _money(a.get("pnl_mtm")),
                   f"${abs(pos.get('net_premium') or 0):,.0f}")
     console.print(t)
