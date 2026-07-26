@@ -175,10 +175,32 @@ def close_position(pos, legs, reason="manual"):
 def run():
     args = sys.argv[1:]
     if not args or args[0] in ("-h", "--help"):
-        console.print("\n[bold]Usage:[/bold]  helm close <TICKER>\n")
+        console.print("\n[bold]Usage:[/bold]  helm close <TICKER> [--position-id ID]\n")
         console.print("  Manually close an open position and record realized P&L.\n")
+        console.print("  [cyan]--position-id ID[/cyan]  Close this exact position, skipping")
+        console.print("                     the selection prompt. For non-interactive")
+        console.print("                     callers (the PG web UI) that must not")
+        console.print("                     identify a trade by its place in a list.\n")
         return
-    ticker = args[0].upper()
+
+    # Parse. --position-id is the only flag; everything else stays positional so
+    # `helm close TICKER` is byte-for-byte the command it has always been.
+    position_id = None
+    positional = []
+    i = 0
+    while i < len(args):
+        if args[i] == "--position-id" and i + 1 < len(args):
+            position_id = args[i + 1].strip()
+            i += 2
+        else:
+            positional.append(args[i])
+            i += 1
+
+    if not positional:
+        console.print("[red]Specify a ticker.[/red]  [dim]helm close AAPL[/dim]")
+        return
+
+    ticker = positional[0].upper()
     acct = get_active_account()
     if not acct:
         console.print("[red]No active account. Run [bold]helm setup[/bold] first.[/red]")
@@ -189,7 +211,27 @@ def run():
     if not positions:
         console.print(f"\n[yellow]No open real position found for {ticker}.[/yellow]\n")
         return
-    if len(positions) == 1:
+
+    if position_id:
+        # Named, not counted. The ordinal prompt below is fed on stdin by
+        # non-interactive callers, and an ordinal computed from a list that has
+        # since changed silently becomes the FIRST LEG'S CLOSE PRICE -- the
+        # selection prompt is skipped, `float("2")` parses, every later price
+        # shifts one leg, and the close commits wrong realized P&L reporting
+        # success. Naming the position removes the failure mode rather than
+        # narrowing the window: this branch never prompts.
+        match = [p for p in positions if p.id == position_id]
+        if not match:
+            console.print(f"\n[red]No open real position [bold]{position_id}[/bold] "
+                          f"for {ticker}.[/red]")
+            console.print("[dim]It may have been closed already. Open now:[/dim]")
+            for p in positions:
+                console.print(f"  [dim]{p.id}  ·  {p.strategy}  ·  opened "
+                              f"{str(p.opened_at)[:10]}[/dim]")
+            console.print()
+            return
+        pos = match[0]
+    elif len(positions) == 1:
         pos = positions[0]
     else:
         # Two or more real positions on this ticker -- let the user pick.
