@@ -1066,40 +1066,125 @@ def evaluate_contracts(ticker: str, strategy: str, config: dict,
 # ── Command ───────────────────────────────────────────────────────────────────
 
 
+def _pin_pick(items, pin_strike, pin_expiry, strike_key="strike",
+              long_key=None, pin_long=None):
+    """Find the ONE item matching an explicitly named strike and expiry.
+
+    W7 (s86): `--confirm` re-pulls the chain AFTER the trader has chosen, so a
+    rank chosen against the displayed board can point at a different contract
+    in the fresh pull -- different strike, different expiry, same rank. Naming
+    the contract removes that, because a rank is a property of a list and the
+    list gets rebuilt.
+
+    Returns (item, None) on exactly one match, else (None, reason). Never picks
+    a "closest" contract: booking something adjacent to what was asked for is
+    precisely the failure this exists to prevent, so zero matches and several
+    matches are both refusals.
+    """
+    want_exp = str(pin_expiry)[:10]
+    try:
+        want_strike = float(pin_strike)
+    except (TypeError, ValueError):
+        return None, f"unreadable strike {pin_strike!r}"
+    want_long = None
+    if pin_long is not None:
+        try:
+            want_long = float(pin_long)
+        except (TypeError, ValueError):
+            return None, f"unreadable long strike {pin_long!r}"
+
+    hits = []
+    for it in items:
+        try:
+            s = float(it.get(strike_key))
+        except (TypeError, ValueError):
+            continue
+        if abs(s - want_strike) > 0.005:
+            continue
+        if str(it.get("expiration") or "")[:10] != want_exp:
+            continue
+        if want_long is not None and long_key:
+            try:
+                lk = float(it.get(long_key))
+            except (TypeError, ValueError):
+                continue
+            if abs(lk - want_long) > 0.005:
+                continue
+        hits.append(it)
+
+    if len(hits) == 1:
+        return hits[0], None
+    if not hits:
+        return None, (f"no contract at ${want_strike:g} expiring {want_exp} in the "
+                      f"chain just pulled -- it may have moved or gone illiquid")
+    return None, (f"{len(hits)} contracts match ${want_strike:g} {want_exp} -- "
+                  f"pass --long-strike to say which")
+
+
+def _pin_refusal(kind, err, items, strike_key="strike"):
+    """Explain a refused pin, and show what the fresh pull actually holds."""
+    console.print()
+    console.print(f"[red]Not opened — {err}[/red]")
+    console.print(f"[dim]The chain is re-pulled at confirm time, so the {kind} you "
+                  f"picked is verified rather than assumed. Nothing was booked.[/dim]")
+    if items:
+        console.print("[dim]Available now:[/dim]")
+        for it in items[:8]:
+            try:
+                console.print(f"  [dim]${float(it.get(strike_key)):g}  "
+                              f"{str(it.get('expiration') or '')[:10]}[/dim]")
+            except (TypeError, ValueError):
+                continue
+    console.print()
+
+
 def confirm_and_log(ticker: str, strategy: str, contracts: list, config: dict,
-                    spot: Optional[float], scan_data: Optional[dict] = None):
+                    spot: Optional[float], scan_data: Optional[dict] = None,
+                    pin_strike=None, pin_expiry=None):
     """
     Interactive confirm flow — user selects a contract and confirms fill price.
     Creates position + leg + entry snapshot in the database.
+
+    pin_strike/pin_expiry (s86): name the contract instead of selecting it by
+    rank. Set by --strike/--expiry, for non-interactive callers whose rank was
+    computed against a board the engine has since rebuilt.
     """
     from rich.prompt import Prompt, Confirm
     from helm.cli.entry_snapshot import open_position_with_snapshot
 
-    console.print()
-    console.print("[bold]Open a position?[/bold]")
-    console.print("[dim]Enter rank number to select a contract, or 'n' to exit.[/dim]")
-    console.print()
-
-    while True:
-        choice = Prompt.ask(
-            f"Select contract",
-            default="1",
-            choices=[str(i+1) for i in range(len(contracts))] + ["n"],
-            show_choices=False,
-        )
-        if choice.lower() == "n":
-            console.print("[dim]No position opened.[/dim]")
-            console.print()
+    selected = None
+    if pin_strike is not None and pin_expiry is not None:
+        selected, _err = _pin_pick(contracts, pin_strike, pin_expiry)
+        if selected is None:
+            _pin_refusal("contract", _err, contracts)
             return
 
-        try:
-            idx = int(choice) - 1
-            if 0 <= idx < len(contracts):
-                selected = contracts[idx]
-                break
-        except ValueError:
-            pass
-        console.print("[yellow]Invalid choice. Enter a rank number or 'n'.[/yellow]")
+    if selected is None:
+        console.print()
+        console.print("[bold]Open a position?[/bold]")
+        console.print("[dim]Enter rank number to select a contract, or 'n' to exit.[/dim]")
+        console.print()
+
+        while True:
+            choice = Prompt.ask(
+                f"Select contract",
+                default="1",
+                choices=[str(i+1) for i in range(len(contracts))] + ["n"],
+                show_choices=False,
+            )
+            if choice.lower() == "n":
+                console.print("[dim]No position opened.[/dim]")
+                console.print()
+                return
+
+            try:
+                idx = int(choice) - 1
+                if 0 <= idx < len(contracts):
+                    selected = contracts[idx]
+                    break
+            except ValueError:
+                pass
+            console.print("[yellow]Invalid choice. Enter a rank number or 'n'.[/yellow]")
 
     # Show selected contract summary
     console.print()
@@ -1223,8 +1308,15 @@ def confirm_and_log(ticker: str, strategy: str, contracts: list, config: dict,
 
 
 def confirm_spread(ticker: str, strategy: str, spreads: list, config: dict,
-                   spot: float, args: list, best: dict = None, suggested: int = 1):
-    """Interactive confirm flow for spread positions."""
+                   spot: float, args: list, best: dict = None, suggested: int = 1,
+                   pin_strike=None, pin_expiry=None, pin_long=None):
+    """Interactive confirm flow for spread positions.
+
+    pin_strike/pin_expiry name the SHORT leg (--strike/--expiry); --long-strike
+    disambiguates when two widths share a short strike. Same reasoning as
+    confirm_and_log: the chain is re-pulled at confirm time, so a rank is not a
+    stable way to say which spread.
+    """
     from rich.prompt import Prompt, Confirm
     from rich.panel import Panel
     # HELM-038 wired: spread --confirm persists via the proven multi-leg writer
@@ -1242,24 +1334,35 @@ def confirm_spread(ticker: str, strategy: str, spreads: list, config: dict,
         console.print()
         return
     pretty = strategy.replace("_", " ").title()
-    console.print()
-    console.print(f"[bold]Open a {pretty}?[/bold]")
-    console.print("[dim]Enter rank number to select, or 'n' to exit.[/dim]")
-    console.print()
-    while True:
-        choice = Prompt.ask("Select spread", default="1", choices=[str(i + 1) for i in range(len(spreads))] + ["n"], show_choices=False)
-        if choice.lower() == "n":
-            console.print("[dim]No position opened.[/dim]")
-            console.print()
+
+    b = None
+    if pin_strike is not None and pin_expiry is not None:
+        b, _err = _pin_pick(spreads, pin_strike, pin_expiry,
+                            strike_key="short_strike", long_key="long_strike",
+                            pin_long=pin_long)
+        if b is None:
+            _pin_refusal("spread", _err, spreads, strike_key="short_strike")
             return
-        try:
-            idx = int(choice) - 1
-            if 0 <= idx < len(spreads):
-                b = spreads[idx]
-                break
-        except ValueError:
-            pass
-        console.print("[yellow]Invalid choice. Enter a rank number or 'n'.[/yellow]")
+
+    if b is None:
+        console.print()
+        console.print(f"[bold]Open a {pretty}?[/bold]")
+        console.print("[dim]Enter rank number to select, or 'n' to exit.[/dim]")
+        console.print()
+        while True:
+            choice = Prompt.ask("Select spread", default="1", choices=[str(i + 1) for i in range(len(spreads))] + ["n"], show_choices=False)
+            if choice.lower() == "n":
+                console.print("[dim]No position opened.[/dim]")
+                console.print()
+                return
+            try:
+                idx = int(choice) - 1
+                if 0 <= idx < len(spreads):
+                    b = spreads[idx]
+                    break
+            except ValueError:
+                pass
+            console.print("[yellow]Invalid choice. Enter a rank number or 'n'.[/yellow]")
     opt_type = b["opt_type"]
     ss = b["short_strike"]
     lstk = b["long_strike"]
@@ -1448,7 +1551,9 @@ def display_spreads(ticker: str, strategy: str, config: dict, spreads: list,
 
     # --confirm flow for spreads
     if "--confirm" in args:
-        confirm_spread(ticker, strategy, spreads, config, spot, args, best=best, suggested=suggested_best)
+        confirm_spread(ticker, strategy, spreads, config, spot, args, best=best,
+                       suggested=suggested_best, pin_strike=pin_strike,
+                       pin_expiry=pin_expiry, pin_long=pin_long)
 
 
 
@@ -1949,6 +2054,18 @@ def display_condors(ticker: str, strategy: str, config: dict, condors: list,
 
     # --confirm flow for iron condors (HELM-013)
     if "--confirm" in args:
+        # W7 (s86): the condor confirm still selects by rank. Rather than accept
+        # a pin and quietly ignore it -- which would read as "this exact
+        # structure" while behaving exactly as before -- refuse. Silently
+        # ignoring a safety argument is the worse failure of the two.
+        if pin_strike is not None:
+            console.print("[red]--strike/--expiry are not wired for iron "
+                          "condors.[/red]")
+            console.print("[dim]A condor is four legs; one strike does not name "
+                          "it. Refusing rather than selecting by rank while "
+                          "looking like a pin. Open it interactively.[/dim]")
+            console.print()
+            return
         confirm_condor(ticker, strategy, condors, config, spot, args)
 
 
@@ -2837,6 +2954,13 @@ def run():
         console.print("[dim]Options:[/dim]")
         console.print("  [cyan]--dte N[/cyan]      Target DTE (default: strategy default)")
         console.print("  [cyan]--top N[/cyan]      Show top N contracts (default: 8)")
+        console.print("  [cyan]--strike S[/cyan]   With --expiry: book THIS contract, not a rank.")
+        console.print("               Single-leg: the strike. Spreads: the SHORT strike.")
+        console.print("  [cyan]--expiry YYYY-MM-DD[/cyan]  Required alongside --strike.")
+        console.print("  [cyan]--long-strike S[/cyan]      Disambiguates two widths sharing a short strike.")
+        console.print("  [dim]The chain is re-pulled at confirm time, so a rank can point at a")
+        console.print("   different contract than the one displayed. Naming it refuses rather")
+        console.print("   than booking something adjacent.[/dim]")
         console.print()
         return
 
@@ -2847,12 +2971,25 @@ def run():
     # Parse
     dte_target = None
     top_n = 8
+    pin_strike = None
+    pin_expiry = None
+    pin_long = None
     positional = []
     i = 0
     while i < len(args):
         if args[i] == "--dte" and i+1 < len(args):   dte_target = int(args[i+1]); i += 2
         elif args[i] == "--top" and i+1 < len(args):  top_n = int(args[i+1]); i += 2
+        elif args[i] == "--strike" and i+1 < len(args):      pin_strike = args[i+1]; i += 2
+        elif args[i] == "--expiry" and i+1 < len(args):      pin_expiry = args[i+1]; i += 2
+        elif args[i] == "--long-strike" and i+1 < len(args): pin_long = args[i+1]; i += 2
         else: positional.append(args[i]); i += 1
+
+    # Half a pin is worse than none: it reads as "this exact contract" while
+    # still selecting by rank. Refuse rather than silently falling back.
+    if (pin_strike is None) != (pin_expiry is None):
+        console.print("[red]--strike and --expiry must be given together.[/red]")
+        console.print("[dim]Naming half a contract does not name a contract.[/dim]")
+        return
 
     if len(positional) < 2:
         console.print("[red]Specify ticker and strategy.[/red]")
@@ -3293,7 +3430,8 @@ def run():
             scan_data = fetch_technicals(ticker)
         except Exception:
             pass
-        confirm_and_log(ticker, strategy, contracts, config, spot, scan_data)
+        confirm_and_log(ticker, strategy, contracts, config, spot, scan_data,
+                        pin_strike=pin_strike, pin_expiry=pin_expiry)
 
 
 if __name__ == "__main__":
