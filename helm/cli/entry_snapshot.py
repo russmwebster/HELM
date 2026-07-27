@@ -134,6 +134,12 @@ def open_position_with_snapshot(
     contracts: int,
     scan_data: Optional[dict] = None,
     book: str = 'REAL',
+    # HELM-121 (s90): which screen produced this position. The multi-leg
+    # sibling takes it through position_fields, which already forwards
+    # arbitrary position columns; this path has no such passthrough, so it
+    # gets an explicit argument. Defaults to None, so nothing that calls
+    # this today changes behaviour.
+    origin_screen: Optional[str] = None,
 ) -> tuple[str, str, str]:
     """
     Create position, leg, and entry snapshot in one atomic operation.
@@ -171,6 +177,7 @@ def open_position_with_snapshot(
             total_contracts=contracts,
             net_premium=net_premium,
             book=book,
+            origin_screen=origin_screen,
             notes=f"Pending execution — opened via HELM on {today}",
             conn=conn,
         )
@@ -255,6 +262,24 @@ def open_position_with_snapshot(
             backfill_entry_vol(pos.id, ticker)
         except Exception:
             pass
+    # HELM-112 (s90): arm the thesis-break exit. Best-effort and OUTSIDE the
+    # transaction, like the signal-link and vol-context stamps above -- a real
+    # open must never fail or roll back because of a journalling write.
+    #
+    # Runs on BOTH books, unlike those two, and that is the point: the paper
+    # book is where the buy-side screen lands its survivors, and an unarmed
+    # paper long call cannot exercise the rule the screen exists to test.
+    try:
+        from helm import long_exit as _lx
+        _tc = get_conn()
+        try:
+            _lx.capture_entry_thesis(_tc, pos.id, ticker, strategy)
+            _tc.commit()
+        finally:
+            _tc.close()
+    except Exception:
+        pass
+
     return pos.id, leg.id, snap_id
 
 
@@ -428,4 +453,22 @@ def open_multileg_with_snapshot(
             backfill_entry_vol(pos.id, ticker)
         except Exception:
             pass
+    # HELM-112 (s90): arm the thesis-break exit. Best-effort and OUTSIDE the
+    # transaction, like the signal-link and vol-context stamps above -- a real
+    # open must never fail or roll back because of a journalling write.
+    #
+    # Runs on BOTH books, unlike those two, and that is the point: the paper
+    # book is where the buy-side screen lands its survivors, and an unarmed
+    # paper long call cannot exercise the rule the screen exists to test.
+    try:
+        from helm import long_exit as _lx
+        _tc = get_conn()
+        try:
+            _lx.capture_entry_thesis(_tc, pos.id, ticker, strategy)
+            _tc.commit()
+        finally:
+            _tc.close()
+    except Exception:
+        pass
+
     return pos.id, leg_ids, snap_ids

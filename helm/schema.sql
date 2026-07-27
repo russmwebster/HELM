@@ -877,6 +877,9 @@ ALTER TABLE checks ADD COLUMN lc_arms_json TEXT;      -- counterfactual arm reco
 -- HELM-107 (s82): entry runway fact + artifact judgement.
 ALTER TABLE positions ADD COLUMN entry_dte INTEGER;
 
+-- HELM-121 (s90): attribution for the buy-side screen's dual-book A/B.
+ALTER TABLE positions ADD COLUMN origin_screen TEXT;
+
 -- HELM-107 (s82): entry runway, and the artifact rule derived from it.
 -- positions.entry_dte stores the FACT (days from open to the nearest expiry,
 -- computed from legs). This view derives the JUDGEMENT, so the rule can be

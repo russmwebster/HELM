@@ -63,6 +63,18 @@ def journal_state(conn, position_id):
     try:
         rows = conn.execute(
             'SELECT pnl_pct, thesis_broken FROM checks WHERE position_id = ? '
+            # HELM-117 (W53, s90): every other reader of checks.pnl_pct
+            # filters to GOOD marks -- models/check.py in three places,
+            # replay_paper_exits. This one did not, and it is the only
+            # reader that ACTS, through the ratcheted profit floor.
+            # A PARTIAL mark is one taken with missing greeks or a stale
+            # quote; letting one set the high-water mark can ratchet the
+            # floor above anything the position ever really traded at and
+            # close a live long call early. It also makes the code match
+            # its own stated convention: the streak is documented as
+            # counting GOOD journal days (HELM-037), and 1,518 of 7,307
+            # journal rows are not GOOD.
+            "AND data_quality = 'GOOD' "
             'ORDER BY checked_at DESC', (position_id,)).fetchall()
     except Exception:
         return out
@@ -123,6 +135,70 @@ def current_context(conn, ticker):
 
 
 # -- doctrine -----------------------------------------------------------------
+
+def capture_entry_thesis(conn, position_id, ticker, strategy, note=None):
+    """HELM-112 (s90): record the directional read at open so THESIS_BREAK can
+    arm. Returns the source recorded ('signals' | 'live'), or None when the
+    position is deliberately left unarmed.
+
+    Two properties this is built around, both deliberate:
+
+    1. It reads current_context() -- the SAME function long_verdict compares
+       against on every check. Measuring entry one way and "today" another
+       would make a change of measurement method indistinguishable from a
+       change of thesis, and THESIS_BREAK is first in the exit precedence.
+
+    2. It FAILS UNARMED. No context, no row: the position degrades to
+       PROFIT_FLOOR / DTE_GATE / CATASTROPHE_STOP, which is what s82 chose for
+       APLD and GOOG rather than invent a bias score. A guessed thesis arms the
+       first rule in precedence on a number nobody measured.
+
+    INSERT OR IGNORE, never REPLACE: the entry read is what was true at open and
+    a later call must not rewrite it.
+
+    adx is recorded only on a signals-sourced capture, where it can be read from
+    the same scan row. On a live-pull capture it stays NULL rather than being
+    filled from a second, differently-timed source. Nothing reads it today; it
+    is there for the counterfactual log.
+
+    Never raises. An open must not fail because of a journalling stamp -- the
+    rule the signal-link and vol-context stamps already follow.
+    """
+    if str(strategy).upper() not in LONG_STRATEGIES:
+        return None
+    if not position_id or not ticker:
+        return None
+    try:
+        cur = current_context(conn, ticker) or {}
+    except Exception:
+        return None
+    src = cur.get('source')
+    if not src:
+        return None
+    adx = None
+    if src == 'signals' and cur.get('asof'):
+        try:
+            row = conn.execute(
+                'SELECT adx FROM signals WHERE ticker = ? AND generated_at = ?',
+                (str(ticker).upper(), cur.get('asof'))).fetchone()
+            adx = row[0] if row else None
+        except Exception:
+            adx = None
+    try:
+        conn.execute(
+            'INSERT OR IGNORE INTO entry_thesis '
+            '(position_id, captured_at, source, signals_generated_at, '
+            ' bias_score, spot_price, sma_50, sma_200, adx, notes) '
+            'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            (position_id, datetime.now().isoformat(), src,
+             cur.get('asof') if src == 'signals' else None,
+             cur.get('bias_score'), cur.get('spot'),
+             cur.get('sma_50'), cur.get('sma_200'), adx,
+             note or 'captured at open (HELM-112)'))
+    except Exception:
+        return None
+    return src
+
 
 def floor_for(hwm):
     """The ratcheted profit floor for a given high-water mark, or None when the

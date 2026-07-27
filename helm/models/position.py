@@ -48,6 +48,14 @@ class Position:
     updated_at:           str = field(default_factory=lambda: datetime.now().isoformat())
     exit_reason:          Optional[str] = None
     book:                 str = 'REAL'
+    # HELM-121 (s90): which screen produced this position -- NULL for
+    # everything opened before the buy-side screen exists, and for
+    # anything opened by hand. This was half of what blocked HELM-101
+    # step 4: the dual-book A/B had nowhere to record attribution.
+    # Chosen over joining through signal_id because that stamp is
+    # best-effort inside a bare try/except and is therefore silently
+    # lossy -- attribution that can vanish is not attribution.
+    origin_screen:        Optional[str] = None
 
     def __post_init__(self):
         if self.strategy not in STRATEGIES:

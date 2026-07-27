@@ -38,6 +38,18 @@ def paper_open_one(ticker: str, strategy: str, spot: Optional[float],
     if not fill:
         return None
     top["spot"] = spot
+    # HELM-120 (W13 root cause, s90): fetch_chain_from_ibkr stamps a
+    # hardcoded "direction": "SHORT" onto every row it returns, and
+    # paper_open_one only books ibkr-sourced rows -- so the contract dict
+    # reaching open_position_with_snapshot said SHORT regardless of
+    # strategy. That is correct for every credit structure this path has
+    # ever booked, which is exactly why it went unseen, and silently
+    # wrong for LONG_CALL / LONG_PUT: three paper long calls were booked
+    # as short calls, with a credit, and then graded by long-option exit
+    # doctrine. HELM-017 fixed this on the interactive path in open_cmd
+    # ("stamp config-authoritative direction onto the selected contract")
+    # and the paper booker never got the same line. It does now.
+    top["direction"] = config["direction"]
     pos_id, _leg_id, _snap_id = open_position_with_snapshot(
         ticker=ticker,
         strategy=strategy,
