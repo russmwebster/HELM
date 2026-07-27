@@ -880,6 +880,23 @@ ALTER TABLE positions ADD COLUMN entry_dte INTEGER;
 -- HELM-121 (s90): attribution for the buy-side screen's dual-book A/B.
 ALTER TABLE positions ADD COLUMN origin_screen TEXT;
 
+-- W21 (s90): what each scheduled agent run actually did. Gaps are made
+-- visible rather than backfilled -- see helm/agent_runs.py.
+CREATE TABLE IF NOT EXISTS agent_runs (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent       TEXT NOT NULL,
+    started_at  TEXT NOT NULL,
+    finished_at TEXT,
+    slot        TEXT,
+    attempted   INTEGER,
+    journaled   INTEGER,
+    failed      INTEGER,
+    status      TEXT NOT NULL DEFAULT ('OK'),
+    notes       TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_agent_started
+    ON agent_runs(agent, started_at);
+
 -- HELM-107 (s82): entry runway, and the artifact rule derived from it.
 -- positions.entry_dte stores the FACT (days from open to the nearest expiry,
 -- computed from legs). This view derives the JUDGEMENT, so the rule can be

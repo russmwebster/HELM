@@ -456,6 +456,16 @@ def fetch_yf_data(ticker: str, expiration: str, strike: float,
 from helm.verdict import band_for, _ns_pos, _ns_leg
 
 
+# W21 (s90): the verdict block swallows its exceptions so one bad position
+# cannot stop a snapshot of ninety others -- correct, and it meant 76
+# identical failures were logged and discarded across 46 runs with no
+# traceback, no position id and no timestamp. Enough to know something was
+# wrong; not enough to fix it. Collect them so the run that ends can say
+# what it lost, and so helm snapshot can record a count rather than
+# claiming every position was "processed".
+VERDICT_FAILURES = []
+
+
 def core_verdict(pos, legs, opt_legs, primary, opt_data, leg_marks):
     """Decision-core verdict for a check-side position, or None if the core
     can't be applied (stock leg present, or any option leg unmarked) -- mirrors
@@ -811,8 +821,27 @@ def check_one(pos: dict, legs: list, deep: bool = False, persist: bool = False) 
             assessment["flag_style"] = _b["flag_style"]
             assessment["reasons"] = [_b["headline"]] + assessment.get("reasons", [])
     except Exception as _e:
-        logging.getLogger("helm.check").warning(
-            "core_verdict failed for %s: %s", pos.get("ticker"), _e
+        # W21 (s90): two corrections here.
+        # (a) This try covers core_verdict AND the _ev/band_for work after
+        #     it, so "core_verdict failed" named the first call in the
+        #     block rather than whichever one raised. The label was
+        #     evidence pointing at the wrong function.
+        # (b) .warning() with str(e) threw away the traceback, which is the
+        #     only thing that would have identified the None. .exception()
+        #     keeps it. The fault is intermittent -- roughly 1.6 positions
+        #     per run across 23 tickers -- so it has to be caught in the
+        #     act rather than reproduced on demand.
+        VERDICT_FAILURES.append({
+            "position_id": pos.get("id"),
+            "ticker": pos.get("ticker"),
+            "strategy": pos.get("strategy"),
+            "book": pos.get("book"),
+            "error": "%s: %s" % (type(_e).__name__, _e),
+        })
+        logging.getLogger("helm.check").exception(
+            "verdict block failed for %s (%s %s) position %s",
+            pos.get("ticker"), pos.get("book"), pos.get("strategy"),
+            pos.get("id"),
         )
 
     # Save check to DB silently -- only when the caller is a sanctioned writer
@@ -1327,6 +1356,21 @@ def _pulse_header(rows):
          Panel(card_grk, border_style="magenta", width=38)],
         equal=False, expand=False,
     ))
+    # W21 (s90): the marks on this screen are computed live, so the DISPLAY
+    # is never stale -- but the JOURNAL behind it can be, and the journal is
+    # what THESIS_BREAK counts. A three-day gap looks identical to a quiet
+    # market from here unless it is said. Silent when healthy.
+    try:
+        from helm import agent_runs as _ar
+        _jc = get_conn()
+        try:
+            _hl = _ar.health_line(_ar.journal_health(_jc))
+        finally:
+            _jc.close()
+        if _hl:
+            console.print(_hl)
+    except Exception:
+        pass
     console.print()
 
 
@@ -2695,7 +2739,16 @@ def cmd_snapshot(args):
     conn.close()
     if not positions:
         return
-    written = 0
+    # W21 (s90): "processed" used to mean "attempted". The counter was
+    # incremented once per position regardless of whether a row reached the
+    # journal, so a run that silently wrote nothing reported the same
+    # sentence as a clean one -- the W35 confusion (exit code 0 vs the work
+    # happened) in the writer rather than the restarter. Count the rows the
+    # journal actually gained, and record the run.
+    from helm import agent_runs as _ar
+    VERDICT_FAILURES.clear()
+    _started = datetime.now().isoformat()
+    attempted = 0
     for pos in positions:
         conn = get_conn()
         legs = [dict(r) for r in conn.execute(
@@ -2703,12 +2756,53 @@ def cmd_snapshot(args):
         ).fetchall()]
         conn.close()
         check_one(pos, legs, persist=True)
-        written += 1
+        attempted += 1
+    _finished = datetime.now().isoformat()
+
+    journaled = 0
+    try:
+        conn = get_conn()
+        _ar.ensure_table(conn)
+        journaled = conn.execute(
+            "SELECT COUNT(*) FROM checks WHERE checked_at >= ?",
+            (_started,)).fetchone()[0]
+        _failed = list(VERDICT_FAILURES)
+        _ar.record_run(
+            conn, _ar.AGENT_SNAPSHOT, _started, _finished,
+            attempted, journaled, len(_failed),
+            notes=("; ".join(sorted({f["ticker"] or "?" for f in _failed}))
+                   or None))
+        conn.close()
+    except Exception:
+        pass
+
     if "--silent" not in args:
-        console.print(f"[dim]snapshot: {written} position(s) processed (live-only persist)[/dim]")
+        _msg = (f"snapshot: {attempted} attempted, {journaled} journaled")
+        if VERDICT_FAILURES:
+            _names = ", ".join(sorted({f["ticker"] or "?"
+                                       for f in VERDICT_FAILURES}))
+            console.print(f"[yellow]{_msg}, "
+                          f"{len(VERDICT_FAILURES)} verdict failure(s)"
+                          f"[/yellow][dim] — {_names}[/dim]")
+        else:
+            console.print(f"[dim]{_msg} (live-only persist)[/dim]")
 
 
 def run_snapshot():
+    # W21 (s90): snapshot_daily.log carried 122 lines with no timestamp on
+    # any of them -- 46 run markers and 76 failures, with nothing tying a
+    # failure to a run or to a time. That is why the missed slots had to be
+    # reconstructed from the checks table instead of read off the log.
+    # Configured here rather than at import, so an interactive helm check
+    # keeps its current console behaviour.
+    try:
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s %(levelname)s %(name)s %(message)s",
+            datefmt="%Y-%m-%dT%H:%M:%S",
+        )
+    except Exception:
+        pass
     args = sys.argv[1:]
     if not get_active_account():
         console.print("[red]No active account. Run helm setup first.[/red]")
