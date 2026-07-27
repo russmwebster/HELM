@@ -110,7 +110,10 @@ def parse_fidelity_positions(filepath: str) -> list:
 
         for row in reader:
             symbol = cell(row, "Symbol")
-            if not symbol or symbol in ("nan", "Pending Activity", "Account Total"):
+            # W56: the CSV writes "Pending activity" (lower a); a case-sensitive
+            # membership test let a $53,407.71 row through as a STOCK position
+            # called "Pending activity" on every reconcile.
+            if not symbol or symbol.lower() in ("nan", "pending activity", "account total"):
                 continue
             if "SPAXX" in symbol or "FXAIX" in symbol or "GLD" in symbol:
                 continue
@@ -243,23 +246,115 @@ def match_positions(helm_positions: list, fidelity_positions: list) -> dict:
     return {"matched": matched, "helm_only": helm_only, "fidelity_only": fidelity_only}
 
 
-def parse_fidelity_cash(filepath):
-    cash = {}
+def parse_fidelity_balances(filepath):
+    """Extract account balances from the same Fidelity CSV reconcile already reads.
+
+    W56: `accounts.portfolio_value` had one writer -- `helm import fidelity` --
+    behind an `if imported > 0` gate, and `import` refuses to run once positions
+    exist. So the number every position is sized from could not be refreshed by
+    any command. It sat at the 26 May value for two months.
+
+    Returns {} when the file yields nothing usable, so callers can tell "no
+    balances" from "zero balances".
+
+    Net liquidation is the sum of every row's Current value for that account,
+    and cash is the SPAXX row -- the same definition `import_cmd` has always
+    used (import_cmd.py:285-305), lifted rather than reinvented so the two
+    commands cannot drift into disagreeing about what the account is worth.
+
+    Column lookup is case-insensitive. The previous version of this parser asked
+    for "Account Number"/"Current Value" while the file says "Account number"/
+    "Current value", so it returned {} on every real CSV and the Available
+    Capital panel it fed silently never rendered.
+    """
+    import csv
+
+    def _norm(s):
+        return "".join(str(s).lower().split())
+
+    out = {"accounts": {}, "net_liquidation": 0.0, "buying_power": 0.0,
+           "pending": 0.0, "as_of": None}
     try:
-        import csv
-        with open(filepath, encoding="utf-8-sig") as f:
-            for row in csv.DictReader(f):
-                if "SPAXX" not in row.get("Symbol",""):
+        with open(filepath, newline="", encoding="utf-8-sig") as f:
+            reader = csv.DictReader(f)
+            colmap = {_norm(k): k for k in (reader.fieldnames or []) if k}
+
+            def cell(row, *names, default=""):
+                for nm in names:
+                    key = colmap.get(_norm(nm))
+                    if key is not None and row.get(key) is not None:
+                        return str(row.get(key)).strip()
+                return default
+
+            for row in reader:
+                acct = cell(row, "Account number", "Account #")
+                if not acct or acct in ("nan",) or acct.startswith('"'):
                     continue
-                an = row.get("Account Number","").strip()
-                nm = row.get("Account Name","").strip()
-                vs = row.get("Current Value","").replace("$","").replace(",","").strip()
-                try: v = float(vs)
-                except: continue
-                if an not in cash: cash[an] = {"name":nm, "cash":0.0}
-                cash[an]["cash"] += v
-    except: pass
-    return cash
+                val = _money(cell(row, "Current value"))
+                if val is None:
+                    continue
+                sym = cell(row, "Symbol")
+                a = out["accounts"].setdefault(
+                    acct, {"name": cell(row, "Account name"), "net_liq": 0.0,
+                           "cash": 0.0, "pending": 0.0})
+                a["net_liq"] += val
+                if "SPAXX" in sym.upper():
+                    a["cash"] += val
+                if sym.lower() == "pending activity":
+                    a["pending"] += val
+    except Exception:
+        return {}
+
+    if not out["accounts"]:
+        return {}
+
+    out["net_liquidation"] = sum(a["net_liq"] for a in out["accounts"].values())
+    out["buying_power"]    = sum(a["cash"]    for a in out["accounts"].values())
+    out["pending"]         = sum(a["pending"] for a in out["accounts"].values())
+    out["as_of"]           = _fidelity_as_of(filepath)
+    return out
+
+
+def _fidelity_as_of(filepath):
+    """The CSV's own 'Date downloaded Jul-26-2026 at 4:36 p.m ET' trailer -> ISO date.
+
+    Preferred over the file's mtime, which changes if the file is copied, and
+    over the filename, which the user can rename. Falls back to the filename
+    stem, then to None -- never to today, because a balance that guesses its own
+    age is exactly the failure W56 is about.
+    """
+    import re as _re
+    from datetime import datetime as _dtm
+    pats = None
+    try:
+        with open(filepath, encoding="utf-8-sig", errors="replace") as f:
+            txt = f.read()
+        pats = _re.search(r"Date downloaded\s+([A-Za-z]{3}-\d{1,2}-\d{4})", txt)
+    except Exception:
+        pass
+    cand = pats.group(1) if pats else None
+    if not cand:
+        m = _re.search(r"([A-Za-z]{3}-\d{1,2}-\d{4})", str(filepath))
+        cand = m.group(1) if m else None
+    if not cand:
+        return None
+    try:
+        return _dtm.strptime(cand, "%b-%d-%Y").date().isoformat()
+    except Exception:
+        return None
+
+
+def parse_fidelity_cash(filepath):
+    """Per-account cash, for the Available Capital panel.
+
+    Kept as a thin view over parse_fidelity_balances so there is one parser and
+    one definition of cash. Shape is unchanged for existing callers.
+    """
+    b = parse_fidelity_balances(filepath)
+    if not b:
+        return {}
+    return {num: {"name": a["name"], "cash": a["cash"]}
+            for num, a in b["accounts"].items()}
 
 
 def get_csp_collateral():
@@ -390,7 +485,8 @@ def run():
             border_style="yellow" if (helm_only or fid_only) else "green",
             title="Reconcile Summary"
         ))
-    _cd = parse_fidelity_cash(str(filepath))
+    _bal = parse_fidelity_balances(str(filepath))
+    _cd = {k: {"name": v["name"], "cash": v["cash"]} for k, v in _bal["accounts"].items()} if _bal else {}
     if _cd:
         _col = get_csp_collateral()
         _tc = sum(a['cash'] for a in _cd.values())
@@ -407,6 +503,16 @@ def run():
         console.print(); console.print(Panel(_t, title='[bold]Available Capital[/bold]', border_style='green')); console.print()
     console.print()
 
+    # ── W56: refresh the balances from the file we just read ─────────────────
+    # `accounts.portfolio_value` sizes every new position (suggest_contracts
+    # takes 5% of it) and had no writer reachable after first setup, so it sat
+    # at the 26 May figure for two months. The money was in the CSV this
+    # command already opens; it was being thrown away with the Account Total
+    # and SPAXX rows. No new file handling, no new habit -- it refreshes
+    # whenever you check alignment.
+    if _bal and _bal.get("net_liquidation"):
+        _update_account_balances(account_id, _bal)
+
     try:
         _log_event("RECONCILE_RUN")
     except Exception:
@@ -415,3 +521,62 @@ def run():
 
 if __name__ == "__main__":
     run()
+
+
+def _update_account_balances(account_id, bal):
+    """Write refreshed balances, refusing to walk backwards in time.
+
+    Deliberate choices, both of which W56 asked to be settled explicitly:
+
+    * It REPORTS the change rather than refreshing silently. A number that
+      moves $24,000 under the position sizer without saying so is the same
+      class of problem as one that never moves at all.
+    * It REFUSES a CSV older than the one already recorded. Re-running an old
+      download from ~/Downloads -- where 33 of them are sitting -- would
+      otherwise walk the account value backwards and silently resize every
+      subsequent trade.
+    """
+    from helm.models.account import Account
+
+    acct = Account.get(account_id)
+    if not acct:
+        return
+
+    new_as_of = bal.get("as_of")
+    old_as_of = getattr(acct, "balances_as_of", None)
+    if new_as_of and old_as_of and new_as_of < old_as_of:
+        console.print(
+            f"[yellow]Balances not updated[/yellow] [dim]— this file is from "
+            f"{new_as_of}, and HELM already holds figures from {old_as_of}. "
+            f"Download a current portfolio file to refresh.[/dim]")
+        console.print()
+        return
+
+    old_pv = acct.portfolio_value or 0.0
+    new_pv = round(bal["net_liquidation"], 2)
+    new_bp = round(bal["buying_power"], 2)
+    delta = new_pv - old_pv
+
+    try:
+        acct.update_balances(new_bp, new_pv, as_of=new_as_of)
+    except Exception as e:
+        console.print(f"[yellow]Could not update balances:[/yellow] [dim]{e}[/dim]")
+        console.print()
+        return
+
+    if abs(delta) < 0.005:
+        console.print(f"[dim]Account value unchanged at ${new_pv:,.0f} "
+                      f"(as of {new_as_of or 'unknown'}).[/dim]")
+    else:
+        _c = "green" if delta > 0 else "red"
+        console.print(
+            f"[bold]Account value[/bold] ${old_pv:,.0f} → [bold]${new_pv:,.0f}[/bold] "
+            f"([{_c}]{'+' if delta > 0 else '-'}${abs(delta):,.0f}[/{_c}])"
+            f"[dim] · cash ${new_bp:,.0f} · as of {new_as_of or 'unknown'}[/dim]")
+        console.print(
+            f"[dim]  Position sizing uses 5% of this — "
+            f"${old_pv * 0.05:,.0f} → ${new_pv * 0.05:,.0f} per trade.[/dim]")
+    if bal.get("pending"):
+        console.print(f"[dim]  Includes ${bal['pending']:,.0f} pending activity "
+                      f"(unsettled), per the same definition helm import uses.[/dim]")
+    console.print()

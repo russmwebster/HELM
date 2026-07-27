@@ -1091,6 +1091,7 @@ def portfolio_pulse(rows, account_id=None):
     out = {"n": len(rows), "total_pnl": 0.0, "capital_at_work": 0.0,
            "capital_pct": None, "uncommitted": None, "portfolio_value": None,
            "assigned_value": 0.0, "assigned_pct": None,
+           "balances_as_of": None, "balances_age_days": None,
            "pnl_pct_of_capital": None, "concentration": None,
            "net_greeks": None, "earnings": [], "manage": [], "next_expiry": None,
            "earnings_unknown": []}
@@ -1112,8 +1113,21 @@ def portfolio_pulse(rows, account_id=None):
         try:
             acct = account_id or get_active_account()
             row = conn.execute(
-                "SELECT portfolio_value FROM accounts WHERE id = ?", (acct,)).fetchone()
+                "SELECT portfolio_value, balances_as_of FROM accounts WHERE id = ?",
+                (acct,)).fetchone()
             pv = float(row[0]) if row and row[0] else None
+            # W56: the age of the number, carried alongside the number. Every
+            # position is sized from this, and for two months it was a 26 May
+            # snapshot that no command could refresh -- silently wrong in
+            # whichever direction the account had moved.
+            _asof = row[1] if row and len(row) > 1 else None
+            if _asof:
+                out["balances_as_of"] = _asof
+                try:
+                    out["balances_age_days"] = (
+                        _dt.date.today() - _dt.date.fromisoformat(_asof)).days
+                except Exception:
+                    pass
         finally:
             conn.close()
     except Exception:
@@ -1205,12 +1219,28 @@ def _pulse_header(rows):
     # down -- it was the card least able to change a decision. How much of the
     # account is committed, and how much is not, is the number that answers
     # "can I take the next trade".
+    # W56: state the age of the denominator. All three percentages on this card
+    # divide by portfolio_value; if that figure is two months old the card is
+    # confidently wrong and looks exactly the same. Silent above a week, dim
+    # after that, yellow past a month -- and "age unknown" is said out loud
+    # rather than left blank, because blank reads as current.
+    _age = P.get("balances_age_days")
+    if P.get("balances_as_of") is None:
+        _stale = "\n[dim]account value: age unknown[/dim]"
+    elif _age is None or _age <= 7:
+        _stale = ""
+    elif _age <= 30:
+        _stale = f"\n[dim]account value {_age}d old[/dim]"
+    else:
+        _stale = (f"\n[yellow]account value {_age}d old[/yellow]"
+                  f"[dim] — run helm reconcile[/dim]")
+
     if P["capital_pct"] is not None:
         card_cap = (f"[dim]capital at work[/dim]\n"
                     f"[bold]${P['capital_at_work']:,.0f}[/bold]\n"
                     f"[dim]{P['capital_pct']:.0f}% · ${P['uncommitted']:,.0f} free"
                     + (f" · ${P['assigned_value']:,.0f} if assigned"
-                       if P["assigned_value"] else "") + "[/dim]")
+                       if P["assigned_value"] else "") + "[/dim]" + _stale)
     else:
         card_cap = (f"[dim]capital at work[/dim]\n"
                     f"[bold]${P['capital_at_work']:,.0f}[/bold]\n"

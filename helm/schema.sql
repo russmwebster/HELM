@@ -33,7 +33,15 @@ CREATE TABLE IF NOT EXISTS accounts (
     currency        TEXT NOT NULL DEFAULT 'USD',
     is_active       INTEGER NOT NULL DEFAULT 1,
     created_at      TEXT NOT NULL DEFAULT (datetime('now')),
-    notes           TEXT
+    notes           TEXT,
+    -- W56: balances had no writer reachable after setup, so portfolio_value
+    -- sat two months stale while every position was sized from it. These two
+    -- are deliberately different questions: as_of is the date the MONEY is
+    -- true (the CSV's own "Date downloaded"), updated_at is when HELM wrote
+    -- it. Staleness you can see is a different problem from staleness you
+    -- cannot.
+    balances_as_of      TEXT,
+    balances_updated_at TEXT
 );
 
 -- ============================================================
