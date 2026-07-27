@@ -47,6 +47,41 @@ def _fit_grade(conviction):
     return _FIT_MAP.get(str(conviction).strip().upper())
 
 
+def attach_days_to_earnings(results, generated_at=None):
+    """Write days_to_earnings onto each scan row, from the watchlist cache.
+
+    persist_scan_signals has always computed this on its way into the signals
+    table. HELM-101 G4 needs it EARLIER -- at screen time, before persistence --
+    so it is lifted into a helper both paths use rather than computed twice from
+    the same source. That is the same collapse W9 applied to the pulse
+    arithmetic and W11 applied to the earnings date: two copies of one fact
+    disagree eventually, and here they would disagree about whether a name is
+    inside its earnings ramp.
+
+    Returns the number of rows annotated. Never raises: a scan must not fail
+    because an earnings-cache read did.
+    """
+    if not results:
+        return 0
+    try:
+        rows = get_conn().execute(
+            "SELECT ticker, next_earnings FROM watchlist").fetchall()
+        earn = {r["ticker"]: r["next_earnings"] for r in rows}
+    except Exception:
+        earn = {}
+    ts = generated_at or datetime.now().isoformat()
+    n = 0
+    for res in results:
+        if not isinstance(res, dict) or not res.get("ticker"):
+            continue
+        try:
+            res["days_to_earnings"] = days_until(earn.get(res["ticker"]), ts)
+            n += 1
+        except Exception:
+            res.setdefault("days_to_earnings", None)
+    return n
+
+
 def persist_scan_signals(results, policy_version="v0", generated_at=None):
     """Persist each scanned candidate as a Signal row. Returns (saved, skipped)."""
     if not results:
@@ -76,7 +111,13 @@ def persist_scan_signals(results, policy_version="v0", generated_at=None):
             "rationale": res.get("strategy_rationale"),
         }]
         _ed = _earn_map.get(res["ticker"])
-        _dte = days_until(_ed, ts)
+        # HELM-101 step 4: prefer the value attach_days_to_earnings()
+        # already wrote, so the screen and the stored row cannot disagree
+        # about the same fact. Falls back to computing it, so this path is
+        # unchanged for any caller that does not attach first.
+        _dte = res.get("days_to_earnings")
+        if _dte is None:
+            _dte = days_until(_ed, ts)
         payload = {
             "spot_price": res.get("price"),
             "iv_percentile": res.get("iv_pct"),

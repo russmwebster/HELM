@@ -235,6 +235,63 @@ def _print_declined(declined):
     console.print()
 
 
+def _print_lc_screen(rows):
+    """HELM-101 step 4: the buy-side screen's verdict, shown beside the existing
+    route and routing nothing.
+
+    Deliberately a separate block rather than a column on the main table. W11's
+    lesson is that a column added without its cell shifts every value to its
+    right one place left and still renders, invisibly; a footer block cannot do
+    that. It also keeps the two screens visibly separate, which is the point of
+    the dual-book A/B -- they are supposed to disagree.
+
+    The reject histogram is not decoration. A screen that reports only its
+    survivors cannot be argued with, and the single most useful thing this one
+    can tell you is which gate emptied the board.
+    """
+    try:
+        from helm import lc_screen
+    except Exception:
+        return
+    n_pass, n_total, hist = lc_screen.summarize(rows or [])
+    if not n_total:
+        return
+    console.print(f"[dim]Long-call screen — {n_pass} of {n_total} pass · "
+                  f"non-routing, books nothing[/dim]")
+    survivors = sorted((r for r in (rows or []) if r.get("lc_screen_pass")),
+                       key=lambda r: (r.get("lc_screen_rank") or 999))
+
+    def _f(v, n=1):
+        return f"{float(v):.{n}f}" if isinstance(v, (int, float)) else "--"
+
+    if survivors:
+        t = Table(box=box.SIMPLE, show_header=True, header_style="dim")
+        t.add_column("#", width=3, justify="right")
+        t.add_column("Ticker", width=8, no_wrap=True)
+        t.add_column("Score", width=6, justify="right")
+        t.add_column("IV/HV90", width=8, justify="right")
+        t.add_column("HV252", width=6, justify="right")
+        t.add_column("ADX", width=5, justify="right")
+        t.add_column("Bias", width=5, justify="right")
+        t.add_column("Sell-side route", width=18, no_wrap=True)
+        for r in survivors:
+            t.add_row(str(r.get("lc_screen_rank") or "--"),
+                      str(r.get("ticker") or "--"),
+                      _f(r.get("lc_rank_score"), 3),
+                      _f(r.get("iv_hv90_ratio"), 3),
+                      _f(r.get("hv_252")),
+                      _f(r.get("adx")),
+                      _f(r.get("bias_score"), 0),
+                      str(r.get("strategy") or "--"))
+        console.print(t)
+    else:
+        console.print("[dim]  no candidates — nothing cleared every gate[/dim]")
+    if hist:
+        worst = "  ".join(f"{k} {v}" for k, v in hist.most_common(5))
+        console.print(f"[dim]  rejected by: {worst}[/dim]")
+    console.print()
+
+
 def bias_to_strategy(score: int, rsi=None, ivr=None, ivp=None):
     """
     Map directional bias + vol environment to a strategy.
@@ -804,6 +861,26 @@ def run():
         valid = [r for r in valid if r.get("iv_current") and r["iv_current"] >= min_iv]
 
     # Sort by bias score (absolute value first, then bullish bias for CSP focus)
+    # HELM-101 step 4 (s90): the buy-side screen runs as an additional pass
+    # over the whole board -- every scanned name, not just the routed ones,
+    # because the LC screen is independent of bias_to_strategy by design and
+    # a name HELM declined to sell is exactly the sort it might want to buy.
+    #
+    # BOARD-level, not a per-name call inside the scan loop: G5 logs a
+    # board-relative quintile alongside the absolute ceiling it acts on,
+    # and that needs every row.
+    #
+    # NON-ROUTING: sets no strategy, books nothing. It writes five lc_*
+    # fields which _PASSTHROUGH carries into signals. Wrapped, because a
+    # screen that routes nothing must never break a scan that does.
+    try:
+        from helm.cli._decision_capture import attach_days_to_earnings
+        from helm import lc_screen as _lcs
+        attach_days_to_earnings(results)
+        _lcs.screen([r for r in results if not r.get("error")])
+    except Exception:
+        pass
+
     # decision-capture (policy v0): persist every scanned candidate
     try:
         persist_scan_signals(results)
@@ -944,6 +1021,8 @@ def run():
     console.print()
 
     _print_declined(declined)
+
+    _print_lc_screen(results)
 
     if errors:
         console.print(f"[dim]{len(errors)} ticker(s) had errors: {', '.join(r['ticker'] for r in errors[:5])}[/dim]")
