@@ -33,14 +33,20 @@ def chk(cond, label):
 
 from helm import vol_view as V
 
-VIEW = {'available': True, 'hv_30': 100.0, 'hv_90': 80.0,
+VIEW = {'available': True, 'hv_30': 120.0, 'hv_30_ex_earn': 100.0,
+        'hv_30_source': 'dates', 'hv_90': 80.0,
         'hv_90_ex_earn': 90.0, 'hv_90_source': 'dates', 'hv_252': 70.0,
         'iv': 95.0, 'iv_rank': 82.0, 'iv_percentile': 84.0, 'source': 'scan',
         'age_days': 0}
 
 print('vol_view -- the window is matched to the contract, and labelled')
-chk(V.hv_for_dte(VIEW, 25) == (100.0, 'HV30'), 'a 25-day contract uses HV30')
-chk(V.hv_for_dte(VIEW, 45) == (100.0, 'HV30'), 'the boundary belongs to HV30')
+chk(V.hv_for_dte(VIEW, 25) == (100.0, 'HV30ex'),
+    'a 25-day contract uses the EX-EARNINGS 30-day window, not raw HV30')
+chk(V.hv_for_dte(VIEW, 45) == (100.0, 'HV30ex'), 'the boundary belongs to it too')
+chk(V.hv_for_dte(dict(VIEW, hv_30_ex_earn=None), 25) == (120.0, 'HV30'),
+    'with no ex-earnings figure it falls back to raw HV30 and SAYS so')
+chk(V.hv_for_dte(dict(VIEW, hv_30_source='plain'), 25) == (100.0, 'HV30'),
+    'an untrimmed number is never labelled HV30ex')
 chk(V.hv_for_dte(VIEW, 46) == (90.0, 'HV90ex'),
     'past the boundary it uses the ex-earnings window')
 plain = dict(VIEW, hv_90_source='plain')
@@ -54,16 +60,16 @@ chk(V.iv_hv_ratio(95.0, VIEW, 25) == 0.95, 'IV 95 against HV30 100 is 0.95')
 chk(V.iv_hv_ratio(95.0, VIEW, 90) == round(95.0 / 90.0, 3),
     'the same IV at 90 DTE is measured against the 90-day window')
 chk(V.iv_hv_ratio(None, VIEW, 25) is None, 'no IV, no ratio')
-chk(V.iv_hv_ratio(95.0, dict(VIEW, hv_30=0), 25) is None,
+chk(V.iv_hv_ratio(95.0, dict(VIEW, hv_30=0, hv_30_ex_earn=0), 25) is None,
     'a zero HV does not divide')
 
 print('\nvol_view -- the header says what it knows and what it does not')
 line = V.header_line(VIEW, dte=25)
 chk('yellow' in line and 'BELOW realized' in line,
     'under 1.00 is called out in yellow -- the case IVR cannot show')
-rich = dict(VIEW, hv_30=80.0)
+rich = dict(VIEW, hv_30=80.0, hv_30_ex_earn=80.0)
 chk('green' in V.header_line(rich, dte=25), 'at or over 1.10 reads green')
-mid = dict(VIEW, hv_30=92.0)
+mid = dict(VIEW, hv_30=92.0, hv_30_ex_earn=92.0)
 hl = V.header_line(mid, dte=25)
 chk('green' not in hl and 'yellow' not in hl, 'in between carries no colour')
 chk('unavailable' in V.header_line({'available': False}),
@@ -72,12 +78,14 @@ chk('IVR 82/IVP 84' in line, 'IVR and IVP still shown -- this adds, it does not 
 
 print('\nvol_view -- source selection is hybrid and honest')
 c = sqlite3.connect(':memory:')
-c.execute('CREATE TABLE signals (ticker TEXT, generated_at TEXT, spot_price REAL,'
-          ' iv_current REAL, iv_rank REAL, iv_percentile REAL, hv_30 REAL,'
-          ' hv_90 REAL, hv_90_ex_earn REAL, hv_90_source TEXT, hv_252 REAL)')
-c.execute('INSERT INTO signals VALUES (?,?,?,?,?,?,?,?,?,?,?)',
-          ('ZZ', datetime.now().isoformat(), 10.0, 30.0, 60.0, 65.0,
-           25.0, 24.0, 23.0, 'dates', 22.0))
+DDL = ('CREATE TABLE signals (ticker TEXT, generated_at TEXT, spot_price REAL,'
+       ' iv_current REAL, iv_rank REAL, iv_percentile REAL, hv_30 REAL,'
+       ' hv_30_ex_earn REAL, hv_30_source TEXT,'
+       ' hv_90 REAL, hv_90_ex_earn REAL, hv_90_source TEXT, hv_252 REAL)')
+ROW = ('ZZ', datetime.now().isoformat(), 10.0, 30.0, 60.0, 65.0,
+       25.0, 21.0, 'dates', 24.0, 23.0, 'dates', 22.0)
+c.execute(DDL)
+c.execute('INSERT INTO signals VALUES (' + ','.join('?'*13) + ')', ROW)
 v = V.vol_view('ZZ', conn=c)
 chk(v.get('source') == 'scan' and v.get('hv_30') == 25.0,
     'a fresh scan row is preferred -- the board agrees with the screen')
@@ -85,12 +93,10 @@ chk(V.vol_view('ZZ', conn=c, iv_hint=41.0).get('iv') == 41.0,
     'a caller-supplied IV wins, so the ratio does not need a scan row')
 
 c2 = sqlite3.connect(':memory:')
-c2.execute('CREATE TABLE signals (ticker TEXT, generated_at TEXT, spot_price REAL,'
-           ' iv_current REAL, iv_rank REAL, iv_percentile REAL, hv_30 REAL,'
-           ' hv_90 REAL, hv_90_ex_earn REAL, hv_90_source TEXT, hv_252 REAL)')
-c2.execute('INSERT INTO signals VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+c2.execute(DDL)
+c2.execute('INSERT INTO signals VALUES (' + ','.join('?'*13) + ')',
            ('ZZ', (datetime.now() - timedelta(days=9)).isoformat(), 10.0, 30.0,
-            60.0, 65.0, 25.0, 24.0, 23.0, 'dates', 22.0))
+            60.0, 65.0, 25.0, 21.0, 'dates', 24.0, 23.0, 'dates', 22.0))
 row = V.from_signals(c2, 'ZZ')
 chk(row['age_days'] >= 9, 'a nine-day-old row reports its age')
 

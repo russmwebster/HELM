@@ -78,6 +78,11 @@ class Signal:
     plus_di:      Optional[float]   = None   # +DI(14)
     minus_di:     Optional[float]   = None   # -DI(14)
     obv_trend:    Optional[int]     = None   # +1 rising / -1 falling / 0 flat
+    # s90: the ex-earnings twin for the 30-day window. Same shape and same
+    # source vocabulary as hv_90_ex_earn / hv_90_source (dates | dates-none
+    # | plain), so a caller can treat the two windows identically.
+    hv_30_ex_earn:    Optional[float] = None  # 30d RV, earnings moves removed
+    hv_30_source:     Optional[str]   = None  # dates | dates-none | plain
     # HELM-101 (s82): buy-side vol-gate inputs + long-call screen verdict
     hv_90:            Optional[float] = None   # plain 90d realized vol (%)
     hv_90_ex_earn:    Optional[float] = None   # 90d RV, earnings moves removed

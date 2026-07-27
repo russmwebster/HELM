@@ -880,6 +880,12 @@ ALTER TABLE positions ADD COLUMN entry_dte INTEGER;
 -- HELM-121 (s90): attribution for the buy-side screen's dual-book A/B.
 ALTER TABLE positions ADD COLUMN origin_screen TEXT;
 
+-- s90: 30-day realized vol with earnings moves removed. hv_90 has had an
+-- ex-earnings twin since s82; hv_30 did not, so the window that governs
+-- most contracts was the earnings-contaminated one.
+ALTER TABLE signals ADD COLUMN hv_30_ex_earn REAL;
+ALTER TABLE signals ADD COLUMN hv_30_source TEXT;
+
 -- W21 (s90): what each scheduled agent run actually did. Gaps are made
 -- visible rather than backfilled -- see helm/agent_runs.py.
 CREATE TABLE IF NOT EXISTS agent_runs (

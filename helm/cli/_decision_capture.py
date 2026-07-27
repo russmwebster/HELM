@@ -18,6 +18,7 @@ _PASSTHROUGH = ("iv_current", "iv_rank", "ema_20", "sma_50", "sma_200",
                 "rsi_14", "atr_14", "price_vs_52wk_pct",
                 'hv_30', 'vrp', 'vrp_ratio', 'vol_bucket',  # HELM-090 p1
                 'adx', 'plus_di', 'minus_di', 'obv_trend',  # HELM-103
+                'hv_30_ex_earn', 'hv_30_source',              # s90
                 'hv_90', 'hv_90_ex_earn', 'hv_90_source', 'hv_252',
                 'iv_hv90_ratio', 'lc_screen_pass', 'lc_screen_rank',
                 'lc_screen_reject', 'lc_rank_score', 'lc_gates_json')  # HELM-101

@@ -55,7 +55,8 @@ def from_signals(conn, ticker):
     try:
         row = conn.execute(
             'SELECT generated_at, spot_price, iv_current, iv_rank, iv_percentile, '
-            'hv_30, hv_90, hv_90_ex_earn, hv_90_source, hv_252 '
+            'hv_30, hv_30_ex_earn, hv_30_source, '
+            'hv_90, hv_90_ex_earn, hv_90_source, hv_252 '
             'FROM signals WHERE ticker = ? ORDER BY generated_at DESC LIMIT 1',
             (str(ticker).upper(),)).fetchone()
     except Exception:
@@ -70,9 +71,11 @@ def from_signals(conn, ticker):
         'source': 'scan', 'asof': row[0], 'age_days': age,
         'spot': _num(row[1]), 'iv': _num(row[2]),
         'iv_rank': _num(row[3]), 'iv_percentile': _num(row[4]),
-        'hv_30': _num(row[5]), 'hv_90': _num(row[6]),
-        'hv_90_ex_earn': _num(row[7]), 'hv_90_source': row[8],
-        'hv_252': _num(row[9]),
+        'hv_30': _num(row[5]),
+        'hv_30_ex_earn': _num(row[6]), 'hv_30_source': row[7],
+        'hv_90': _num(row[8]),
+        'hv_90_ex_earn': _num(row[9]), 'hv_90_source': row[10],
+        'hv_252': _num(row[11]),
     }
 
 
@@ -111,6 +114,9 @@ def compute_live(ticker, conn=None):
         hv90x, src = H.hv_ex_earnings(close, dates, 90)
         out['hv_90_ex_earn'] = hv90x
         out['hv_90_source'] = src
+        hv30x, src30 = H.hv_ex_earnings(close, dates, 30)
+        out['hv_30_ex_earn'] = hv30x
+        out['hv_30_source'] = src30
     except Exception:
         return None
     return out
@@ -129,8 +135,15 @@ def vol_view(ticker, conn=None, iv_hint=None):
     view = None
     if conn is not None:
         v = from_signals(conn, ticker)
+        # A scan row is preferred only if it can answer the question the
+        # ratio asks. Rows written before hv_30_ex_earn existed carry NULL
+        # there, and falling back to raw HV30 would quietly reinstate the
+        # earnings contamination this change exists to remove -- so treat a
+        # row without it as incomplete and compute live instead. Self-healing:
+        # once one scan has run, the free path takes over again.
         if v and v.get('age_days') is not None and v['age_days'] <= MAX_AGE_DAYS \
-                and v.get('hv_30') is not None:
+                and v.get('hv_30') is not None \
+                and v.get('hv_30_ex_earn') is not None:
             view = v
     if view is None:
         view = compute_live(ticker, conn=conn)
@@ -163,6 +176,19 @@ def hv_for_dte(view, dte):
             return None, None
         label = 'HV90ex' if view.get('hv_90_source') == 'dates' else 'HV90'
         return hv, label
+    # s90 (the AAPL board): prefer the EX-EARNINGS 30-day window.
+    # AAPL reported three days after that board was drawn and both expiries
+    # sat after the print. Plain HV30 still carried the previous earnings
+    # move, so every row read ~0.91 -- 'implied below realized' -- when
+    # against ex-earnings realized the same premium was ~1.12. The ratio
+    # said cheap where the honest answer was rich, in exactly the case a
+    # premium seller most needs it right.
+    #
+    # This is a DISPLAY correction. It gates nothing.
+    hv = view.get('hv_30_ex_earn')
+    if hv is not None:
+        label = 'HV30ex' if view.get('hv_30_source') == 'dates' else 'HV30'
+        return hv, label
     hv = view.get('hv_30')
     return (hv, 'HV30') if hv is not None else (None, None)
 
@@ -188,6 +214,12 @@ def header_line(view, dte=None):
     if not view or not view.get('available'):
         return '[yellow]vol context unavailable — no scan row and no price history[/yellow]'
     bits = []
+    # Both 30-day numbers, when they differ enough to matter, so the size of
+    # the earnings contamination is visible rather than merely corrected
+    # behind the scenes. On the AAPL board that gap was 33.5 against 26.9.
+    _p, _x = view.get('hv_30'), view.get('hv_30_ex_earn')
+    if _p is not None and _x is not None and abs(_p - _x) >= 1.0:
+        bits.append('HV30 %.1f raw / %.1f ex-earn' % (_p, _x))
     iv = view.get('iv')
     if iv is not None:
         bits.append('IV %.1f' % iv)

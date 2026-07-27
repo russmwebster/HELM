@@ -540,6 +540,13 @@ def fetch_technicals(ticker: str, ivr_record=None) -> dict:
             result["hv_90_ex_earn"] = _hv90x
             result["hv_90_source"] = _hv90src
             result["hv_252"] = hv_from_closes(close, 252)
+            # s90: the same treatment for the 30-day window. Computed from
+            # the same closes and the same earnings dates as the 90-day
+            # pair, so the two are one measurement at two horizons rather
+            # than two definitions sharing a prefix.
+            _hv30x, _hv30src = hv_ex_earnings(close, _earnings_hist(ticker), 30)
+            result["hv_30_ex_earn"] = _hv30x
+            result["hv_30_source"] = _hv30src
         except Exception:
             pass
 
