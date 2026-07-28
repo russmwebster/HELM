@@ -833,11 +833,19 @@ def evaluate_contracts(ticker: str, strategy: str, config: dict,
 
     opt_type  = config["option_type"]
     direction = config["direction"]
-    delta_min = config["delta_min"]
-    delta_max = config["delta_max"]
+    # HELM-135 (W71): sell-side entry bands are the INTERSECTION of this
+    # config and strategy_settings -- the tighter of each edge wins, so the
+    # displayed preference and the enforced band can no longer disagree.
+    # Buy-side strategies are untouched. Narrowing only: this can never
+    # admit a contract the previous code refused. Fails open if settings
+    # are unreadable, like _entry_dte_floor below.
+    from helm.entry_bands import effective_bands as _eff_bands
+    _bands, _band_notes = _eff_bands(strategy, config)
+    delta_min = _bands["delta_min"]
+    delta_max = _bands["delta_max"]
     delta_sweet = config["delta_sweet"]
-    dte_min   = config["dte_min"]
-    dte_max   = config["dte_max"]
+    dte_min   = _bands["dte_min"]
+    dte_max   = _bands["dte_max"]
 
     if dte_target:
         dte_min = max(7, dte_target - 7)
@@ -1568,11 +1576,17 @@ def evaluate_condors(ticker: str, strategy: str, config: dict,
     import yfinance as yf
     import math
 
-    delta_min   = config["delta_min"]
-    delta_max   = config["delta_max"]
+    # HELM-135 (W71): the same resolved band as evaluate_contracts uses.
+    # Applied to EVERY sell-side evaluator, not just the single-leg one --
+    # a fix that lands on one path and not its siblings is exactly what
+    # produced the condor loss documented above.
+    from helm.entry_bands import effective_bands as _eff_bands
+    _bands, _band_notes = _eff_bands(strategy, config)
+    delta_min = _bands["delta_min"]
+    delta_max = _bands["delta_max"]
     delta_sweet = config["delta_sweet"]
-    dte_min     = config["dte_min"]
-    dte_max     = config["dte_max"]
+    dte_min = _bands["dte_min"]
+    dte_max = _bands["dte_max"]
     widths      = config.get("spread_widths", [5, 10, 15, 20])
 
     if dte_target:
@@ -2079,11 +2093,17 @@ def evaluate_strangles(ticker: str, strategy: str, config: dict,
     import yfinance as yf
     import math
 
-    delta_min   = config["delta_min"]
-    delta_max   = config["delta_max"]
+    # HELM-135 (W71): the same resolved band as evaluate_contracts uses.
+    # Applied to EVERY sell-side evaluator, not just the single-leg one --
+    # a fix that lands on one path and not its siblings is exactly what
+    # produced the condor loss documented above.
+    from helm.entry_bands import effective_bands as _eff_bands
+    _bands, _band_notes = _eff_bands(strategy, config)
+    delta_min = _bands["delta_min"]
+    delta_max = _bands["delta_max"]
     delta_sweet = config["delta_sweet"]
-    dte_min     = config["dte_min"]
-    dte_max     = config["dte_max"]
+    dte_min = _bands["dte_min"]
+    dte_max = _bands["dte_max"]
 
     if dte_target:
         dte_min = max(7, dte_target - 7)
@@ -2365,11 +2385,17 @@ def evaluate_spreads(ticker: str, strategy: str, config: dict,
 
     opt_type = config["option_type"]
     direction = config["direction"]  # SHORT = selling the spread
-    delta_min = config["delta_min"]
-    delta_max = config["delta_max"]
+    # HELM-135 (W71): the same resolved band as evaluate_contracts uses.
+    # Applied to EVERY sell-side evaluator, not just the single-leg one --
+    # a fix that lands on one path and not its siblings is exactly what
+    # produced the condor loss documented above.
+    from helm.entry_bands import effective_bands as _eff_bands
+    _bands, _band_notes = _eff_bands(strategy, config)
+    delta_min = _bands["delta_min"]
+    delta_max = _bands["delta_max"]
     delta_sweet = config["delta_sweet"]
-    dte_min = config["dte_min"]
-    dte_max = config["dte_max"]
+    dte_min = _bands["dte_min"]
+    dte_max = _bands["dte_max"]
     spread_widths = config.get("spread_widths", [10, 20])
 
     if dte_target:
@@ -3278,13 +3304,18 @@ def run():
         t.add_column("Contracts",justify="right", width=9, no_wrap=True)
         t.add_column("Source",   width=10, no_wrap=True)
 
+    from helm.entry_bands import effective_bands as _eff_bands
     for rank, c in enumerate(contracts, 1):
         # Suggest contracts
         suggested = suggest_contracts(strategy, c["strike"], c["mid"], account_id, ticker=ticker)
 
         spread_str = spread_flag(c.get("spread_pct"))
-        delta_str  = delta_flag(c.get("delta"), config["delta_min"],
-                                config["delta_max"], config["delta_sweet"])
+        # HELM-135 (W71): flag against the band actually ENFORCED, not the
+        # looser config one. A display that calls 0.38 in-band while the gate
+        # refuses it is the exact confusion this issue is about.
+        _disp_bands, _ = _eff_bands(strategy, config)
+        delta_str  = delta_flag(c.get("delta"), _disp_bands["delta_min"],
+                                _disp_bands["delta_max"], config["delta_sweet"])
         theta_str  = f"${c['theta']:.3f}" if c.get("theta") else "--"
         iv_str     = f"{c['iv']:.0f}%" if c.get("iv") else "--"
         premium_str = f"${(c.get('premium_total') or c.get('mid',0)*100):.0f}/contract"
