@@ -239,6 +239,14 @@ def save_check(position_id: str, assessment: dict, pos: dict, leg_marks_by_id: O
     if dq == "GOOD" and _pnl045 is not None and _mp045 not in (None, 0) \
             and float(_pnl045) > float(_mp045) * 1.001:
         dq = "STALE"
+    # HELM-138: a persisted GOOD row must carry a mark. A multi-leg position
+    # with an unquotable wing used to persist GOOD rows with pnl_unrealized
+    # NULL (six such rows on the EQT diagonal, 27-28 Jul) -- rows invisible
+    # to every reader that trusts GOOD, while a single-leg position with no
+    # quote was honestly not persisted at all. One convention for every
+    # shape: no mark, no GOOD row.
+    if dq == "GOOD" and _pnl045 is None:
+        dq = "PARTIAL"
 
     # HELM-037 live-only persistence gate: only GOOD (live + complete) marks are
     # written. Frozen / partial / yfinance reads are still computed and displayed
@@ -744,12 +752,26 @@ def check_one(pos: dict, legs: list, deep: bool = False, persist: bool = False) 
             _key = (_lg["option_type"], _lg["strike"])
             if _key in leg_marks:
                 continue
-            _q = fetch_ibkr_option(ticker, _lg["expiration"], _lg["strike"], _lg["option_type"])
-            _mid = _q.get("mid")
-            _leg_live = bool(is_market_open() and _mid is not None)
-            if _mid is None:
-                _yq = fetch_yf_data(ticker, _lg["expiration"], _lg["strike"], _lg["option_type"])
-                _mid = _yq.get("mid")
+            # HELM-138 (W74): an expired contract quotes nothing, ever, so
+            # chasing IBKR/yfinance for it left the whole position permanently
+            # unmarked (the EQT diagonal's front leg, expired 2026-07-24).
+            # Its honest mark is the settlement intrinsic -- a fact fixed at
+            # expiry. None from settlement stays unmarked (HELM-095: never
+            # invent a value).
+            _lg_dte = dte(_lg["expiration"]) if _lg.get("expiration") else None
+            if _lg_dte is not None and _lg_dte < 0:
+                from helm.expiry import settlement_intrinsic
+                _q = {}
+                _mid = settlement_intrinsic(ticker, _lg["option_type"],
+                                            _lg["strike"], _lg["expiration"])
+                _leg_live = False
+            else:
+                _q = fetch_ibkr_option(ticker, _lg["expiration"], _lg["strike"], _lg["option_type"])
+                _mid = _q.get("mid")
+                _leg_live = bool(is_market_open() and _mid is not None)
+                if _mid is None:
+                    _yq = fetch_yf_data(ticker, _lg["expiration"], _lg["strike"], _lg["option_type"])
+                    _mid = _yq.get("mid")
             leg_marks[_key] = _mid
             if _lg.get("id") != (primary.get("id") if primary is not None else None):
                 leg_marks_by_id.append({

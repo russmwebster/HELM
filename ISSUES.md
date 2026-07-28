@@ -229,6 +229,43 @@ _s78: parenting **SHIPPED** (commit 5cd12b5) -- the replacement is now parented 
 
 ## Resolved log
 
+- **HELM-138 · BUG** (2026-07-28, s93) -- **an expired leg makes its whole
+  position unmarkable and unverdictable, and the rows it writes lie.** W74's
+  "three positions with no mark" re-measured to one true case with a clean
+  mechanism: the EQT diagonal's front leg (55C) expired 2026-07-24 (EQT closed
+  53.03, high 54.33 -- worthless), and nothing in HELM settles an expired leg.
+  Three deterministic consequences: (1) an expired contract quotes nothing, so
+  the HELM-018 all-legs rule left pnl_mtm NULL on every check, forever; (2)
+  data_quality is judged on the PRIMARY leg only, so six GOOD rows with NULL
+  pnl were persisted 27-28 Jul -- defeating HELM-037's live-only gate, while a
+  single-leg position with no quote is honestly not persisted; (3) core_verdict
+  returns None with any leg unmarked, so the position could never fire a
+  verdict -- and paper_exit_agent.leg_mid would defer any close forever ("no
+  quote for leg"). Why never before: every prior position closed before expiry;
+  the diagonal is the first structure whose front leg expires by design while
+  the position lives (decision.py manages the family off the BACK leg and
+  defers the front-leg roll layer). **Fix, Russ's call (settle-value mark, not
+  full lifecycle):** new `helm/expiry.py` -- `settlement_intrinsic()` = expiry-
+  day close vs strike (a fact fixed at expiry; None when unknowable, never
+  invented; refuses to answer for unexpired contracts); the check netting loop
+  and `paper_exit_agent.leg_mid` both use it for expired legs (both paths, the
+  W51 discipline); and **no GOOD row without a mark** -- `save_check` demotes a
+  NULL-pnl row to PARTIAL, one convention for every shape. Data repair: the six
+  lying rows re-graded to PARTIAL (`repair_s93_h138_rows.py`, backup
+  `data/helm-pre-h138-repair-20260728_175349.db`). **20 checks
+  (`tools/verify_s93_w74.py`), control run against pre-change code aborts at
+  the exact defect** (IBKR asked for the expired contract); end-to-end
+  `check_one(persist=True)` against a snapshot DB: pnl_mtm -151 (settled short
+  +92, live long mid), verdict computable, row correctly unpersisted after
+  hours (live-only gate). EQT pnl arithmetic: full +$92 credit realized on the
+  settled short. **Left open here:** the leg_marks netting dict is keyed
+  (option_type, strike) with no expiration, so a same-strike calendar's two
+  legs would silently share one mark -- no such structure is in the book;
+  register a W-item before booking calendars. Also measured: HELM-128's
+  instrumented fault has fired ZERO times since the tracebacks went in (count
+  still 76, all pre-instrumentation) -- this defect was a different, deterministic
+  mechanism. Worklist W74.
+
 
 - **HELM-137 · DOCS** (2026-07-28, s92) -- **the free-data trial: recorded and
   retired.** The register never mentioned the trial existed (W33); this entry is

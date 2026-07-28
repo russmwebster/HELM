@@ -52,7 +52,20 @@ DRY = ("--dry-run" in sys.argv) or os.environ.get("HELM_PAPER_DRY") == "1"
 
 
 def leg_mid(tk, leg):
-    """Current yfinance mid for one leg (fallback: last). None if no quote."""
+    """Current yfinance mid for one leg (fallback: last). None if no quote.
+    HELM-138: an EXPIRED leg returns its settlement intrinsic instead --
+    otherwise a close that includes one can never execute ("no quote for
+    leg -- deferred", every run, forever)."""
+    try:
+        _exp = (leg.expiration or "")[:10]
+        from helm.dates import dte as _dte
+        _d = _dte(_exp)
+        if _d is not None and _d < 0:
+            from helm.expiry import settlement_intrinsic
+            return settlement_intrinsic(
+                getattr(tk, "ticker", None), leg.option_type, leg.strike, _exp)
+    except Exception:
+        pass
     try:
         exp = (leg.expiration or "")[:10]
         chain = tk.option_chain(exp)
