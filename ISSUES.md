@@ -30,7 +30,7 @@ _Snapshot; refreshed each `helm checkpoint`, read via `helm status`._
   them, and W68 is the likely mechanism. Then **W12** (sizing), then **W19** (the
   learning loop), which now has both wings feeding it.
 - **Blocked (market/RTH):** none outstanding — HELM-031 `shadow_*` capture verified live (s79); the deep-ITM spec CSPs (RKLB/IREN/OKLO/IONQ) are no longer open in the book, so the re-pull is moot.
-- **Counts:** 35 active (25 OPEN · 10 DEFERRED) · last shipped s92 (HELM-132..136: G3 denominator, READ column, entry bands, the sell-side earnings gate) · **Last-updated 2026-07-28 (s92c)**
+- **Counts:** 33 active (23 OPEN · 10 DEFERRED) · last shipped s92 (HELM-132..136; HELM-089/090 closed by decision) · **Last-updated 2026-07-28 (s92d)**
 - **Next RTH:** confirm HELM-068 parenting stamps `parent_position_id` on the next real roll; validate HELM-081 live vol-context capture (`hv_30d`/skew) during RTH; watch the first live board after HELM-111 -- the bullish side should now decline rather than route BPS, and the Declined section says why; confirm a routed DIAGONAL opens its short leg at >= 28 DTE.
 
 _Last updated_: 2026-07-27 (s90. The through-line: five claims in this register were quantitatively wrong in the same way -- each measured on the convenient subset. Only closed trades. Attempts rather than writes. The interactive path but not the scheduled one. A vol window containing the earnings move. Two of the five were mine, made this session and corrected the same day. When a headline figure looks decisive, ask what it excludes.)
@@ -168,10 +168,6 @@ _s46 (P2 c1): `schema.sql` now ALTERs in the nullable `shadow_*` columns (`shado
 _s46 (P2 c3): wired `evaluate_shadow_debit_stop` into the REAL check writer (`check_cmd.py`) - computed once in `core_verdict`, carried on `assessment`, persisted to `checks.shadow_*` on every 3x/day REAL check. Six additive hunks, zero-regression (rides the core-verdict try/except; NULL for non-LONG_DEBIT; acting verdict untouched). Build complete; OPEN->DEFERRED - the -50%-of-premium would-fire flag now accumulates on the real book, go-live decision gated on enough would-fire rows._
 _s79: `shadow_*` capture **VERIFIED** live during RTH — the six REAL long calls (APLD/DAL/GOOG/JPM/NKE/TSLA) all stamped `shadow_signal='DEBIT_STOP_50'` with `would_fire` matching the -50%-of-premium threshold (APLD/GOOG/TSLA fire; DAL/JPM/NKE do not), GOOD / ibkr-live. Informational pipeline confirmed; go-live stays DEFERRED, evidence-gated._
 
-**HELM-089 · `DESIGN` · `OPEN` · dynamic short-strike delta by IV regime** — entry delta is fixed per strategy; best practice flexes it with IVR (→~0.20 when IVR>50 for more cushion, →~0.30 when IVR<30), reusing the existing `entry_iv_rank_`/`entry_delta_` levers. Cheap, high-value. Source: s79 model-vs-best-practices review.
-
-**HELM-090 · `DESIGN` · `OPEN` · IV-vs-realized (VRP) entry signal** — gate/score entries on implied minus realized vol (`hv_30d`) rather than IV Rank alone (the direct variance-risk-premium richness measure). Ingredients captured via HELM-081; not yet combined. Source: s79 review; depends on HELM-081 robustness.
-
 **HELM-091 · `DESIGN` · `OPEN` · skew-aware structure routing** — use the put/call IV skew captured in `vol_context.py` to prefer put spreads over naked puts when skew is elevated; captured but unused. Source: s79 review; depends on HELM-081 thin-wing skew fix.
 
 ### Ops / enhancement
@@ -233,6 +229,21 @@ _s78: parenting **SHIPPED** (commit 5cd12b5) -- the replacement is now parented 
 
 ## Resolved log
 
+
+- **HELM-089** (2026-07-28, s92) -- **WONTFIX, per W39.** "Dynamic short-strike
+  delta by IV regime" claimed "best practice flexes it with IVR" -- sourced to the
+  superseded s79 review. The s92 practitioner sweep found NO serious source
+  publishing an IV-conditional delta rule (the only instance was a content farm),
+  and the evidence standard grades the idea C. Delta stays fixed per strategy,
+  now actually enforced to the stored bands (HELM-135).
+- **HELM-090** (2026-07-28, s92) -- **display half DONE, gate half declined by
+  Russ, per W40.** p1 (vrp / vrp_ratio / vol_bucket on every scan) shipped s82 and
+  the READ cites it since HELM-134. The entry-GATE half is closed by the standing
+  decision of 2026-07-28: the board shows IVR, IVP, IV%, HV and VRP and Russ
+  decides -- gate facts, display judgments. VRP stays a warning. The promotion
+  path, if the paper book ever argues for it, is the SELL_GATED trial (W80).
+  Test 1 (s82) additionally found the trades a VRP gate would exclude were the
+  best-performing cell on the book.
 
 - **HELM-135** (2026-07-28, s92) -- **sell-side entry bands are the intersection of
   `STRATEGY_CONFIG` and `strategy_settings`** -- the tighter of each edge wins, so
