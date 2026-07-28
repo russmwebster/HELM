@@ -197,8 +197,8 @@ def _step_workflow():
     console.print()
     console.print(Panel(
         bold("Step 5 of 5 — Your Daily Workflow") + "\n\n"
-        f"  {c('1. Screen','cyan')}  →  helm screen\n"
-        "    Monday mornings. Filters watchlist for options liquidity (OI ≥ 5,000).\n\n"
+        f"  {c('1. Watchlist','cyan')}  →  helm watchlist\n"
+        "    Manage the universe. Evaluates optionability with OI/volume benchmarks — nothing auto-filters.\n\n"
         f"  {c('2. Scan','cyan')}  →  helm scan\n"
         "    Applies the strategy matrix. Shows Strategy + Conviction for each ticker.\n\n"
         f"  {c('3. Open','cyan')}  →  helm open TICKER STRATEGY\n"
