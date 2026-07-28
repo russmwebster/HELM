@@ -189,6 +189,30 @@ _s78: parenting **SHIPPED** (commit 5cd12b5) -- the replacement is now parented 
 
 ## Resolved log
 
+- **HELM-139 · OPS** (2026-07-28, s93) -- **"IB Gateway refuses 38% of
+  connections" re-measured: not a chronic rate; a diagnostic read as a defect.**
+  The figure came from `sample_mktdata.py` (HELM-075's temporary boundary
+  sampler, com.helm.mktsampler), which probes the gateway every 10 minutes
+  AROUND THE CLOCK precisely to map when it is up -- its own header says a
+  NOCONN row "is itself signal." Decomposed over 7,875 rows (7/10-7/28):
+  weekday overnight 00-06h ~75% down (the nightly reset window), weekends 43%,
+  and **strict RTH 9:30-16:00 refusals are three discrete outages, not a
+  rate**: 7/15 (whole day), 7/21 (final 10 min), 7/24 (11:25 to close -- the
+  sampler kept writing, so the MACHINE was awake; the gateway itself was down,
+  which also explains that day's missed check slots without the sleep
+  hypothesis). The other 10 of 13 trading days: zero RTH refusals. The live
+  paths agree: every checks row 7/22-7/28 is ibkr-live, no fallbacks. **The
+  boundary map HELM-075's sampler was built to produce is hereby documented:
+  gateway reliably up ~07:00-16:00 ET weekdays; down overnight; occasional
+  discrete daytime outages (~1/wk).** Sampler retired per its own plan, Russ's
+  call: com.helm.mktsampler booted out (rc 0), plist kept in
+  ~/Library/LaunchAgents, sample_mktdata.py and logs/mktdata_samples.csv kept
+  on disk -- reversal is one launchctl bootstrap. The five live com.helm agents
+  confirmed untouched. **Residue -> W35:** a daytime gateway outage overlapping
+  check slots journals nothing (live-only gate) and looks identical to a
+  sleeping machine after the fact; PG health signals should surface it.
+  Worklist W22.
+
 - *(s93 · W41)* The seven entries below sat RESOLVED inside the Active
   section -- some since s59 -- inflating a visual scan of open work while the
   prefix-parsed counts correctly excluded them. Moved here verbatim, original
