@@ -55,6 +55,13 @@ def vol_read(row):
     """
     out = []
     strategy = row.get("strategy")
+    # HELM-136 follow-up: a row the earnings gate demoted still deserves its
+    # vol clauses. The PG board is a flat table with no Declined section, so
+    # the READ is the only place a declined row can explain itself -- and the
+    # clause it most needs ("earnings in Nd; the rank is the print") is the
+    # one that was being skipped. Read through to the overridden route.
+    if strategy == "NO_SELL_EARNINGS":
+        strategy = row.get("strategy_shadow")
     selling = strategy in SELL_STRATEGIES
     buying = strategy in BUY_STRATEGIES
 

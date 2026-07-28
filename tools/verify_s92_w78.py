@@ -88,6 +88,17 @@ vr.annotate(err)
 ck('error rows untouched', err[0]['bias_factors'] == ['x'], err[0])
 
 print()
+print('== gated rows keep their clauses (HELM-136 follow-up) ==')
+gk = dict(strategy='NO_SELL_EARNINGS', strategy_shadow='CSP', iv_rank=85.0,
+          iv_percentile=92.4, iv_current=22.0, hv_30=29.0, vrp=-6.5,
+          days_to_earnings=0, hv_30_source='dates')
+t = ' ; '.join(vr.vol_read(gk))
+ck('gated row reads through the shadow', 'earnings TODAY' in t, t)
+ck('gated row keeps the VRP clause', 'BELOW realized' in t, t)
+gn = dict(gk); gn.pop('strategy_shadow')
+ck('gated row with NO shadow yields no sell clauses', 'realized' not in ' '.join(vr.vol_read(gn)))
+
+print()
 print('== module stays DB-free ==')
 srctxt = open(os.path.expanduser('~/Projects/helm/helm/vol_read.py'), encoding='utf-8').read()
 ck('no sqlite3 import', 'sqlite3' not in srctxt)
