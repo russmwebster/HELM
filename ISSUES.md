@@ -17,23 +17,21 @@ _Snapshot; refreshed each `helm checkpoint`, read via `helm status`._
 
 - **Phase:** scaffolding complete (live · paper · edge). `schema.sql` faithfully builds live incl. constraints/defaults/FKs (HELM-002); hot `positions` table indexed live (HELM-021). Decision core (HELM-027) reaches every open family — one verdict engine reading `strategy_settings`, `/health` wired for CSP · LONG_CALL (single-leg) and iron condor / bear put spread (multi-leg) via `_core_band_ml` off `leg_checks`. Earnings now surfaced at the entry decision on both surfaces — `helm open` banner and `helm scan` column, unified on `classify_earnings` (HELM-044). Learning loop (HELM-023) is the frontier — entry+exit capture complete (`iv_rank`/`days_to_earnings`/`signal_id` wired); Track A (exit-lever scorecard) held on corpus maturity. Structural map lives in `ORIENTATION.md`.
 - **Next highest-leverage:** **concentration and loss sizing.** With the DTE artifacts excluded (HELM-107), the closed book wins **79%** of the time -- CSPs 85% at a mean +5.1% of risk -- and still totals -$12,341. Many small wins, few very large losses, exactly the shape the 7/19 concentration work found (nine closed CSP losers, six flushed 7/13). Selection and win rate are not the problem; correlated loss size is. HELM-023 Track A remains held on corpus maturity, and the corpus is now 91 rows smaller and honest.
-- **Last shipped (s92):** **HELM-132** (G3 divides by raw HV90, matching the ORATS
-  scan its 0.90 came from; GE 0.899 -> 0.859 and the buy wing has names to route),
-  **HELM-133** (the ex-earnings twin logged, never gated) and **HELM-134** (the
-  HELM READ column no longer contradicts the VRP column beside it -- it leads with
-  cause, disagreement and confidence). *(An earlier version of this line described
-  s91 and was wrong: `CONFIRM_SCANS` was replaced by `ROUTE_MARGIN` inside s91
-  itself and the Status block was never updated -- the same inherited-claim
-  failure W49 records.)*
-- **Next session (Russ):** **W74 + W68 together** -- three open paper positions carry
-  no mark at all, so every "the paper book is at -$8,801" figure silently excludes
-  them, and W68 is the likely mechanism. Then **W12** (sizing), then **W19** (the
-  learning loop), which now has both wings feeding it.
+- **Last shipped (s93):** **HELM-138** (an expired leg no longer makes its
+  position unmarkable: expired legs mark at settlement intrinsic on both the
+  check and paper-exit paths, save_check refuses GOOD without a mark, and the
+  six lying EQT rows are re-graded PARTIAL; commit a7e907e).
+- **Next session (Russ):** **run `helm scan` + `helm paper generate` in market
+  hours** -- GE (0.884) and RTX (0.877) passed the screen on the 2026-07-28
+  15:53 board and nothing has booked since the s91 regime break
+  (`origin_screen` still NULL on all 285). Then **W12** (sizing), then **W19**.
+  W74 is resolved (HELM-138); W68 stays open but has fired zero times since
+  instrumentation.
 - **Blocked (market/RTH):** none outstanding — HELM-031 `shadow_*` capture verified live (s79); the deep-ITM spec CSPs (RKLB/IREN/OKLO/IONQ) are no longer open in the book, so the re-pull is moot.
-- **Counts:** 33 active (23 OPEN · 10 DEFERRED) · last shipped s92 (HELM-132..137) · **Last-updated 2026-07-28 (s92e)**
+- **Counts:** 33 active (23 OPEN · 10 DEFERRED) · last shipped s93 (HELM-138) · **Last-updated 2026-07-28 (s93)**
 - **Next RTH:** confirm HELM-068 parenting stamps `parent_position_id` on the next real roll; validate HELM-081 live vol-context capture (`hv_30d`/skew) during RTH; watch the first live board after HELM-111 -- the bullish side should now decline rather than route BPS, and the Declined section says why; confirm a routed DIAGONAL opens its short leg at >= 28 DTE.
 
-_Last updated_: 2026-07-27 (s90. The through-line: five claims in this register were quantitatively wrong in the same way -- each measured on the convenient subset. Only closed trades. Attempts rather than writes. The interactive path but not the scheduled one. A vol window containing the earnings move. Two of the five were mine, made this session and corrected the same day. When a headline figure looks decisive, ask what it excludes.)
+_Last updated_: 2026-07-28 (s93. The lesson this session: a deterministic defect had been filed under an intermittent one -- W74's three unmarked positions re-measured to one, with a mechanism nothing intermittent about it: an expired leg quotes nothing, forever. Meanwhile the instrumented HELM-128 fault has fired zero times since the tracebacks went in. Before chasing the suspected mechanism, re-measure whether it is still occurring at all.)
 
 ## Active
 
