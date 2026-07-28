@@ -79,6 +79,13 @@ def paperable_strategies() -> set:
     return {s for s in _PAPER_BOOKERS if s in STRATEGY_CONFIG}
 
 
+# W67 (s91): which screen produced a paper position. Written to
+# positions.origin_screen on every booking so the dual-book A/B in
+# HELM-101 section 5 has something to group by.
+SELL_SCREEN = "SELL_SCREEN"
+LC_SCREEN = "LC_SCREEN"
+
+
 def _scan_from_sig(sig: dict) -> dict:
     """Map an originating scan signal row to the scan_data keys the entry
     snapshot expects, so paper entries capture ATR/RSI/EMA/SMA/bias at open
@@ -117,9 +124,133 @@ def _open_paper_keys() -> set:
     return {(p.ticker, p.strategy) for p in Position.open_positions(book="PAPER")}
 
 
-def _open_real_tickers() -> set:
-    """Tickers with any open position in the REAL book (live picks)."""
-    return {p.ticker for p in Position.open_positions(book="REAL")}
+# W75 / HELM-130 (s91): _open_real_tickers() removed, not merely unused.
+# Both passes used to skip any ticker with an open REAL position. Russ's call:
+# a real options position must not stop the paper book taking its own view on
+# the same underlying. The paper book is evidence about the screens, and a
+# guard keyed on the real book made it evidence about the portfolio instead --
+# 18 of 67 watchlist names were unobservable.
+#
+# Note what this did NOT remove: addendum section 5 frames "not taken real" as
+# a russ_action test, and that test is still in _latest_run_passed_on(). It is
+# close to inert across batches -- each scan writes 67 fresh signals at
+# PENDING, and only the signal from the scan a position was opened on is marked
+# OPEN (33 rows of 5,899 all-time; 0 of the latest 67) -- which is precisely
+# why this guard was load-bearing and why removing it leaves nothing behind it.
+#
+# The (ticker, strategy) paper guard is untouched: paper still will not stack a
+# duplicate on itself.
+
+
+def _book_and_stamp(sig: dict, ticker: str, strategy: str, spot, origin: str):
+    """Book one paper position and stamp its provenance.
+
+    Returns (position_id, None) on success, or (None, reason) on a skip.
+
+    Shared by both passes so the sell wing and the buy wing cannot drift apart
+    on error handling, signal linkage, provenance or vol capture. The paper
+    booker inverting long-call direction for three months (W13 / HELM-120)
+    happened because a fix landed on one path and not its sibling; one body
+    here means there is no sibling to miss.
+    """
+    try:
+        pos_id = _PAPER_BOOKERS[strategy](ticker, strategy, spot,
+                                          scan_data=_scan_from_sig(sig))
+    except Exception as exc:  # one bad ticker must not kill the batch
+        return None, f"error: {type(exc).__name__}: {exc}"
+
+    if pos_id is None:
+        return None, "no viable real-chain contract (fidelity skip)"
+
+    # HELM-049: link this paper position to its originating scan signal.
+    # Non-destructive -- stamps positions.signal_id only, never consuming the
+    # signal (a later real open on the same ticker still links). Best-effort;
+    # a linkage stamp must never fail the batch. Outcome back-prop stays REAL-
+    # only (close_cmd), so this reference can't contaminate signal outcomes.
+    #
+    # HELM-121 (W67, s91): origin_screen rides the same statement. The column
+    # and a capture_entry_thesis argument both landed in s90, but no caller
+    # ever passed it -- measured 2026-07-27, all 285 positions across both
+    # books read NULL, so the dual-book A/B had nothing to group by. Stamped
+    # here rather than through six booker signatures because this block
+    # already runs for every booked position, whatever booked it.
+    _sig_id = sig.get("id")
+    try:
+        from helm.db import transaction
+        with transaction() as _conn:
+            if _sig_id:
+                _conn.execute(
+                    "UPDATE positions SET signal_id = ?, origin_screen = ? "
+                    "WHERE id = ?",
+                    (_sig_id, origin, pos_id),
+                )
+            else:
+                _conn.execute(
+                    "UPDATE positions SET origin_screen = ? WHERE id = ?",
+                    (origin, pos_id),
+                )
+    except Exception:
+        pass
+
+    # HELM-081: best-effort vol-context capture (hv_30d + skew) onto the
+    # entry snapshot, right after booking. Never blocks the paper batch.
+    try:
+        from helm.vol_context import backfill_entry_vol
+        backfill_entry_vol(pos_id, ticker)
+    except Exception:
+        pass
+
+    return pos_id, None
+
+
+def _lc_routable_survivors() -> list:
+    """Screen survivors that sit far enough inside the G3 gate to route.
+
+    W70 / HELM-125: passing the screen is necessary but not sufficient. A name
+    must also clear G3 by at least ROUTE_MARGIN, so a position is never opened
+    on a name sitting on the line -- GE crossed the gate on a ratio move of
+    0.003 with implied vol unchanged, and booking off that would put a rounding
+    step into the calibration log as a decision.
+
+    Fails closed: no stored ratio, no routing. The screen cannot have passed a
+    name on G3 without one, so a NULL here means something upstream is wrong and
+    silence is the safe reading.
+
+    Survivors already taken real are excluded by russ_action, exactly as the
+    sell-side field is in _latest_run_passed_on(). Note that filter is close to
+    inert across batches (HELM-130) -- it is kept for parity, not relied on.
+    """
+    from helm.lc_screen import G3_RATIO_MAX, ROUTE_MARGIN
+
+    threshold = G3_RATIO_MAX - ROUTE_MARGIN
+    conn = get_conn()
+    try:
+        conn.row_factory = sqlite3.Row
+        latest = conn.execute(
+            "SELECT MAX(generated_at) FROM signals WHERE lc_screen_pass IS NOT NULL"
+        ).fetchone()[0]
+        if not latest:
+            return []
+        rows = conn.execute(
+            "SELECT * FROM signals WHERE generated_at = ? AND lc_screen_pass "
+            "  AND (russ_action IS NULL OR russ_action != 'OPEN') "
+            "ORDER BY lc_screen_rank, ticker",
+            (latest,),
+        ).fetchall()
+
+        out = []
+        for r in rows:
+            ratio = r["iv_hv90_ratio"]
+            if ratio is None:
+                continue
+            try:
+                if float(ratio) <= threshold:
+                    out.append(dict(r))
+            except (TypeError, ValueError):
+                continue
+        return out
+    finally:
+        conn.close()
 
 
 def paper_generate() -> dict:
@@ -137,7 +268,6 @@ def paper_generate() -> dict:
 
     eligible = paperable_strategies()
     seen = _open_paper_keys()
-    real_tickers = _open_real_tickers()
     field = _latest_run_passed_on()
 
     booked = []           # (ticker, strategy, position_id)
@@ -151,9 +281,6 @@ def paper_generate() -> dict:
         if not strategy:
             skipped.append((ticker, strategy, "no top_strategy on signal"))
             continue
-        if ticker in real_tickers:
-            skipped.append((ticker, strategy, "live ticker - open in real book"))
-            continue
         if strategy not in eligible:
             skipped.append((ticker, strategy, "multi-leg / unsupported (deferred to v2)"))
             continue
@@ -164,53 +291,65 @@ def paper_generate() -> dict:
             skipped.append((ticker, strategy, "no scan spot_price"))
             continue
 
-        try:
-            pos_id = _PAPER_BOOKERS[strategy](ticker, strategy, spot, scan_data=_scan_from_sig(sig))
-        except Exception as exc:  # one bad ticker must not kill the batch
-            skipped.append((ticker, strategy, f"error: {type(exc).__name__}: {exc}"))
-            continue
-
+        pos_id, reason = _book_and_stamp(sig, ticker, strategy, spot, SELL_SCREEN)
         if pos_id is None:
-            skipped.append((ticker, strategy, "no viable real-chain contract (fidelity skip)"))
+            skipped.append((ticker, strategy, reason))
             continue
-
-        # HELM-049: link this paper position to its originating scan signal.
-        # Non-destructive -- stamps positions.signal_id only, never consuming the
-        # signal (a later real open on the same ticker still links). Best-effort;
-        # a linkage stamp must never fail the batch. Outcome back-prop stays REAL-
-        # only (close_cmd), so this reference can't contaminate signal outcomes.
-        _sig_id = sig.get("id")
-        if _sig_id:
-            try:
-                from helm.db import transaction
-                with transaction() as _conn:
-                    _conn.execute(
-                        "UPDATE positions SET signal_id = ? WHERE id = ?",
-                        (_sig_id, pos_id),
-                    )
-            except Exception:
-                pass
-
-        # HELM-081: best-effort vol-context capture (hv_30d + skew) onto the
-        # entry snapshot, right after booking. Never blocks the paper batch.
-        try:
-            from helm.vol_context import backfill_entry_vol
-            backfill_entry_vol(pos_id, ticker)
-        except Exception:
-            pass
 
         booked.append((ticker, strategy, pos_id))
         seen.add((ticker, strategy))
 
-    _print_summary(console, field, booked, skipped)
-    return {"status": "ok", "field": len(field), "booked": booked, "skipped": skipped}
+    # W67 / HELM-101 section 5 (s91): the buy wing. LC-screen survivors not
+    # taken real are booked to PAPER at the step-4 config, graded by the four
+    # v2 long-exit verdicts the paper exit agent already carries.
+    #
+    # Its own pass, deliberately. Writing top_strategy = 'LONG_CALL' onto the
+    # signal would book with no further code change -- the s84 review said so --
+    # and that is the argument against it: the two screens are a dual-book A/B
+    # on the same scan, so overwriting the sell-side route would collapse them
+    # into one and leave nothing between a screen bug and the paper book.
+    #
+    # Same guards as the sell pass (open in the real book, already open in
+    # paper, no spot), plus the W70 routing margin inside _lc_routable_survivors.
+    lc_field = _lc_routable_survivors()
+    for sig in lc_field:
+        ticker = sig.get("ticker")
+        spot = sig.get("spot_price")
+        strategy = "LONG_CALL"
+
+        if strategy not in eligible:
+            skipped.append((ticker, strategy, "LONG_CALL not paperable"))
+            continue
+        if (ticker, strategy) in seen:
+            skipped.append((ticker, strategy, "already open in paper book"))
+            continue
+        if spot is None:
+            skipped.append((ticker, strategy, "no scan spot_price"))
+            continue
+
+        pos_id, reason = _book_and_stamp(sig, ticker, strategy, spot, LC_SCREEN)
+        if pos_id is None:
+            skipped.append((ticker, strategy, reason))
+            continue
+
+        booked.append((ticker, strategy, pos_id))
+        seen.add((ticker, strategy))
+
+    _print_summary(console, field, lc_field, booked, skipped)
+    # W21's lesson, applied here before it can bite: both fields are reported
+    # separately rather than summed, so "field" cannot quietly come to mean
+    # two different populations added together.
+    return {"status": "ok", "field": len(field), "lc_field": len(lc_field),
+            "booked": booked, "skipped": skipped}
 
 
-def _print_summary(console: Console, field: list, booked: list, skipped: list) -> None:
+def _print_summary(console: Console, field: list, lc_field: list,
+                   booked: list, skipped: list) -> None:
     console.print()
     console.print(
         f"[bold cyan]Paper generate[/bold cyan] - latest run, "
-        f"{len(field)} passed-on candidate(s)"
+        f"{len(field)} passed-on candidate(s), "
+        f"{len(lc_field)} confirmed buy-screen survivor(s)"
     )
     console.print(
         f"  [green]booked {len(booked)}[/green]   "

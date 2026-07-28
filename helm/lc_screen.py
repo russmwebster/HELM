@@ -43,6 +43,39 @@ RSI_PENALTY_MAX = 0.10
 
 SCREEN_VERSION = 'lc-screen-v1 (s90)'
 
+# W70 / HELM-125 (s91): how far INSIDE the G3 gate a name must sit before it may
+# ROUTE. The board verdict is unchanged -- the screen still publishes pass/fail
+# against G3_RATIO_MAX for every name on every scan. Only routing needs the
+# margin, because only routing spends money.
+#
+# Why a margin. G3 decides this screen: on the 2026-07-27 15:24 scan it failed
+# 64 of 67 names and was the sole cause for 31, and it is knife-edge -- GE sits
+# at 0.899 against a 0.900 gate, having crossed from 0.902 with implied vol
+# unchanged. ORATS, which publishes screens on this same measure, answers this
+# same problem with a buffer rather than with repetition: iv30d/orFcst20d < 0.85
+# to buy and > 1.15 to sell, a deliberate dead zone so names on the line do not
+# flip the signal. Their iv30d/orHv90d < 0.9 scan is where G3_RATIO_MAX itself
+# comes from.
+#
+# What this replaced. s91 first shipped CONFIRM_SCANS = 2 -- pass on two
+# consecutive scans. Measurement killed it: the ratio steps rather than jitters
+# (GE returned 0.899 on three scans across 17 live minutes), so a second scan
+# carries no new information, and the guard's strength depended on how far apart
+# Russ happened to scan rather than on the market.
+#
+# Not hysteresis. There is no stay-in half: routing is an entry decision taken
+# once, the (ticker, strategy) paper guard prevents re-entry, and nothing
+# un-books on the ratio. Only the stricter arm threshold can bite.
+#
+# TIER B -- convention. Measured: the gate is knife-edge, and 0.01 / 0.02 / 0.03
+# each removed all three flips in the 7-batch sample. Not measured: that 0.01 is
+# the right width. ORATS's precedent is for having a buffer, not for this size
+# of one. The calibration log settles it.
+#
+# The routing test lives in helm/cli/_paper_generate.py so this module stays
+# DB-free.
+ROUTE_MARGIN = 0.01
+
 
 def _num(v):
     """float(v) or None. Scan rows carry None for anything unmeasured, and a
