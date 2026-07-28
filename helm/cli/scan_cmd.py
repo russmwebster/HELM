@@ -183,12 +183,25 @@ def momentum_bias(price, sma_50, sma_200, ema_20, macd_hist, obv_trend, adx):
 # declining to trade. They must not rank, must not consume --top slots, and must
 # not count in the strategy summary as though they were routes. They keep their
 # content in a Declined section instead (_print_declined).
-SENTINEL_STRATEGIES = ("NO_BUY_PATH", "NO_EDGE_VOL", "NO_ASSESS_IVR")
+SENTINEL_STRATEGIES = ("NO_BUY_PATH", "NO_EDGE_VOL", "NO_ASSESS_IVR",
+                       "NO_SELL_EARNINGS")
+
+# HELM-136 (s92, Russ): the sell-side earnings gate. Gate on facts, display
+# judgments -- an imminent print is a fact about the trade, not a judgment
+# about edge. Practitioner basis (tier B): Option Alpha runs earnings as the
+# final veto of its entry checklist; ORATS segregates earnings names into a
+# separate scan entirely. Window is CALENDAR days, chosen from the reference
+# model Russ approved 2026-07-28. The gated list is exactly the credit routes
+# bias_to_strategy can emit -- DIAGONAL is excluded because it is not a
+# credit structure (HELM-111), and CC/BPS are not scan-routed at all.
+SELL_EARN_VETO_DAYS = 10
+SELL_EARN_GATED = ("CSP", "IRON_CONDOR", "BEAR_CALL_SPREAD")
 
 SENTINEL_LABELS = {
     "NO_BUY_PATH":   "no buy path",
     "NO_EDGE_VOL":   "no vol edge",
     "NO_ASSESS_IVR": "IVR unknown",
+    "NO_SELL_EARNINGS": "earnings inside 10d",
 }
 
 
@@ -936,6 +949,34 @@ def run():
         from helm import lc_screen as _lcs
         attach_days_to_earnings(results)
         _lcs.screen([r for r in results if not r.get("error")])
+    except Exception:
+        pass
+
+    # HELM-136: the sell-side earnings gate. Runs AFTER attach_days_to_earnings
+    # (its input) and BEFORE vol_read/persist, so the sentinel is what gets
+    # stored and rendered. Demotion mirrors HELM-113: the route is preserved in
+    # strategy_shadow, so the decline keeps its content -- and paper generate
+    # books the shadow route under origin SELL_GATED, so the gate itself is on
+    # trial rather than self-confirming (a book cannot evaluate its own filter
+    # unless the filtered names still get booked).
+    # A missing or STALE date does NOT gate: 12 watchlist dates are stale (W25)
+    # and a cache bug must not become a silent gate (the W24/W76 lesson). The
+    # buy wing G4 fails closed and already carries that cost for its side.
+    try:
+        for _r in results:
+            if _r.get("error"):
+                continue
+            _strat = _r.get("strategy")
+            if _strat not in SELL_EARN_GATED:
+                continue
+            _d2e = _r.get("days_to_earnings")
+            if _d2e is None or _d2e < 0 or _d2e > SELL_EARN_VETO_DAYS:
+                continue
+            _r["strategy_shadow"] = _strat
+            _r["strategy"] = "NO_SELL_EARNINGS"
+            _r["strategy_rationale"] = (
+                "earnings in %dd -- credit sale vetoed inside %dd of a print; "
+                "route was %s" % (int(_d2e), SELL_EARN_VETO_DAYS, _strat))
     except Exception:
         pass
 

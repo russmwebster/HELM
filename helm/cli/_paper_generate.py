@@ -83,6 +83,10 @@ def paperable_strategies() -> set:
 # positions.origin_screen on every booking so the dual-book A/B in
 # HELM-101 section 5 has something to group by.
 SELL_SCREEN = "SELL_SCREEN"
+# HELM-136: names the earnings gate declined but the paper book books anyway,
+# from strategy_shadow -- the gate on trial. Grading SELL_GATED against
+# SELL_SCREEN is what eventually tells us whether the gate earns its keep.
+SELL_GATED = "SELL_GATED"
 LC_SCREEN = "LC_SCREEN"
 
 
@@ -281,6 +285,15 @@ def paper_generate() -> dict:
         if not strategy:
             skipped.append((ticker, strategy, "no top_strategy on signal"))
             continue
+        origin = SELL_SCREEN
+        # HELM-136: gated rows book their shadow route under SELL_GATED.
+        if strategy == "NO_SELL_EARNINGS":
+            _shadow = sig.get("strategy_shadow")
+            if not _shadow:
+                skipped.append((ticker, strategy, "gated, no shadow route"))
+                continue
+            strategy = _shadow
+            origin = SELL_GATED
         if strategy not in eligible:
             skipped.append((ticker, strategy, "multi-leg / unsupported (deferred to v2)"))
             continue
@@ -291,7 +304,7 @@ def paper_generate() -> dict:
             skipped.append((ticker, strategy, "no scan spot_price"))
             continue
 
-        pos_id, reason = _book_and_stamp(sig, ticker, strategy, spot, SELL_SCREEN)
+        pos_id, reason = _book_and_stamp(sig, ticker, strategy, spot, origin)
         if pos_id is None:
             skipped.append((ticker, strategy, reason))
             continue

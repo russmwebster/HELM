@@ -838,6 +838,7 @@ ALTER TABLE signals ADD COLUMN iv_hv90_ratio REAL;     -- iv_current / hv_90 raw
 ALTER TABLE signals ADD COLUMN iv_hv90_ratio_xearn REAL;  -- HELM-133 logged, never gated
 ALTER TABLE signals ADD COLUMN earn_days_since INTEGER;   -- HELM-133 days since last print
 ALTER TABLE signals ADD COLUMN earn_in_hv90_window INTEGER; -- HELM-133 1 = inside trailing 90d
+ALTER TABLE signals ADD COLUMN strategy_shadow TEXT;       -- HELM-136 route overridden by sell gate
 ALTER TABLE signals ADD COLUMN lc_screen_pass INTEGER; -- 1 pass / 0 reject / NULL not run
 ALTER TABLE signals ADD COLUMN lc_screen_rank INTEGER; -- rank within the passing field
 ALTER TABLE signals ADD COLUMN lc_screen_reject TEXT;  -- first gate failed (G1..G5)

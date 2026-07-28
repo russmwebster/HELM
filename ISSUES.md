@@ -30,7 +30,7 @@ _Snapshot; refreshed each `helm checkpoint`, read via `helm status`._
   them, and W68 is the likely mechanism. Then **W12** (sizing), then **W19** (the
   learning loop), which now has both wings feeding it.
 - **Blocked (market/RTH):** none outstanding — HELM-031 `shadow_*` capture verified live (s79); the deep-ITM spec CSPs (RKLB/IREN/OKLO/IONQ) are no longer open in the book, so the re-pull is moot.
-- **Counts:** 35 active (25 OPEN · 10 DEFERRED) · last shipped s92 (HELM-132, HELM-133, HELM-134) · **Last-updated 2026-07-28 (s92b)**
+- **Counts:** 35 active (25 OPEN · 10 DEFERRED) · last shipped s92 (HELM-132..136: G3 denominator, READ column, entry bands, the sell-side earnings gate) · **Last-updated 2026-07-28 (s92c)**
 - **Next RTH:** confirm HELM-068 parenting stamps `parent_position_id` on the next real roll; validate HELM-081 live vol-context capture (`hv_30d`/skew) during RTH; watch the first live board after HELM-111 -- the bullish side should now decline rather than route BPS, and the Declined section says why; confirm a routed DIAGONAL opens its short leg at >= 28 DTE.
 
 _Last updated_: 2026-07-27 (s90. The through-line: five claims in this register were quantitatively wrong in the same way -- each measured on the convenient subset. Only closed trades. Attempts rather than writes. The interactive path but not the scheduled one. A vol window containing the earnings move. Two of the five were mine, made this session and corrected the same day. When a headline figure looks decisive, ask what it excludes.)
@@ -233,6 +233,37 @@ _s78: parenting **SHIPPED** (commit 5cd12b5) -- the replacement is now parented 
 
 ## Resolved log
 
+
+- **HELM-135** (2026-07-28, s92) -- **sell-side entry bands are the intersection of
+  `STRATEGY_CONFIG` and `strategy_settings`** -- the tighter of each edge wins, so
+  the displayed preference and the enforced band can no longer disagree (W71, the
+  delta/DTE half). CSP now 0.20-0.30 / 30-45; BeCS 0.15-0.25 / 30-45; IC
+  0.15-0.20 / 30-45. Never loosens: the effective band is asserted a subset of the
+  code band on all four edges, and `entry_iv_rank_min` is deliberately NOT applied
+  (settings would loosen the HELM-105 floor). Applied to all four evaluators plus
+  the delta display -- the first patch hit only the single-leg path, and the
+  sibling evaluators (condors, strangles, spreads) were caught by a check, the
+  exact one-path-not-its-siblings shape that cost the 42-condor loss. Sell side
+  only, per Russ. 56 checks (`tools/verify_s92_w71.py`). Commit `539cedf`.
+- **HELM-136** (2026-07-28, s92) -- **the sell-side earnings gate.** A credit
+  route (CSP / IC / BeCS) whose underlying reports within **10 calendar days** is
+  demoted at board level to the `NO_SELL_EARNINGS` sentinel, HELM-113-style: the
+  route survives in the new `signals.strategy_shadow`, the Declined section shows
+  the reason and the day count. Chosen from the practitioner reference model Russ
+  approved 2026-07-28 (tier B: Option Alpha runs earnings as the final entry veto;
+  ORATS segregates earnings names into a separate scan). **The doctrine: gate on
+  facts, display judgments** -- VRP<=0 and IVR>80 remain flags, not gates, because
+  the book's own evidence on them is mixed (Test 1's best cell was IVR>=50 &
+  VRP<=0). **Stale or missing dates do NOT gate** (W25: a cache bug must not
+  become a silent gate; the buy wing's G4 fails closed and carries that cost for
+  its side). **The gate is on trial, not self-confirming:** `paper generate` books
+  the declined names anyway from the shadow route under a third origin,
+  `SELL_GATED`, so W19 can grade SELL_GATED against SELL_SCREEN and say whether
+  the gate earns its keep. On the 2026-07-28 board it would have declined ~20 of
+  46 sell routes, including KO (CSP, reporting that day, IV 22 vs HV 31).
+  30 checks (`tools/verify_s92_h136.py`) incl. a monkeypatched `paper_generate`
+  proving the redirect; verified end to end by a sandboxed scan -- AMZN (2d) and
+  BA (0d) demoted with shadows intact, GS (77d) untouched.
 
 - **HELM-134** (2026-07-28, s92) -- **the HELM READ column asserted the opposite
   of the columns beside it.** The board shows IV%, HV, VRP, IVR and IVP; the READ

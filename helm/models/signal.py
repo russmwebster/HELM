@@ -94,6 +94,10 @@ class Signal:
     iv_hv90_ratio_xearn: Optional[float] = None  # iv_current / hv_90_ex_earn
     earn_days_since:  Optional[int]   = None   # days since last print at scan time
     earn_in_hv90_window: Optional[int] = None  # 1 if that print is inside trailing 90d
+    # HELM-136: when the sell-side earnings gate demotes a route to the
+    # NO_SELL_EARNINGS sentinel, the overridden route lives here so paper
+    # generate can book it on trial (origin SELL_GATED).
+    strategy_shadow:  Optional[str]   = None
     lc_screen_pass:   Optional[int]   = None   # 1 pass / 0 reject / None not run
     lc_screen_rank:   Optional[int]   = None
     lc_screen_reject: Optional[str]   = None   # first gate failed (G1..G5)

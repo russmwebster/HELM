@@ -23,7 +23,8 @@ _PASSTHROUGH = ("iv_current", "iv_rank", "ema_20", "sma_50", "sma_200",
                 'iv_hv90_ratio', 'lc_screen_pass', 'lc_screen_rank',
                 'lc_screen_reject', 'lc_rank_score', 'lc_gates_json',  # HELM-101
                 'iv_hv90_ratio_xearn', 'earn_days_since',
-                'earn_in_hv90_window')  # HELM-133 - logged, never gated
+                'earn_in_hv90_window',   # HELM-133 - logged, never gated
+                'strategy_shadow')       # HELM-136 - route the sell gate overrode
 
 
 def _bias_dir(score):
