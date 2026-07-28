@@ -30,7 +30,7 @@ _Snapshot; refreshed each `helm checkpoint`, read via `helm status`._
   them, and W68 is the likely mechanism. Then **W12** (sizing), then **W19** (the
   learning loop), which now has both wings feeding it.
 - **Blocked (market/RTH):** none outstanding — HELM-031 `shadow_*` capture verified live (s79); the deep-ITM spec CSPs (RKLB/IREN/OKLO/IONQ) are no longer open in the book, so the re-pull is moot.
-- **Counts:** 33 active (23 OPEN · 10 DEFERRED) · last shipped s92 (HELM-132..136; HELM-089/090 closed by decision) · **Last-updated 2026-07-28 (s92d)**
+- **Counts:** 33 active (23 OPEN · 10 DEFERRED) · last shipped s92 (HELM-132..137) · **Last-updated 2026-07-28 (s92e)**
 - **Next RTH:** confirm HELM-068 parenting stamps `parent_position_id` on the next real roll; validate HELM-081 live vol-context capture (`hv_30d`/skew) during RTH; watch the first live board after HELM-111 -- the bullish side should now decline rather than route BPS, and the Declined section says why; confirm a routed DIAGONAL opens its short leg at >= 28 DTE.
 
 _Last updated_: 2026-07-27 (s90. The through-line: five claims in this register were quantitatively wrong in the same way -- each measured on the convenient subset. Only closed trades. Attempts rather than writes. The interactive path but not the scheduled one. A vol window containing the earnings move. Two of the five were mine, made this session and corrected the same day. When a headline figure looks decisive, ask what it excludes.)
@@ -229,6 +229,23 @@ _s78: parenting **SHIPPED** (commit 5cd12b5) -- the replacement is now parented 
 
 ## Resolved log
 
+
+- **HELM-137 · DOCS** (2026-07-28, s92) -- **the free-data trial: recorded and
+  retired.** The register never mentioned the trial existed (W33); this entry is
+  the record. What it was: a fork at ~/Projects/helm-trial with its own UI on
+  127.0.0.1:8771 and four launchd agents (com.helm.trial.morning / .ivsampler /
+  .paper / .ui), built as an IVR-vs-VRP referee experiment and later re-read as a
+  free-data cold-start (see the s82/s85 threads). **Russ decided 2026-07-28: its
+  purpose is abandoned** (W29). Note the re-measure: "dead since 24 July" (W31)
+  was wrong -- at decommission time the UI was serving, all four agents were
+  loaded, and the sampler had written data the same day at 15:50. Decommissioned
+  same day: all four agents booted out (rc 0 each), port 8771 confirmed down,
+  the six live com.helm.* agents confirmed untouched. **Plists remain in
+  ~/Library/LaunchAgents and the fork remains on disk** -- reversal is
+  launchctl bootstrap of the four plists, nothing was deleted. The kill switch
+  against the live broker (TRIAL PATCH 7, fb4f0bd) remains in place regardless.
+  Worklist consequences: W29 and W33 done; W30, W31, W32 and W51 cancelled as
+  moot unless the trial is ever revived.
 
 - **HELM-089** (2026-07-28, s92) -- **WONTFIX, per W39.** "Dynamic short-strike
   delta by IV regime" claimed "best practice flexes it with IVR" -- sourced to the
