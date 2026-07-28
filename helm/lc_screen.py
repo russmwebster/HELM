@@ -27,7 +27,7 @@ import json
 # -- gate parameters ---------------------------------------------------------
 
 G1_BIAS_MIN = 2          # >= +2 of 3 momentum votes, and the full MA stack
-G3_RATIO_MAX = 0.90      # IV <= 0.90 x HV90 ex-earnings (ORATS-shaped buffer)
+G3_RATIO_MAX = 0.90      # IV <= 0.90 x HV90 RAW - ORATS own denominator (HELM-132)
 G4_CALENDAR_DAYS = 7     # 5 trading days before a print, spanning one weekend
 G5_HV252_MAX = 40.0      # absolute underlying-vol ceiling, annualized %
 G5_QUINTILE = 0.80       # logged alternative; never acted on
@@ -55,7 +55,10 @@ SCREEN_VERSION = 'lc-screen-v1 (s90)'
 # same problem with a buffer rather than with repetition: iv30d/orFcst20d < 0.85
 # to buy and > 1.15 to sell, a deliberate dead zone so names on the line do not
 # flip the signal. Their iv30d/orHv90d < 0.9 scan is where G3_RATIO_MAX itself
-# comes from.
+# comes from - and as of HELM-132 the denominator matches it too. It did
+# not used to: the ratio divided raw IV by ex-earnings HV90, a mixed form
+# ORATS never publishes, which moved the gate with earnings-cycle phase
+# rather than with option cheapness.
 #
 # What this replaced. s91 first shipped CONFIRM_SCANS = 2 -- pass on two
 # consecutive scans. Measurement killed it: the ratio steps rather than jitters
@@ -89,8 +92,28 @@ def _num(v):
     return f if f == f else None      # reject NaN
 
 
+def earn_flag(row, ratio):
+    """Informational earnings-proximity flag. Gates nothing (HELM-133).
+
+    Set only while the last print still sits inside the trailing 90d HV
+    window, because that is exactly when the ex-earnings twin diverges from
+    the gate. Measured 2026-07-27: median divergence +0.0736 at 0-30d since
+    print, +0.0121 once it ages out. The flag reports the divergence rather
+    than merely noting the print, so it can be read as a number.
+    """
+    since = _num(row.get("earn_days_since"))
+    inwin = _num(row.get("earn_in_hv90_window"))
+    rx = _num(row.get("iv_hv90_ratio_xearn"))
+    if since is None or not inwin:
+        return None
+    if rx is None or ratio is None:
+        return "reported %dd ago" % int(since)
+    return "reported %dd ago; ex-earn ratio %.3f (%+.3f)" % (
+        int(since), rx, rx - ratio)
+
+
 def vol_cheapness(ratio):
-    """0..1 from the buffered IV / HV90-ex-earnings ratio.
+    """0..1 from the buffered IV / HV90 ratio (raw HV90 - see HELM-132).
 
     1.0 at 0.70 or below, 0.0 at the 0.90 gate and above. The scale is
     calibrated across the passing band, so a rejected name scores near zero
@@ -184,6 +207,10 @@ def evaluate_gates(row, hv252_quintile=None):
     # IVR < 35 and the design draft's VRP <= 0 on HV30, which section 7.2
     # showed was adversely selected: a 30-day window fires hardest on names
     # that have just had a vol spike, which is Hu & Jacobs' worst decile.
+    # HELM-132: the denominator is RAW HV90, matching ORATS iv30d / orHv90d,
+    # which is where 0.90 came from. It used to be hv_90_ex_earn against the
+    # same raw numerator -- a mixed form that moved the gate with earnings
+    # cycle phase. The ex-earnings twin survives as information (HELM-133).
     ratio = _num(row.get('iv_hv90_ratio'))
     g3_ok = ratio is not None and ratio <= G3_RATIO_MAX
     if not g3_ok:
@@ -235,8 +262,14 @@ def evaluate_gates(row, hv252_quintile=None):
                'spot': spot, 'sma_50': s50, 'sma_200': s200,
                'stack_ok': g1_stack_ok},
         'g3': {'iv_hv90_ratio': ratio, 'max': G3_RATIO_MAX, 'ok': g3_ok,
+               'hv_90': _num(row.get('hv_90')),          # the gate denominator
                'hv_90_ex_earn': _num(row.get('hv_90_ex_earn')),
-               'hv_90_source': row.get('hv_90_source')},
+               'hv_90_source': row.get('hv_90_source'),
+               # HELM-133 -- informational, gates nothing.
+               'ratio_xearn': _num(row.get('iv_hv90_ratio_xearn')),
+               'earn_days_since': _num(row.get('earn_days_since')),
+               'earn_in_hv90_window': _num(row.get('earn_in_hv90_window')),
+               'earn_flag': earn_flag(row, ratio)},
         'g4': {'days_to_earnings': d2e, 'window_calendar_days': G4_CALENDAR_DAYS,
                'state': g4_state, 'ok': g4_state == 'clear',
                'note': 'calendar-day proxy for 5 trading days; fails closed'},

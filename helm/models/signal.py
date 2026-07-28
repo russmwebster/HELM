@@ -88,7 +88,12 @@ class Signal:
     hv_90_ex_earn:    Optional[float] = None   # 90d RV, earnings moves removed
     hv_90_source:     Optional[str]   = None   # dates | dates-none | plain
     hv_252:           Optional[float] = None   # 1y realized vol (%), G5 ceiling
-    iv_hv90_ratio:    Optional[float] = None   # iv_current / hv_90_ex_earn (G3)
+    iv_hv90_ratio:    Optional[float] = None   # iv_current / hv_90 raw (G3, HELM-132)
+    # HELM-133: logged, never gated. The old mixed form, kept as the paired
+    # series for any later argument to change the measure.
+    iv_hv90_ratio_xearn: Optional[float] = None  # iv_current / hv_90_ex_earn
+    earn_days_since:  Optional[int]   = None   # days since last print at scan time
+    earn_in_hv90_window: Optional[int] = None  # 1 if that print is inside trailing 90d
     lc_screen_pass:   Optional[int]   = None   # 1 pass / 0 reject / None not run
     lc_screen_rank:   Optional[int]   = None
     lc_screen_reject: Optional[str]   = None   # first gate failed (G1..G5)

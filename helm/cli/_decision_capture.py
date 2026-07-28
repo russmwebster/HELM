@@ -21,7 +21,9 @@ _PASSTHROUGH = ("iv_current", "iv_rank", "ema_20", "sma_50", "sma_200",
                 'hv_30_ex_earn', 'hv_30_source',              # s90
                 'hv_90', 'hv_90_ex_earn', 'hv_90_source', 'hv_252',
                 'iv_hv90_ratio', 'lc_screen_pass', 'lc_screen_rank',
-                'lc_screen_reject', 'lc_rank_score', 'lc_gates_json')  # HELM-101
+                'lc_screen_reject', 'lc_rank_score', 'lc_gates_json',  # HELM-101
+                'iv_hv90_ratio_xearn', 'earn_days_since',
+                'earn_in_hv90_window')  # HELM-133 - logged, never gated
 
 
 def _bias_dir(score):

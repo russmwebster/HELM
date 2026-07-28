@@ -419,6 +419,27 @@ def _earnings_hist(ticker):
     return _EARN_HIST_CACHE.get(str(ticker).upper(), [])
 
 
+def _earn_days_since(ticker):
+    """Calendar days since the most recent PAST earnings print, or None.
+
+    HELM-133. Feeds an informational flag only - nothing gates on it. Returns
+    None when the cache has no usable date, which is the same posture as
+    hv_90_ex_earn falling back to plain HV90: the flag does not render rather
+    than asserting a freshness it cannot support.
+    """
+    from datetime import date
+    today = date.today()
+    best = None
+    for _d in (_earnings_hist(ticker) or []):
+        try:
+            _dt = date.fromisoformat(str(_d)[:10])
+        except Exception:
+            continue
+        if _dt < today and (best is None or _dt > best):
+            best = _dt
+    return (today - best).days if best is not None else None
+
+
 def _hv30_from_closes(close):
     """Annualized 30-trading-day historical vol (%) from daily closes."""
     import math
@@ -725,9 +746,33 @@ def fetch_technicals(ticker: str, ivr_record=None) -> dict:
                     result["vol_bucket"] = "cheap"
                 else:
                     result["vol_bucket"] = "moderate"
-            _hv90x = result.get("hv_90_ex_earn")  # HELM-101 G3 vol gate input
+            # HELM-132 (W76): G3 ratio must be internally consistent. The
+            # numerator _iv is RAW implied vol, so the denominator is RAW HV90.
+            # The old form divided raw IV by hv_90_ex_earn - a mixed measure
+            # ORATS never publishes - which inflated the ratio purely as a
+            # function of how recently the name reported: a fresh print sits
+            # inside the trailing 90d window and is stripped, shrinking the
+            # denominator. Measured on the 2026-07-27 board, median inflation
+            # = +0.0736 at 0-30d since print, decaying to +0.0121 once the
+            # print ages out; all 7 names the mixed form excluded had reported
+            # within 27 days. ORATS iv30d / orHv90d is raw over raw, and that
+            # scan is where G3_RATIO_MAX's 0.90 came from.
+            _hv90 = result.get("hv_90")  # raw HV90 (HELM-132); G3 vol gate input
+            if _iv and _hv90 and float(_hv90) > 0:
+                result["iv_hv90_ratio"] = round(float(_iv) / float(_hv90), 3)
+            # HELM-133 (W76 follow-on): keep the ex-earnings ratio as
+            # INFORMATION. It is logged on every scan and gates nothing - the
+            # G5 quintile pattern. Two reasons to keep it: it is the paired
+            # series any later argument to change the measure will need, and
+            # it is what makes the earnings-proximity flag quantitative
+            # rather than decorative.
+            _hv90x = result.get("hv_90_ex_earn")
             if _iv and _hv90x and float(_hv90x) > 0:
-                result["iv_hv90_ratio"] = round(float(_iv) / float(_hv90x), 3)
+                result["iv_hv90_ratio_xearn"] = round(float(_iv) / float(_hv90x), 3)
+            _since = _earn_days_since(ticker)
+            if _since is not None:
+                result["earn_days_since"] = _since
+                result["earn_in_hv90_window"] = 1 if _since <= 90 else 0
         except Exception:
             pass
         return result
