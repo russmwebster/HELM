@@ -17,20 +17,20 @@ _Snapshot; refreshed each `helm checkpoint`, read via `helm status`._
 
 - **Phase:** scaffolding complete (live · paper · edge). `schema.sql` faithfully builds live incl. constraints/defaults/FKs (HELM-002); hot `positions` table indexed live (HELM-021). Decision core (HELM-027) reaches every open family — one verdict engine reading `strategy_settings`, `/health` wired for CSP · LONG_CALL (single-leg) and iron condor / bear put spread (multi-leg) via `_core_band_ml` off `leg_checks`. Earnings now surfaced at the entry decision on both surfaces — `helm open` banner and `helm scan` column, unified on `classify_earnings` (HELM-044). Learning loop (HELM-023) is the frontier — entry+exit capture complete (`iv_rank`/`days_to_earnings`/`signal_id` wired); Track A (exit-lever scorecard) held on corpus maturity. Structural map lives in `ORIENTATION.md`.
 - **Next highest-leverage:** **concentration and loss sizing.** With the DTE artifacts excluded (HELM-107), the closed book wins **79%** of the time -- CSPs 85% at a mean +5.1% of risk -- and still totals -$12,341. Many small wins, few very large losses, exactly the shape the 7/19 concentration work found (nine closed CSP losers, six flushed 7/13). Selection and win rate are not the problem; correlated loss size is. HELM-023 Track A remains held on corpus maturity, and the corpus is now 91 rows smaller and honest.
-- **Last shipped (s92):** **HELM-132** -- G3 now divides by raw HV90, matching the
-  ORATS scan its 0.90 came from. The old form mixed raw IV with an ex-earnings
-  denominator and moved the gate with earnings-cycle phase; GE goes 0.899 -> 0.859
-  and the buy wing has a name to route. **HELM-133** opened: the ex-earnings twin is
-  logged on every scan and gates nothing, pending a calibration decision.
-  *(This line used to describe s91 and was wrong: `CONFIRM_SCANS` was replaced by
-  `ROUTE_MARGIN` inside s91 itself and the Status block was never updated -- the
-  same inherited-claim failure W49 records.)*
+- **Last shipped (s92):** **HELM-132** (G3 divides by raw HV90, matching the ORATS
+  scan its 0.90 came from; GE 0.899 -> 0.859 and the buy wing has names to route),
+  **HELM-133** (the ex-earnings twin logged, never gated) and **HELM-134** (the
+  HELM READ column no longer contradicts the VRP column beside it -- it leads with
+  cause, disagreement and confidence). *(An earlier version of this line described
+  s91 and was wrong: `CONFIRM_SCANS` was replaced by `ROUTE_MARGIN` inside s91
+  itself and the Status block was never updated -- the same inherited-claim
+  failure W49 records.)*
 - **Next session (Russ):** **W74 + W68 together** -- three open paper positions carry
   no mark at all, so every "the paper book is at -$8,801" figure silently excludes
   them, and W68 is the likely mechanism. Then **W12** (sizing), then **W19** (the
   learning loop), which now has both wings feeding it.
 - **Blocked (market/RTH):** none outstanding — HELM-031 `shadow_*` capture verified live (s79); the deep-ITM spec CSPs (RKLB/IREN/OKLO/IONQ) are no longer open in the book, so the re-pull is moot.
-- **Counts:** 35 active (25 OPEN · 10 DEFERRED) · last shipped s92 (HELM-132 -- G3 denominator matched to the threshold it borrowed; HELM-133 opened, logged-not-gated) · **Last-updated 2026-07-28 (s92)**
+- **Counts:** 35 active (25 OPEN · 10 DEFERRED) · last shipped s92 (HELM-132, HELM-133, HELM-134) · **Last-updated 2026-07-28 (s92b)**
 - **Next RTH:** confirm HELM-068 parenting stamps `parent_position_id` on the next real roll; validate HELM-081 live vol-context capture (`hv_30d`/skew) during RTH; watch the first live board after HELM-111 -- the bullish side should now decline rather than route BPS, and the Declined section says why; confirm a routed DIAGONAL opens its short leg at >= 28 DTE.
 
 _Last updated_: 2026-07-27 (s90. The through-line: five claims in this register were quantitatively wrong in the same way -- each measured on the convenient subset. Only closed trades. Attempts rather than writes. The interactive path but not the scheduled one. A vol window containing the earnings move. Two of the five were mine, made this session and corrected the same day. When a headline figure looks decisive, ask what it excludes.)
@@ -233,6 +233,32 @@ _s78: parenting **SHIPPED** (commit 5cd12b5) -- the replacement is now parented 
 
 ## Resolved log
 
+
+- **HELM-134** (2026-07-28, s92) -- **the HELM READ column asserted the opposite
+  of the columns beside it.** The board shows IV%, HV, VRP, IVR and IVP; the READ
+  sentence cited only IV Rank and called it "elevated, good premium". Measured on
+  the 2026-07-28 board: **35 rows carried that phrase, 10 of them with a NEGATIVE
+  VRP** -- KO read IV 22.0 against HV 31.4 at IVR 85, reporting the same day.
+  **17 of the 35 had an earnings print within 10 days**, so for roughly half the
+  sell board the elevated rank WAS the event premium. **6 names had IVR and IVP
+  diverging by 20+ points** (GS 55/84, HON 69/90, MS 55/82, NVDA 63/83) -- the
+  single-spike distortion IVP exists to catch, both numbers shown, the
+  disagreement never stated. **26 of 67 rows** had `hv_30_source` ~ `dates-none`,
+  so HV and VRP were weaker than they looked and nothing said so.
+  **Root cause was ordering, not judgement:** the sentence is assembled in
+  `fetch_technicals` before VRP is computed (12 lines later in the same function)
+  and long before `attach_days_to_earnings` runs in a separate pass. It could not
+  cite what did not exist yet.
+  **Fixed:** new `helm/vol_read.py` -- DB-free and pure, like `lc_screen` -- run
+  as a post-pass after the earnings attach and before capture. It answers what the
+  columns cannot: **why** a level is what it is, **where** the measures disagree,
+  and **how much** to trust them. A tick appears only when the measures agree.
+  Gates nothing; routing untouched. AAPL now reads *"IVR 86 -- but earnings in 2d;
+  the rank is the print, not a standing edge; IV 30 vs HV 33 -- selling BELOW
+  realized (VRP -2.8); HV from price history only..."* where it read *"IVR 86 --
+  elevated, good premium"*. **29 behavioural checks** (`tools/verify_s92_w78.py`),
+  verified end to end by a live scan against a snapshot DB reading back
+  `auto_bias_reasoning`, which is the exact field the PG board renders.
 
 - **HELM-131** (2026-07-28, s92) -- resolved by **HELM-132**. The provenance claim
   was checked and held: ORATS does publish `iv30d / orHv90d < 0.9`. The real finding

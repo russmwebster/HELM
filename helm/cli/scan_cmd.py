@@ -716,13 +716,19 @@ def fetch_technicals(ticker: str, ivr_record=None) -> dict:
             result["strategy"] = "NO_ASSESS_IVR"
             result["strategy_rationale"] = "IVR missing -- run helm ivr refresh, then re-scan"
 
-        # IVR signal injection
+        # HELM-134 (W78): the IVR-only clause that used to live here is gone.
+        # It printed the IV Rank column back at the trader and called it
+        # "good premium" while ignoring VRP, the earnings date and the
+        # IVR/IVP gap -- on 10 of 35 rows it contradicted the VRP column on
+        # the same line. The replacement is helm/vol_read.py, run as a
+        # post-pass because VRP is computed further down this function and
+        # days_to_earnings is attached by a different pass entirely. That
+        # ordering is the whole reason the old sentence could only cite IVR.
         _ivr = result.get("iv_rank")
         if _ivr is not None:
             if strategy in ("CSP", "IRON_CONDOR") and _ivr < 25:
                 result["bias_factors"].insert(0, f"⚠ Low IVR {_ivr:.0f} — selling into cheap IV")
-            elif strategy in ("CSP", "IRON_CONDOR") and _ivr >= 50:
-                result["bias_factors"].insert(0, f"✓ IVR {_ivr:.0f} — elevated, good premium")
+            # (the >=50 "good premium" claim now comes from vol_read, with VRP)
             elif strategy == "LONG_CALL" and _ivr <= 25:
                 result["bias_factors"].insert(0, f"✓ IVR {_ivr:.0f} — low IV, cheap options")
             elif strategy == "LONG_CALL" and _ivr > 50:  # IV crush risk
@@ -930,6 +936,15 @@ def run():
         from helm import lc_screen as _lcs
         attach_days_to_earnings(results)
         _lcs.screen([r for r in results if not r.get("error")])
+    except Exception:
+        pass
+
+    # HELM-134 (W78): HELM READ vol clauses. Must run AFTER
+    # attach_days_to_earnings and BEFORE persist, because the text is stored
+    # as auto_bias_reasoning and that is what the PG board renders.
+    try:
+        from helm import vol_read as _vr
+        _vr.annotate(results)
     except Exception:
         pass
 
