@@ -20,7 +20,10 @@ _Snapshot; refreshed each `helm checkpoint`, read via `helm status`._
 - **Last shipped (s93):** **HELM-138** (an expired leg no longer makes its
   position unmarkable: expired legs mark at settlement intrinsic on both the
   check and paper-exit paths, save_check refuses GOOD without a mark, and the
-  six lying EQT rows are re-graded PARTIAL; commit a7e907e).
+  six lying EQT rows are re-graded PARTIAL; commit a7e907e) and **HELM-139**
+  (the 38% gateway figure was a round-the-clock diagnostic; sampler retired,
+  boundary map documented; d2bc247). Evening batch also cleared W25 / W41 /
+  W44 / W58 / W60 / W61 (4a7052e, helm-pg f9c31f6).
 - **Next session (Russ):** **run `helm scan` + `helm paper generate` in market
   hours** -- GE (0.884) and RTX (0.877) passed the screen on the 2026-07-28
   15:53 board and nothing has booked since the s91 regime break
@@ -28,7 +31,7 @@ _Snapshot; refreshed each `helm checkpoint`, read via `helm status`._
   W74 is resolved (HELM-138); W68 stays open but has fired zero times since
   instrumentation.
 - **Blocked (market/RTH):** none outstanding — HELM-031 `shadow_*` capture verified live (s79); the deep-ITM spec CSPs (RKLB/IREN/OKLO/IONQ) are no longer open in the book, so the re-pull is moot.
-- **Counts:** 33 active (23 OPEN · 10 DEFERRED) · last shipped s93 (HELM-138) · **Last-updated 2026-07-28 (s93)**
+- **Counts:** 33 active (23 OPEN · 10 DEFERRED) · last shipped s93 (HELM-138..139) · **Last-updated 2026-07-28 (s93)**
 - **Next RTH:** confirm HELM-068 parenting stamps `parent_position_id` on the next real roll; validate HELM-081 live vol-context capture (`hv_30d`/skew) during RTH; watch the first live board after HELM-111 -- the bullish side should now decline rather than route BPS, and the Declined section says why; confirm a routed DIAGONAL opens its short leg at >= 28 DTE.
 
 _Last updated_: 2026-07-28 (s93. The lesson this session: a deterministic defect had been filed under an intermittent one -- W74's three unmarked positions re-measured to one, with a mechanism nothing intermittent about it: an expired leg quotes nothing, forever. Meanwhile the instrumented HELM-128 fault has fired zero times since the tracebacks went in. Before chasing the suspected mechanism, re-measure whether it is still occurring at all.)
