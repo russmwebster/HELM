@@ -373,7 +373,7 @@ def _long_reject_reason(c):
     return None
 
 
-def gate_longs(contracts, strategy, reset=True):
+def gate_longs(contracts, strategy, reset=True, enforce=True):
     """HELM-101 s84 hard gates for the buy side.
 
     Fails CLOSED: a contract whose spread or breakeven cannot be measured is
@@ -382,6 +382,13 @@ def gate_longs(contracts, strategy, reset=True):
     s85: each decline is also recorded in LAST_LONG_REJECTS with its gate and
     measurement. Pass reset=False on the post-enrichment pass, so re-gating the
     survivors does not erase the pre-scoring declines.
+
+    W85 (s93, Russ): enforce=False ANNOTATES instead of dropping -- every
+    contract stays in the list, refused ones carry c["reject"] so a human
+    surface can grey them and state the toll. The rule: gate facts for the
+    unattended booker; display judgments for the human. Default stays
+    enforce=True so the paper path cannot book a refused contract by
+    omission -- a forgotten caller fails conservative, never loose.
     """
     if strategy not in LONG_SINGLE_FAMILY:
         return contracts
@@ -391,6 +398,7 @@ def gate_longs(contracts, strategy, reset=True):
     for c in contracts:
         verdict = _long_reject_reason(c)
         if verdict is None:
+            c.pop("reject", None)
             kept.append(c)
             continue
         gate, detail, metric = verdict
@@ -400,6 +408,8 @@ def gate_longs(contracts, strategy, reset=True):
             "strike": c.get("strike"), "expiration": c.get("expiration"),
             "dte": c.get("dte"),
         })
+        if not enforce:
+            kept.append(c)
     return kept
 
 
@@ -823,7 +833,8 @@ def _entry_dte_floor(strategy, dte_min):
 
 def evaluate_contracts(ticker: str, strategy: str, config: dict,
                        dte_target: Optional[int] = None,
-                       top_n: int = 8) -> list:
+                       top_n: int = 8,
+                       enforce_long_gates: bool = True) -> list:
     """
     Fetch options chain and score contracts for the given strategy.
     Returns list of scored contract dicts, sorted by score desc.
@@ -936,7 +947,8 @@ def evaluate_contracts(ticker: str, strategy: str, config: dict,
         # Score IBKR contracts. HELM-101 s84: the buy side is annotated with
         # breakeven/expected-move and gated before scoring.
         annotate_longs(contracts, direction, spot, hv_annual)
-        contracts = gate_longs(contracts, strategy)
+        contracts = gate_longs(contracts, strategy,
+                               enforce=enforce_long_gates)
         for c in contracts:
             c["score"] = score_contract(c, direction, delta_sweet,
                                         be_ratio=c.get("be_ratio"))
@@ -1021,7 +1033,8 @@ def evaluate_contracts(ticker: str, strategy: str, config: dict,
     # HELM-101 s84: annotate + gate the buy side before spending enrichment
     # slots on contracts that cannot survive the breakeven test.
     annotate_longs(contracts, direction, spot, hv_annual)
-    contracts = gate_longs(contracts, strategy)
+    contracts = gate_longs(contracts, strategy,
+                           enforce=enforce_long_gates)
     for c in contracts:
         c["score"] = score_contract(c, direction, delta_sweet,
                                     be_ratio=c.get("be_ratio"))
@@ -1064,7 +1077,8 @@ def evaluate_contracts(ticker: str, strategy: str, config: dict,
     
     # Re-gate after enrichment: a live spread can breach a gate the yfinance
     # quote passed. reset=False so the pre-scoring declines survive (s85).
-    top_contracts = gate_longs(top_contracts, strategy, reset=False)
+    top_contracts = gate_longs(top_contracts, strategy, reset=False,
+                               enforce=enforce_long_gates)
 
     # Re-sort after IBKR enrichment
     top_contracts.sort(key=lambda c: -c["score"])
