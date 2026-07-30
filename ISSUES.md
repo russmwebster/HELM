@@ -192,6 +192,33 @@ _s78: parenting **SHIPPED** (commit 5cd12b5) -- the replacement is now parented 
 
 ## Resolved log
 
+- **HELM-140 · BUG** (2026-07-29, s93) -- **the single-leg delta filter failed
+  OPEN on unmeasurable delta, and the SELL_GATED arm's first booking was an
+  ITM artifact because of it.** The MA paper CSP booked at 13:57 was a short
+  **585 put with spot at 566.74** -- eighteen dollars in the money, entry_delta
+  NULL -- because the chain row carried neither a delta nor an IV for the BS
+  fallback, and both single-leg filter sites read `delta is not None and not
+  (band)`: unknown delta skipped the band entirely, and the richest premium on
+  a pre-earnings chain (the ITM strike) won the ranking. The condor/spread
+  evaluators and the buy side's gate (`delta unknown -> reject`, HELM-101 s84)
+  already failed closed; only the single-leg path -- the one that books CSPs --
+  had the hole. BA's condor legs came through the same hole the same day and
+  happened to land OTM: the mechanism was general, MA is where it bit.
+  **Fixed:** both sites now `delta is None or not (band)` -- fail closed,
+  matching every sibling. 3 behavioural checks with a monkeypatched chain
+  reproducing MA's exact poison row (`tools/verify_s93_w87.py`); control run
+  against pre-change code admits the poison row (returned [535, 585]) and the
+  patched code refuses it. **The MA position is VOIDED, Russ's call:** closed
+  at its open price (net zero), exit_reason VOIDED, excluded from all studies
+  -- it was not the earnings gate's product and the sell screen as configured
+  would never have picked it, so leaving it in would contaminate the
+  SELL_GATED arm with a defect artifact. Backups:
+  data/helm-pre-ma-void-20260729_211538.db. The arm restarts at zero, cleanly.
+  **Session note worth keeping:** the finding and both remedies were first
+  delivered in a turn that reached Russ's screen but was lost from session
+  context when the connection dropped -- the re-derivation here confirmed the
+  lost analysis from the data alone. Worklist W87.
+
 - **HELM-139 · OPS** (2026-07-28, s93) -- **"IB Gateway refuses 38% of
   connections" re-measured: not a chronic rate; a diagnostic read as a defect.**
   The figure came from `sample_mktdata.py` (HELM-075's temporary boundary

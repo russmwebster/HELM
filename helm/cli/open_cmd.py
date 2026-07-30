@@ -746,7 +746,12 @@ def fetch_chain_from_ibkr(ticker, opt_type, target_exps, spot, atr,
                     except Exception:
                         pass
 
-                if delta is not None and not (delta_min <= delta <= delta_max):
+                # HELM-140 (W87): an unmeasurable delta cannot prove itself
+                # inside the band -- fail CLOSED, as the buy-side gate and the
+                # condor/spread evaluators already do. The MA 585P ITM artifact
+                # (2026-07-29, SELL_GATED) came through this exact line: no
+                # delta, no IV for the fallback, richest premium wins.
+                if delta is None or not (delta_min <= delta <= delta_max):
                     continue
 
                 oi = 0
@@ -1000,8 +1005,9 @@ def evaluate_contracts(ticker: str, strategy: str, config: dict,
                 if delta is not None:
                     delta = abs(float(delta))
 
-                # Filter by delta range
-                if delta is not None and not (delta_min <= delta <= delta_max):
+                # Filter by delta range -- HELM-140 (W87): delta unknown is
+                # a refusal, not a pass (fail closed; see the ibkr branch).
+                if delta is None or not (delta_min <= delta <= delta_max):
                     continue
 
                 contract = {
