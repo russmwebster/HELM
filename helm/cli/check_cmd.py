@@ -532,6 +532,8 @@ def assess_position(pos: dict, legs: list, underlying_price: Optional[float],
     pnl_mtm = None
     pnl_pct = None
     intrinsic_buffer = None
+    buffer_strike = None
+    buffer_side = None
 
     if primary:
         strike = primary["strike"]
@@ -582,21 +584,35 @@ def assess_position(pos: dict, legs: list, underlying_price: Optional[float],
                 if net_premium != 0:
                     pnl_pct = round((pnl_mtm / abs(net_premium)) * 100, 1)
 
-        # Intrinsic buffer (distance to the SHORT strike). Meaningful when
-        # there is exactly one short option leg -- CSP, covered call, or a
-        # credit vertical (bull-put / bear-call). Two short strikes (condor /
-        # strangle / jade) or none (long debit) leave it None; the deep view
-        # shows the wings.
+        # Intrinsic buffer: signed distance from spot to the governing SHORT
+        # strike. One short leg (CSP / covered call / credit vertical): that
+        # strike -- unchanged behaviour. Two or more short legs (condor /
+        # strangle / jade): the NEARER wall governs -- min over short legs of
+        # (spot - K) for puts / (K - spot) for calls. (W89 / HELM-141: this
+        # was previously left None, so no condor ever journaled a buffer.)
+        # buffer_strike / buffer_side record which wall the number is measured
+        # to. Fails closed: any short leg missing strike or type -> None --
+        # a nearer wall we cannot see must not be assumed away (HELM-095).
+        # Long debit (no short leg) stays None. Verdict banding is untouched:
+        # band_for reads this only on its single-leg branch (verdict.py); the
+        # multileg band comes from proximity_pct as before -- asserted in
+        # tools/verify_s95_w89.py.
         _short_opt_legs = [_l for _l in opt_legs if _l.get("direction") == "SHORT"]
-        if underlying_price and len(_short_opt_legs) == 1:
-            _sl = _short_opt_legs[0]
-            _s_strike = _sl.get("strike")
-            _s_type = _sl.get("option_type")
-            if _s_strike is not None and _s_type:
-                if _s_type == "PUT":
-                    intrinsic_buffer = round(underlying_price - _s_strike, 2)
-                else:  # CALL
-                    intrinsic_buffer = round(_s_strike - underlying_price, 2)
+        if underlying_price and _short_opt_legs:
+            _cands = []
+            for _sl in _short_opt_legs:
+                _s_strike = _sl.get("strike")
+                _s_type = _sl.get("option_type")
+                if _s_strike is None or not _s_type:
+                    continue
+                _d = ((underlying_price - _s_strike) if _s_type == "PUT"
+                      else (_s_strike - underlying_price))
+                _cands.append((_d, _s_strike, _s_type))
+            if _cands and len(_cands) == len(_short_opt_legs):
+                _d, _k, _t = min(_cands, key=lambda _c: _c[0])
+                intrinsic_buffer = round(_d, 2)
+                buffer_strike = _k
+                buffer_side = "put" if _t == "PUT" else "call"
 
         # --- HELM quiet-flag rules (flags only at key decision points) ---
         # No RED anywhere. Orange = a decision is due; bold green = take-profit;
@@ -640,6 +656,8 @@ def assess_position(pos: dict, legs: list, underlying_price: Optional[float],
         "pnl_mtm": pnl_mtm,
         "pnl_pct": pnl_pct,
         "intrinsic_buffer": intrinsic_buffer,
+        "buffer_strike": buffer_strike,
+        "buffer_side": buffer_side,
         "profit_target_pct": _ptr,
     }
 
@@ -2010,6 +2028,7 @@ def cmd_check_deep_csp(pos: dict, legs: list, assessment: dict, snap: dict):
         console.print(f"  [bold]Buffer to Strike[/bold]")
 
         buf = a.get("intrinsic_buffer")
+        _nshort_b = len([_l for _l in legs if _l.get("option_type") not in (None, "STOCK") and _l.get("direction") == "SHORT"])
         if buf is None:
             # Multi-strike position (condor / strangle / jade / straddle /
             # diagonal): a single buffer-to-strike is ambiguous. Show n/a --
@@ -2026,10 +2045,17 @@ def cmd_check_deep_csp(pos: dict, legs: list, assessment: dict, snap: dict):
             otm_itm = "OTM" if buf > 0 else "ITM"
             buf_color = "green" if buf_pct > 10 else "yellow" if buf_pct > 5 else "red"
 
-            console.print(f"  Strike:      ${strike:.0f}  |  Spot: ${spot:.2f}")
+            # W89: multi-short buffer is measured to the NEARER wall -- show
+            # that strike, not the primary leg's.
+            _bstrike = a.get("buffer_strike") if a.get("buffer_strike") is not None else strike
+            if _nshort_b >= 2:
+                _bside = a.get("buffer_side") or "?"
+                console.print(f"  Strike:      ${_bstrike:.0f} [dim](nearer wall — {_bside} side)[/dim]  |  Spot: ${spot:.2f}")
+            else:
+                console.print(f"  Strike:      ${_bstrike:.0f}  |  Spot: ${spot:.2f}")
             console.print(f"  Buffer:      [{buf_color}]${abs(buf):.2f}  ({abs(buf_pct):.1f}% {otm_itm})[/{buf_color}]")
 
-            if atr:
+            if atr and _nshort_b < 2:
                 atr1 = round(spot - atr, 2) if opt_type == "PUT" else round(spot + atr, 2)
                 atr2 = round(spot - 2*atr, 2) if opt_type == "PUT" else round(spot + 2*atr, 2)
                 console.print(f"  1-ATR:       ${atr1:.2f}  |  2-ATR: ${atr2:.2f}")
@@ -2380,6 +2406,7 @@ def cmd_check_deep(pos: dict, legs: list, assessment: dict, snap: dict):
         console.print(f"  [bold]Buffer to Strike[/bold]")
 
         buf = a.get("intrinsic_buffer")
+        _nshort_b = len([_l for _l in legs if _l.get("option_type") not in (None, "STOCK") and _l.get("direction") == "SHORT"])
         if buf is None:
             # Multi-strike position (condor / strangle / jade / straddle /
             # diagonal): a single buffer-to-strike is ambiguous. Show n/a --
@@ -2396,10 +2423,17 @@ def cmd_check_deep(pos: dict, legs: list, assessment: dict, snap: dict):
             otm_itm = "OTM" if buf > 0 else "ITM"
             buf_color = "green" if buf_pct > 10 else "yellow" if buf_pct > 5 else "red"
 
-            console.print(f"  Strike:      ${strike:.0f}  |  Spot: ${spot:.2f}")
+            # W89: multi-short buffer is measured to the NEARER wall -- show
+            # that strike, not the primary leg's.
+            _bstrike = a.get("buffer_strike") if a.get("buffer_strike") is not None else strike
+            if _nshort_b >= 2:
+                _bside = a.get("buffer_side") or "?"
+                console.print(f"  Strike:      ${_bstrike:.0f} [dim](nearer wall — {_bside} side)[/dim]  |  Spot: ${spot:.2f}")
+            else:
+                console.print(f"  Strike:      ${_bstrike:.0f}  |  Spot: ${spot:.2f}")
             console.print(f"  Buffer:      [{buf_color}]${abs(buf):.2f}  ({abs(buf_pct):.1f}% {otm_itm})[/{buf_color}]")
 
-            if atr:
+            if atr and _nshort_b < 2:
                 atr1 = round(spot - atr, 2) if opt_type == "PUT" else round(spot + atr, 2)
                 atr2 = round(spot - 2*atr, 2) if opt_type == "PUT" else round(spot + 2*atr, 2)
                 console.print(f"  1-ATR:       ${atr1:.2f}  |  2-ATR: ${atr2:.2f}")
