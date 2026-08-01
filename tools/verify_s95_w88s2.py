@@ -71,7 +71,10 @@ check("condor fine print disclaims prediction",
       "no predictive separation" in c["beliefs"][0]["fine_print"])
 check("condor title is the corridor", "corridor" in c["beliefs"][0]["title"])
 check("condor odds greyed (W27)", "not captured" in c["beliefs"][0]["extra"].get("odds",""))
-check("condor gets expiry ladder", c["ladder"] is not None and len(c["ladder"]) == 5)
+check("condor gets expiry ladder", c["ladder"] is not None and len(c["ladder"]) >= 5)
+check("ladder carries break-even rows",
+      sum(1 for r in (c["ladder"] or []) if r["where"] == "break-even") == 2)
+check("card carries breakevens", len(c.get("breakevens", [])) == 2)
 check("convergence line present", c["convergence"] is not None and "/week" in c["convergence"])
 bad = T.evaluate(pos("IRON_CONDOR"), [leg("SHORT","PUT",100), leg("SHORT","CALL",None)],
                  [chk("2026-07-30", 110.0)])

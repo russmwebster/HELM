@@ -312,6 +312,39 @@ def _pnl_at_expiry(legs, spot):
     return round(total, 2)
 
 
+def breakevens(legs):
+    """Expiry break-even spot(s): where the house-convention expiry P&L crosses
+    zero. Computed from legs alone (strikes + open prices), the same authority
+    the buffer uses -- never the stored columns. Empty when any leg is
+    unpriced (never invent -- HELM-095)."""
+    strikes = [_f(l.get("strike")) for l in legs or []
+               if l.get("option_type") not in (None, "STOCK") and _f(l.get("strike")) is not None]
+    if not strikes or _pnl_at_expiry(legs, strikes[0]) is None:
+        return []
+    lo, hi = min(strikes) * 0.5, max(strikes) * 1.5
+    n = 2000
+    pts, prev_s, prev_p = [], None, None
+    for i in range(n + 1):
+        s = lo + (hi - lo) * i / n
+        p = _pnl_at_expiry(legs, s)
+        if prev_p is not None and p is not None and (p == 0 or (prev_p < 0) != (p < 0)):
+            a, b = prev_s, s
+            for _ in range(40):                      # bisect to the cent
+                m = (a + b) / 2
+                pm = _pnl_at_expiry(legs, m)
+                if pm == 0:
+                    a = b = m; break
+                if (pm < 0) == (_pnl_at_expiry(legs, a) < 0):
+                    a = m
+                else:
+                    b = m
+            be = round((a + b) / 2, 2)
+            if not pts or abs(pts[-1] - be) > 0.01:
+                pts.append(be)
+        prev_s, prev_p = s, p
+    return pts
+
+
 def expiry_ladder(pos, legs, spot, latest_mark, dte):
     strat = (pos.get("strategy") or "").upper()
     if strat not in ("IRON_CONDOR", "BEAR_CALL_SPREAD", "BULL_PUT_SPREAD",
@@ -326,6 +359,9 @@ def expiry_ladder(pos, legs, spot, latest_mark, dte):
               ("between", (lo + hi) / 2), ("at the upper strike", hi),
               ("above the wings", hi * 1.03)]
     rows = [{"where": w, "spot": round(s, 2), "pnl": _pnl_at_expiry(legs, s)} for w, s in probes]
+    for _be in breakevens(legs):
+        rows.append({"where": "break-even", "spot": _be, "pnl": 0.0})
+    rows.sort(key=lambda r: r["spot"])
     here = _pnl_at_expiry(legs, spot)
     conv = None
     if here is not None and latest_mark is not None:
@@ -449,6 +485,7 @@ def evaluate(pos, legs, checks, entry_snap=None, entry_thesis_row=None,
         "position_id": pos.get("id"), "ticker": pos.get("ticker"),
         "spot": _f((latest or {}).get("spot_price")),
         "expirations": _exps,
+        "breakevens": breakevens(legs),
         "strategy": strat, "book": pos.get("book"), "closed": closed,
         "deal": deal_sentence(pos, legs),
         "beliefs": beliefs,
