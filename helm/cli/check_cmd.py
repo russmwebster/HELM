@@ -2832,6 +2832,14 @@ def cmd_snapshot(args):
     except Exception:
         pass
 
+    # W91 / HELM-143: exit-improvement alert post-pass. Notify-only; a
+    # failure here must never cost the snapshot itself.
+    try:
+        from helm import exit_alert as _xa
+        _xa.run_post_snapshot()
+    except Exception:
+        pass
+
     if "--silent" not in args:
         _msg = (f"snapshot: {attempted} attempted, {journaled} journaled")
         if VERDICT_FAILURES:

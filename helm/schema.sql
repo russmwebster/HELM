@@ -1008,3 +1008,18 @@ CREATE TABLE IF NOT EXISTS stop_arm_events (
 
 CREATE INDEX IF NOT EXISTS idx_sae_position ON stop_arm_events(position_id);
 CREATE INDEX IF NOT EXISTS idx_sae_status   ON stop_arm_events(status);
+
+-- W91 / HELM-143 -- exit-improvement alerts (notify-only; the engine also
+-- creates this on first use via helm/exit_alert.py)
+CREATE TABLE IF NOT EXISTS exit_alerts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    position_id TEXT NOT NULL,
+    alert_date TEXT NOT NULL,
+    fired_at TEXT NOT NULL,
+    today_best REAL,
+    best_prior REAL,
+    threshold REAL,
+    message TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_exit_alerts_pos_day
+    ON exit_alerts(position_id, alert_date);

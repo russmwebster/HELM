@@ -568,7 +568,7 @@ def exit_track(legs, checks, closed):
 
 
 def evaluate(pos, legs, checks, entry_snap=None, entry_thesis_row=None,
-             ownership=None, cur_sig=None):
+             ownership=None, cur_sig=None, earnings=None):
     """Assemble the full card content for one position. Pure."""
     strat = (pos.get("strategy") or "").upper()
     closed = (pos.get("status") == "CLOSED")
@@ -640,6 +640,35 @@ def evaluate(pos, legs, checks, entry_snap=None, entry_thesis_row=None,
 
     _exps = sorted({(l.get("expiration") or "")[:10] for l in legs or []
                     if l.get("option_type") not in (None, "STOCK") and l.get("expiration")})
+
+    # W90 / HELM-142 -- earnings-inside-window flag. Display only; the W81
+    # 10-day entry gate is untouched. States never guessed: inside (with
+    # occurred/upcoming), outside (after expiry), stale (cached date already
+    # past and not inside this window), unknown. Closed cards carry None --
+    # a frozen post-mortem must not read today's calendar.
+    earn = None
+    if not closed:
+        asof_d = ((latest or {}).get("checked_at") or "")[:10]
+        opened = (pos.get("opened_at") or "")[:10]
+        last_exp = _exps[-1] if _exps else None
+        nxt = ((earnings or {}).get("next") or "")[:10] or None
+        ent = ((earnings or {}).get("at_entry") or "")[:10] or None
+        inside = None
+        for d in sorted({x for x in (nxt, ent) if x}):
+            if last_exp and opened and opened <= d <= last_exp:
+                inside = d
+                break
+        if inside:
+            earn = {"date": inside, "state": "inside",
+                    "when": "occurred" if (asof_d and inside < asof_d)
+                            else "upcoming"}
+        elif nxt and asof_d and nxt < asof_d:
+            earn = {"date": nxt, "state": "stale"}
+        elif nxt:
+            earn = {"date": nxt, "state": "outside"}
+        else:
+            earn = {"state": "unknown"}
+
     return {
         "position_id": pos.get("id"), "ticker": pos.get("ticker"),
         "contract": contract_line(pos, legs),
@@ -657,5 +686,6 @@ def evaluate(pos, legs, checks, entry_snap=None, entry_thesis_row=None,
         "dte": dte, "read": read,
         "ladder": ladder, "convergence": conv,
         "exit_track": xt,
+        "earnings": earn,
         "condor_honesty": strat in ("IRON_CONDOR", "SHORT_STRANGLE", "JADE_LIZARD"),
     }
