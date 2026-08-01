@@ -395,6 +395,45 @@ def expiry_ladder(pos, legs, spot, latest_mark, dte):
     return rows, conv
 
 
+# ── conventional contract line ───────────────────────────────────────────────
+def _fmt_exp(iso):
+    try:
+        d = date.fromisoformat((iso or "")[:10])
+        return "%s %d '%s" % (d.strftime("%b"), d.day, d.strftime("%y"))
+    except (ValueError, TypeError):
+        return iso or "?"
+
+
+def contract_line(pos, legs):
+    """The instrument in chain notation: signed qty, expiry, strike, type.
+    Single leg:  -10 GM Aug 28 '26 $85 P
+    One expiry:  LRCX Aug 21 '26: +20 $350 P / -20 $360 P / -20 $560 C / +20 $570 C
+    Mixed expiries fall back to per-leg with its own date."""
+    tk = pos.get("ticker") or "?"
+    opts = [l for l in legs or [] if l.get("option_type") not in (None, "STOCK")]
+    if not opts:
+        return None
+    def qty(l):
+        n = int(_f(l.get("contracts")) or 1)
+        return ("−%d" % n) if l.get("direction") == "SHORT" else ("+%d" % n)
+    def ks(l):
+        k = _f(l.get("strike"))
+        return ("$%g" % k) if k is not None else "$?"
+    def cp(l):
+        return "P" if l.get("option_type") == "PUT" else "C"
+    exps = {(l.get("expiration") or "")[:10] for l in opts}
+    if len(opts) == 1:
+        l = opts[0]
+        return "%s %s %s %s %s" % (qty(l), tk, _fmt_exp(l.get("expiration")), ks(l), cp(l))
+    legs_sorted = sorted(opts, key=lambda l: (_f(l.get("strike")) or 0))
+    if len(exps) == 1:
+        body = " / ".join("%s %s %s" % (qty(l), ks(l), cp(l)) for l in legs_sorted)
+        return "%s %s: %s" % (tk, _fmt_exp(opts[0].get("expiration")), body)
+    body = " / ".join("%s %s %s %s" % (qty(l), _fmt_exp(l.get("expiration")), ks(l), cp(l))
+                      for l in legs_sorted)
+    return "%s: %s" % (tk, body)
+
+
 # ── deal sentence ────────────────────────────────────────────────────────────
 def deal_sentence(pos, legs):
     tk = pos.get("ticker")
@@ -504,6 +543,7 @@ def evaluate(pos, legs, checks, entry_snap=None, entry_thesis_row=None,
                     if l.get("option_type") not in (None, "STOCK") and l.get("expiration")})
     return {
         "position_id": pos.get("id"), "ticker": pos.get("ticker"),
+        "contract": contract_line(pos, legs),
         "spot": _f((latest or {}).get("spot_price")),
         "expirations": _exps,
         "breakevens": breakevens(legs),
