@@ -171,10 +171,12 @@ def _strike_belief(pos, legs, checks, latest_check):
             _side_txt = "below" if _wall[2] == "PUT" else "above"
             _s = "the market prices ~%d%% odds %s finishes %s $%.0f at expiry" % (
                 odds, pos.get("ticker"), _side_txt, _wall[1])
+            # Register rule (Russ, s95): plain language, not novice-splaining.
+            # Use the trade's own terms and stop.
             if strat == "CSP":
-                _s += " — i.e., that the shares are put to you"
+                _s += " — assignment odds"
             elif strat == "COVERED_CALL":
-                _s += " — i.e., that the shares are called away"
+                _s += " — call-away odds"
             extra["odds"] = _s
         else:
             extra["odds"] = "the market prices ~%d%% odds the price finishes past the strike" % odds
