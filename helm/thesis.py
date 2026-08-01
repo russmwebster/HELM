@@ -164,7 +164,20 @@ def _strike_belief(pos, legs, checks, latest_check):
     dlt = _f((latest_check or {}).get("delta"))
     if strat in _SINGLE_SHORT and dlt is not None:
         odds = min(99, max(1, round(abs(dlt) * 100)))
-        extra["odds"] = "the market prices ~%d%% odds this line fails" % odds
+        # Russ's correction (s95): the line doesn't fail -- the price finishes
+        # past it. Name the event, then what it means in shares.
+        _wall = series[-1][1] if series else None
+        if _wall is not None:
+            _side_txt = "below" if _wall[2] == "PUT" else "above"
+            _s = "the market prices ~%d%% odds %s finishes %s $%.0f at expiry" % (
+                odds, pos.get("ticker"), _side_txt, _wall[1])
+            if strat == "CSP":
+                _s += " — i.e., that the shares are put to you"
+            elif strat == "COVERED_CALL":
+                _s += " — i.e., that the shares are called away"
+            extra["odds"] = _s
+        else:
+            extra["odds"] = "the market prices ~%d%% odds the price finishes past the strike" % odds
     elif strat in ("IRON_CONDOR", "SHORT_STRANGLE", "JADE_LIZARD"):
         extra["odds"] = "odds unavailable — per-leg greeks not captured (W27)"
     return _belief("strike", title,
