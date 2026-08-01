@@ -62,7 +62,7 @@ check("breach x3 = loud", b["state"] == T.BROKEN_LOUD, b["state"])
 b = strike_state(CSP, [("2026-07-30", 97.0)])
 check("<-2% = loud on one day", b["state"] == T.BROKEN_LOUD, b["state"])
 b = strike_state(CSP, [("2026-07-28", 100.5), ("2026-07-30", 106.0)])
-check("healed fray is remembered", b["state"] == T.HOLDS and "healed" in b["now"], b["now"][-70:])
+check("recovered dip is remembered", b["state"] == T.HOLDS and "recovered" in b["now"], b["now"][-70:])
 b = strike_state(CSP, [])
 check("no history = UNKNOWN, never invented", b["state"] == T.UNKNOWN)
 
@@ -71,7 +71,7 @@ c = T.evaluate(pos("IRON_CONDOR"), COND, [chk("2026-07-30", 110.0, pnl=120.0)])
 check("condor card flags honesty", c["condor_honesty"] is True)
 check("condor fine print disclaims prediction",
       "no predictive separation" in c["beliefs"][0]["fine_print"])
-check("condor title is the corridor", "corridor" in c["beliefs"][0]["title"])
+check("condor title states both strikes", "between" in c["beliefs"][0]["title"], c["beliefs"][0]["title"])
 check("condor odds greyed (W27)", "not captured" in c["beliefs"][0]["extra"].get("odds",""))
 check("condor gets expiry ladder", c["ladder"] is not None and len(c["ladder"]) >= 5)
 check("ladder carries break-even rows",

@@ -30,11 +30,11 @@ CONTESTED, PARTIAL, UNKNOWN = "CONTESTED", "PARTIAL", "UNKNOWN"
 _ICON = {HOLDS: "✓", FRAYING: "⚠", BROKEN: "✗", BROKEN_LOUD: "✗",
          DRIFT_FOR: "→", DRIFT_AGAINST: "→", VINDICATED: "✓",
          CONTESTED: "⚠", PARTIAL: "◐", UNKNOWN: "○"}
-_WORD = {HOLDS: "holds", FRAYING: "fraying", BROKEN: "broken",
-         BROKEN_LOUD: "broken — loud", DRIFT_FOR: "drifting in your favour",
-         DRIFT_AGAINST: "drifting against you", VINDICATED: "vindicated",
-         CONTESTED: "contested from birth", PARTIAL: "partial evidence",
-         UNKNOWN: "unknown — never invented"}
+_WORD = {HOLDS: "holds", FRAYING: "warning", BROKEN: "broken",
+         BROKEN_LOUD: "broken — loud", DRIFT_FOR: "moving your way",
+         DRIFT_AGAINST: "moving against you", VINDICATED: "paid off",
+         CONTESTED: "entry measures disagreed", PARTIAL: "incomplete data",
+         UNKNOWN: "no data — not guessed"}
 
 _CREDIT = ("CSP", "COVERED_CALL", "BEAR_CALL_SPREAD", "BULL_PUT_SPREAD",
            "IRON_CONDOR", "SHORT_STRANGLE", "JADE_LIZARD")
@@ -127,9 +127,15 @@ def _strike_belief(pos, legs, checks, latest_check):
     series = day_series(legs, checks)
     state, streak, worst = _strike_state(series)
     two_walls = strat in ("IRON_CONDOR", "SHORT_STRANGLE", "JADE_LIZARD")
-    side_word = {"PUT": "below", "CALL": "above"}
     if two_walls:
-        title = "%s stays inside the corridor" % pos.get("ticker")
+        _sk = sorted({_f(l.get("strike")) for l in legs or []
+                      if l.get("direction") == "SHORT"
+                      and l.get("option_type") not in (None, "STOCK")
+                      and _f(l.get("strike")) is not None})
+        if len(_sk) >= 2:
+            title = "%s stays between $%.0f and $%.0f" % (pos.get("ticker"), _sk[0], _sk[-1])
+        else:
+            title = "%s stays between the short strikes" % pos.get("ticker")
     else:
         wall = series[-1][1] if series else None
         if wall:
@@ -140,39 +146,41 @@ def _strike_belief(pos, legs, checks, latest_check):
     if not series:
         return _belief("strike", title, "asserted at entry",
                        "no computable distance — legs or spot unreadable",
-                       UNKNOWN, "never invented (HELM-095); history predating the journal stays grey")
-    d_last, (b, k, t) = series[-1]
-    now = "%.1f%% %s the $%.0f %s wall (as of %s)" % (
-        abs(b), "from" if b >= 0 else "PAST", k, "put" if t == "PUT" else "call", d_last)
+                       UNKNOWN, "missing data is shown as missing, never estimated (HELM-095)")
+    d_last, (b, k, t_) = series[-1]
+    side_safe = "above" if t_ == "PUT" else "below"
+    side_bad = "below" if t_ == "PUT" else "above"
+    if b >= 0:
+        now = "%s is %.1f%% %s the $%.0f strike (as of %s)" % (
+            pos.get("ticker"), b, side_safe, k, d_last)
+    else:
+        now = "%s is %.1f%% %s the $%.0f strike (as of %s)" % (
+            pos.get("ticker"), abs(b), side_bad, k, d_last)
     healed = (state == HOLDS and worst is not None and worst < 1.0)
     if healed:
         fray_day = next(d for d, (bb, _kk, _tt) in series if bb < 1.0)
-        now += " · holds — frayed %s (%.1f%%), healed" % (fray_day, max(worst, -99.9))
+        now += " · dipped to %.1f%% on %s, since recovered" % (max(worst, -99.9), fray_day)
     if state in (BROKEN, BROKEN_LOUD):
-        now += " · breached %d consecutive check day%s" % (streak, "s" if streak != 1 else "")
-    fine = "worst-of-day nearest-wall distance, recomputed from legs × journaled spot; " \
-           "states: ≥1% holds · 0–1% or one breached day fraying · breach ×2 days broken " \
-           "(×3 or <−2% loud)"
+        now += " · %s the strike at %d consecutive daily checks" % (side_bad, streak)
+    fine = ("distance from spot to the nearest short strike, worst reading of each day, "
+            "recomputed from legs and journaled spot. Bands, measured on 194 closed "
+            "positions (s95): 1%+ = normal · under 1% = warning · past the strike on "
+            "2+ consecutive check days = broken")
     if two_walls:
-        fine += " — tier A note does NOT apply: the backtest found no predictive separation " \
-                "for condors (0.92×; they lose at the same rate either way). Shown for " \
-                "information, not prediction."
+        fine += (". For condors these states describe where the position stands, not "
+                 "its odds — the backtest found no predictive separation for condors")
     else:
-        fine += " — tier A: confirmed breach precedes losses at ~1.7–3.2× base rate " \
-                "(194 closed positions, s95 backtest)"
+        fine += (" — for CSPs and credit verticals a confirmed cross precedes losses "
+                 "at 1.7–3.2× the base rate")
     extra = {}
     dlt = _f((latest_check or {}).get("delta"))
     if strat in _SINGLE_SHORT and dlt is not None:
         odds = min(99, max(1, round(abs(dlt) * 100)))
-        # Russ's correction (s95): the line doesn't fail -- the price finishes
-        # past it. Name the event, then what it means in shares.
         _wall = series[-1][1] if series else None
         if _wall is not None:
             _side_txt = "below" if _wall[2] == "PUT" else "above"
             _s = "the market prices ~%d%% odds %s finishes %s $%.0f at expiry" % (
                 odds, pos.get("ticker"), _side_txt, _wall[1])
-            # Register rule (Russ, s95): plain language, not novice-splaining.
-            # Use the trade's own terms and stop.
             if strat == "CSP":
                 _s += " — assignment odds"
             elif strat == "COVERED_CALL":
@@ -183,61 +191,102 @@ def _strike_belief(pos, legs, checks, latest_check):
     elif strat in ("IRON_CONDOR", "SHORT_STRANGLE", "JADE_LIZARD"):
         extra["odds"] = "odds unavailable — per-leg greeks not captured (W27)"
     return _belief("strike", title,
-                   "entered with the line at $%.0f" % (series[0][1][1],),
+                   "entered with the strike at $%.0f" % (series[0][1][1],),
                    now, state, fine, extra)
 
 
-def _premium_belief(pos, entry_snap, cur_sig, latest_check):
-    """P4 — 'the pay was worth the risk'. Entry-pricing: drifts, never breaks."""
+def _premium_belief(pos, legs, entry_snap, cur_sig, latest_check):
+    """P4/P5 — entry pricing, read as a ledger of forces on the mark.
+    The blend Russ chose (s95): itemize each input, its move, and its
+    direction for/against, with the causal chain only where it adds
+    information. This measure affects P&L only; it can never trigger an
+    exit."""
+    strat = (pos.get("strategy") or "").upper()
+    credit = strat in _CREDIT
     prem = _f(pos.get("net_premium"))
+    e_spot = _f((entry_snap or {}).get("spot_price"))
     e_ivr = _f((entry_snap or {}).get("iv_rank"))
     e_iv = _f((entry_snap or {}).get("iv_current"))
     e_hv = _f((entry_snap or {}).get("hv_30d"))
+    if e_hv is not None and e_iv is not None and e_hv < 3 and e_iv > 3:
+        e_hv *= 100  # snapshots store HV as a fraction on some rows; IV is in points
     e_vrp = (e_iv - e_hv) if (e_iv is not None and e_hv is not None) else None
-    c_ivr = _f((cur_sig or {}).get("iv_rank"))
+    c_iv = _f((latest_check or {}).get("iv_current"))
     c_vrp = _f((cur_sig or {}).get("vrp"))
     ive = _f((latest_check or {}).get("iv_vs_entry"))
-    title = "the premium was rich — the pay was worth the promise"
+    if ive is None and e_iv is not None and c_iv is not None:
+        ive = c_iv - e_iv
+    n_spot = _f((latest_check or {}).get("spot_price"))
+    title = ("I sold this premium when it was expensive" if credit
+             else "I bought this option while it was cheap")
     then_bits = []
+    if prem:
+        then_bits.append(("banked %s" if credit else "paid %s") % _money(abs(prem)))
+    if e_iv is not None:
+        then_bits.append("IV %.1f" % e_iv)
     if e_ivr is not None:
-        then_bits.append("IV rank %.0f" % e_ivr)
+        then_bits.append("rank %.0f" % e_ivr)
     if e_vrp is not None:
         then_bits.append("VRP %+.1f" % e_vrp)
-    else:
-        # entry snapshot exists but lacks an input (W26) -- say so, so the
-        # Now-side VRP never dangles without its comparison point
-        then_bits.append("VRP at entry not captured (W26)")
-    then = ("banked %s · " % _money(prem) if prem else "") + (" · ".join(then_bits) or "entry measures not captured")
-    if e_ivr is None and e_vrp is None:
+    elif e_iv is not None or e_ivr is not None:
+        then_bits.append("entry HV not captured (W26) — rich-vs-realized not gradable")
+    then = " · ".join(then_bits) or "entry measures not captured"
+    if e_ivr is None and e_iv is None:
         return _belief("premium", title, then,
                        "cannot grade — no entry volatility snapshot (W26)",
-                       PARTIAL, "◐ asserted with the measure unavailable; never back-filled")
+                       PARTIAL, "shown as incomplete rather than estimated; never back-filled")
     contested = (e_ivr is not None and e_ivr >= 50 and e_vrp is not None and e_vrp <= 0)
-    now_bits = []
-    if ive is not None:
-        now_bits.append("IV %+.1f vs entry" % ive)
-    if c_ivr is not None:
-        now_bits.append("IV rank now %.0f" % c_ivr)
+    forces = []
+    if e_spot is not None and n_spot is not None and legs:
+        b0, b1 = buffer_pct(legs, e_spot), buffer_pct(legs, n_spot)
+        if b0 is not None and b1 is not None:
+            closer = b1[0] < b0[0]
+            good = (not closer) if credit else closer
+            forces.append("price $%.2f → $%.2f — %s you" % (e_spot, n_spot,
+                          "for" if good else "against"))
+    if ive is not None and e_iv is not None and c_iv is not None:
+        if credit:
+            forces.append("IV %.1f → %.1f — %s you (the option you sold costs %s to buy back)"
+                          % (e_iv, c_iv, "for" if ive < 0 else "against",
+                             "less" if ive < 0 else "more"))
+        else:
+            forces.append("IV %.1f → %.1f — %s you (the option you own is repriced %s)"
+                          % (e_iv, c_iv, "for" if ive > 0 else "against",
+                             "higher" if ive > 0 else "lower"))
+    elif ive is not None:
+        forces.append("IV %+.1f vs entry — %s you"
+                      % (ive, "for" if (ive < 0) == credit else "against"))
+    theta = _f((latest_check or {}).get("theta"))
+    if theta is not None and strat in _SINGLE_SHORT:
+        wall = None
+        for l in legs or []:
+            if l.get("direction") == "SHORT" and l.get("option_type") not in (None, "STOCK"):
+                wall = (_f(l.get("strike")), l.get("option_type"))
+                break
+        if wall and wall[0] is not None:
+            forces.append("time ≈ $%.0f/day accrues to you while %s stays %s $%.0f"
+                          % (abs(theta * 100), pos.get("ticker"),
+                             "above" if wall[1] == "PUT" else "below", wall[0]))
+        else:
+            forces.append("time ≈ $%.0f/day accrues to you" % abs(theta * 100))
+    elif theta is not None and strat in _LONGS:
+        forces.append("time ≈ $%.0f/day decays against you" % abs(theta * 100))
     if c_vrp is not None:
-        now_bits.append("VRP now %+.1f" % c_vrp)
-    now = " · ".join(now_bits) or "no current volatility read"
+        forces.append("VRP now %+.1f — IV %s realized vol"
+                      % (c_vrp, "above" if c_vrp > 0 else "below"))
+    now = "the forces on your mark since entry:" if forces else "no current volatility read"
     if contested:
         state = CONTESTED
-        now += " — rank said rich, realized said cheap on the day it was booked; amber from birth"
+        now = ("rank %.0f said expensive, VRP %+.1f said cheap — on the day you traded. "
+               % (e_ivr, e_vrp)) + now
     elif ive is None:
         state = PARTIAL
     else:
-        # falling IV after selling premium is the belief cashing in
-        state = VINDICATED if ive < 0 else DRIFT_AGAINST if ive > 5 else DRIFT_FOR
-        if ive < 0:
-            now += " — the richness has been cashing in"
-    theta = _f((latest_check or {}).get("theta"))
-    extra = {}
-    if theta is not None and (pos.get("strategy") or "").upper() in _SINGLE_SHORT:
-        extra["rent"] = "collecting ≈ $%.0f/day while the line holds" % abs(theta * 100)
-    fine = "entry-pricing belief: once the premium is banked it drifts or is vindicated, " \
-           "never 'broken' — drift is information, not an alarm"
-    return _belief("premium", title, then, now, state, fine, extra)
+        favorable = (ive < 0) if credit else (ive > 0)
+        state = VINDICATED if favorable else DRIFT_AGAINST
+    fine = ("entry pricing affects P&L only — it can never trigger an exit. Scored "
+            "for/against, not pass/fail: the price you were paid was fixed the day you traded")
+    return _belief("premium", title, then, now, state, fine, {"forces": forces})
 
 
 def _direction_belief(pos, entry_thesis_row, checks, cur_sig, want_up=True):
@@ -479,14 +528,14 @@ def evaluate(pos, legs, checks, entry_snap=None, entry_thesis_row=None,
     beliefs = []
     if strat in _CREDIT:
         beliefs.append(_strike_belief(pos, legs, checks, latest))
-        beliefs.append(_premium_belief(pos, entry_snap, cur_sig, latest))
+        beliefs.append(_premium_belief(pos, legs, entry_snap, cur_sig, latest))
         if strat in ("CSP", "COVERED_CALL"):
             beliefs.append(_own_belief(pos, ownership))
     elif strat in _LONGS or strat in _VERT_DEBIT:
         beliefs.append(_direction_belief(pos, entry_thesis_row, checks, cur_sig,
                                          want_up=strat in ("LONG_CALL", "BULL_CALL_SPREAD")))
         if strat in _LONGS:
-            beliefs.append(_premium_belief(pos, entry_snap, cur_sig, latest))
+            beliefs.append(_premium_belief(pos, legs, entry_snap, cur_sig, latest))
     elif strat in _DIAG:
         beliefs.append(_direction_belief(pos, entry_thesis_row, checks, cur_sig, want_up=True))
         beliefs.append(_term_belief(pos))
@@ -503,7 +552,7 @@ def evaluate(pos, legs, checks, entry_snap=None, entry_thesis_row=None,
     if n_bad:
         label = "✗ %d of %d broken" % (n_bad, len(beliefs))
     elif n_warn:
-        label = "⚠ %d of %d fraying" % (n_warn, len(beliefs))
+        label = "⚠ %d of %d warning" % (n_warn, len(beliefs))
     elif n_unknown == len(beliefs):
         label = "○ unknown"
     else:
@@ -531,7 +580,7 @@ def evaluate(pos, legs, checks, entry_snap=None, entry_thesis_row=None,
         cue = "this needs a decision today — a confirmed break is information being ignored, " \
               "and holding past it is what the book has paid for before (W15)"
     elif n_warn:
-        cue = "worth watching, not acting — fraying is amber by measurement, not an alarm"
+        cue = "worth watching, not acting — a warning is amber by measurement, not an alarm"
     else:
         cue = "no decision needed today — a losing mark with beliefs intact is noise you " \
               "are being paid to tolerate; sitting still is a decision"
