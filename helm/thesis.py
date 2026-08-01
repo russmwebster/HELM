@@ -203,6 +203,10 @@ def _premium_belief(pos, entry_snap, cur_sig, latest_check):
         then_bits.append("IV rank %.0f" % e_ivr)
     if e_vrp is not None:
         then_bits.append("VRP %+.1f" % e_vrp)
+    else:
+        # entry snapshot exists but lacks an input (W26) -- say so, so the
+        # Now-side VRP never dangles without its comparison point
+        then_bits.append("VRP at entry not captured (W26)")
     then = ("banked %s · " % _money(prem) if prem else "") + (" · ".join(then_bits) or "entry measures not captured")
     if e_ivr is None and e_vrp is None:
         return _belief("premium", title, then,
