@@ -327,7 +327,9 @@ def breakevens(legs):
     for i in range(n + 1):
         s = lo + (hi - lo) * i / n
         p = _pnl_at_expiry(legs, s)
-        if prev_p is not None and p is not None and (p == 0 or (prev_p < 0) != (p < 0)):
+        # strict sign change only: a flat-zero stretch (degenerate zero-credit
+        # structure) is not a break-even line worth naming
+        if prev_p is not None and p is not None and (prev_p < 0) != (p < 0):
             a, b = prev_s, s
             for _ in range(40):                      # bisect to the cent
                 m = (a + b) / 2

@@ -36,6 +36,8 @@ def pos(strategy, status="OPEN", **kw):
 
 CSP = [leg("SHORT", "PUT", 100)]
 COND = [leg("SHORT","PUT",100), leg("LONG","PUT",95), leg("SHORT","CALL",120), leg("LONG","CALL",125)]
+for _c in (COND[0], COND[2]):
+    _c["open_price"] = 1.5   # net credit 1.0 -> break-evens 99 / 121, not a degenerate zero-credit payoff
 
 print("== purity ==")
 src = open(os.path.join(HELM, "helm", "thesis.py")).read()
@@ -74,7 +76,10 @@ check("condor odds greyed (W27)", "not captured" in c["beliefs"][0]["extra"].get
 check("condor gets expiry ladder", c["ladder"] is not None and len(c["ladder"]) >= 5)
 check("ladder carries break-even rows",
       sum(1 for r in (c["ladder"] or []) if r["where"] == "break-even") == 2)
-check("card carries breakevens", len(c.get("breakevens", [])) == 2)
+check("card carries breakevens 99/121", c.get("breakevens") == [99.0, 121.0], c.get("breakevens"))
+_z = [dict(l, open_price=1.0) for l in COND]
+check("zero-credit degenerate payoff yields no break-even noise",
+      len(T.breakevens(_z)) <= 2, T.breakevens(_z))
 check("convergence line present", c["convergence"] is not None and "/week" in c["convergence"])
 bad = T.evaluate(pos("IRON_CONDOR"), [leg("SHORT","PUT",100), leg("SHORT","CALL",None)],
                  [chk("2026-07-30", 110.0)])
