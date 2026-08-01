@@ -24,17 +24,18 @@ from datetime import date
 
 # ── belief state vocabulary ──────────────────────────────────────────────────
 HOLDS, FRAYING, BROKEN, BROKEN_LOUD = "HOLDS", "FRAYING", "BROKEN", "BROKEN_LOUD"
+FLAT = "FLAT"
 DRIFT_FOR, DRIFT_AGAINST, VINDICATED = "DRIFT_FOR", "DRIFT_AGAINST", "VINDICATED"
 CONTESTED, PARTIAL, UNKNOWN = "CONTESTED", "PARTIAL", "UNKNOWN"
 
 _ICON = {HOLDS: "✓", FRAYING: "⚠", BROKEN: "✗", BROKEN_LOUD: "✗",
          DRIFT_FOR: "→", DRIFT_AGAINST: "→", VINDICATED: "✓",
-         CONTESTED: "⚠", PARTIAL: "◐", UNKNOWN: "○"}
+         CONTESTED: "⚠", PARTIAL: "◐", UNKNOWN: "○", FLAT: "→"}
 _WORD = {HOLDS: "holds", FRAYING: "warning", BROKEN: "broken",
          BROKEN_LOUD: "broken — loud", DRIFT_FOR: "moving your way",
          DRIFT_AGAINST: "moving against you", VINDICATED: "paid off",
          CONTESTED: "entry measures disagreed", PARTIAL: "incomplete data",
-         UNKNOWN: "no data — not guessed"}
+         UNKNOWN: "no data — not guessed", FLAT: "little changed"}
 
 _CREDIT = ("CSP", "COVERED_CALL", "BEAR_CALL_SPREAD", "BULL_PUT_SPREAD",
            "IRON_CONDOR", "SHORT_STRANGLE", "JADE_LIZARD")
@@ -282,8 +283,13 @@ def _premium_belief(pos, legs, entry_snap, cur_sig, latest_check):
     elif ive is None:
         state = PARTIAL
     else:
+        # magnitude matters: a 1-point IV twitch on an 84-vol name is noise.
+        # paid off / against needs a move of 2+ points; inside that, FLAT.
         favorable = (ive < 0) if credit else (ive > 0)
-        state = VINDICATED if favorable else DRIFT_AGAINST
+        if abs(ive) < 2:
+            state = FLAT
+        else:
+            state = VINDICATED if favorable else DRIFT_AGAINST
     fine = ("entry pricing affects P&L only — it can never trigger an exit. Scored "
             "for/against, not pass/fail: the price you were paid was fixed the day you traded")
     return _belief("premium", title, then, now, state, fine, {"forces": forces})
