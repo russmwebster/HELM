@@ -524,6 +524,49 @@ def deal_sentence(pos, legs):
 
 
 # ── the card ─────────────────────────────────────────────────────────────────
+
+def exit_track(legs, checks, closed):
+    """s95 addendum -- exit tracking since a confirmed break. Display only.
+
+    For an OPEN position whose strike belief is broken (slice-1 confirmed),
+    report what the market has actually offered for the exit since the break
+    was confirmed: best journaled mark since (with date), the prior check
+    day's best, and the latest day's best. Built only from journaled GOOD
+    checks -- if no marks were journaled, returns None rather than guessing
+    (HELM-095). This can never trigger an exit; it prices what waiting has
+    cost."""
+    if closed or not checks:
+        return None
+    series = day_series(legs, checks)
+    state, streak, _w = _strike_state(series)
+    if state not in (BROKEN, BROKEN_LOUD):
+        return None
+    run = [d for d, _b in series[-streak:]] if streak else []
+    if not run:
+        return None
+    confirm = run[1] if len(run) >= 2 else run[0]
+    byday = {}
+    for r in checks:
+        d = (r.get("checked_at") or "")[:10]
+        p = _f(r.get("pnl_unrealized"))
+        if not d or p is None or d < confirm:
+            continue
+        if d not in byday or p > byday[d]:
+            byday[d] = p
+    if not byday:
+        return None
+    days = sorted(byday)
+    best_date = min(days, key=lambda d: (-byday[d], d))
+    return {
+        "confirm_date": confirm,
+        "best": byday[best_date], "best_date": best_date,
+        "today": byday[days[-1]], "today_date": days[-1],
+        "prev": byday[days[-2]] if len(days) >= 2 else None,
+        "prev_date": days[-2] if len(days) >= 2 else None,
+        "n_days": len(days),
+    }
+
+
 def evaluate(pos, legs, checks, entry_snap=None, entry_thesis_row=None,
              ownership=None, cur_sig=None):
     """Assemble the full card content for one position. Pure."""
@@ -569,6 +612,7 @@ def evaluate(pos, legs, checks, entry_snap=None, entry_thesis_row=None,
     ladder, conv = (None, None)
     if not closed and latest:
         ladder, conv = expiry_ladder(pos, legs, latest.get("spot_price"), mark, _f(dte))
+    xt = exit_track(legs, checks, closed)
 
     # The Read — synthesis, ending with the action cue (the HELM-134 job, per position)
     bits = []
@@ -612,5 +656,6 @@ def evaluate(pos, legs, checks, entry_snap=None, entry_thesis_row=None,
         "exit_reason": pos.get("exit_reason") if closed else None,
         "dte": dte, "read": read,
         "ladder": ladder, "convergence": conv,
+        "exit_track": xt,
         "condor_honesty": strat in ("IRON_CONDOR", "SHORT_STRANGLE", "JADE_LIZARD"),
     }

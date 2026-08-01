@@ -157,5 +157,42 @@ try:
 except Exception:
     traceback.print_exc(); check("integration ran", False)
 
+
+print("== exit tracking (s95 addendum) ==")
+xchecks = [chk("2026-07-0%d" % d, s, pnl=p) for d, s, p in
+           [(1, 105, -100.0), (2, 98, -400.0), (3, 97, -900.0),
+            (6, 99, -300.0), (7, 96, -1200.0)]]
+xc = T.evaluate(pos("CSP"), CSP, xchecks)
+xt = xc.get("exit_track")
+check("broken CSP carries exit_track", xt is not None, xc["summary"])
+check("break confirmed on 2nd consecutive breach day",
+      xt and xt["confirm_date"] == "2026-07-03", xt)
+check("best exit since break is best journaled mark, dated",
+      xt and xt["best"] == -300.0 and xt["best_date"] == "2026-07-06", xt)
+check("latest and prior check days tracked",
+      xt and xt["today"] == -1200.0 and xt["prev"] == -300.0, xt)
+check("holding position has no exit_track",
+      T.evaluate(pos("CSP"), CSP,
+                 [chk("2026-07-01", 110, pnl=-50.0)]).get("exit_track") is None)
+check("closed position has no exit_track",
+      T.evaluate(pos("CSP", status="CLOSED"), CSP, xchecks).get("exit_track") is None)
+check("broken but no journaled pnl -> None (not guessed)",
+      T.evaluate(pos("CSP"), CSP,
+                 [chk("2026-07-0%d" % d, 97) for d in (1, 2, 3)]).get("exit_track") is None)
+try:
+    ro3 = sqlite3.connect("file:%s?mode=ro" % DB_PATH, uri=True)
+    lrow = ro3.execute("select id from positions where ticker='LRCX' and "
+                       "strategy='IRON_CONDOR' and status='OPEN' limit 1").fetchone()
+    ro3.close()
+    if lrow:
+        lc = engine_store.thesis_card(lrow[0])
+        lxt = lc.get("exit_track") if lc else None
+        check("live LRCX broken card carries dated exit_track",
+              bool(lxt) and lxt.get("best_date") and lxt.get("best") is not None, lxt)
+    else:
+        print("  (no open LRCX condor to test)")
+except Exception:
+    traceback.print_exc(); check("live exit_track ran", False)
+
 print("== %d passed, %d failed ==" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)
