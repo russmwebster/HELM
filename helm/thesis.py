@@ -147,7 +147,7 @@ def _strike_belief(pos, legs, checks, latest_check):
     if not series:
         return _belief("strike", title, "asserted at entry",
                        "no computable distance — legs or spot unreadable",
-                       UNKNOWN, "missing data is shown as missing, never estimated (HELM-095)")
+                       UNKNOWN, "missing data is shown as missing, never estimated")
     d_last, (b, k, t_) = series[-1]
     side_safe = "above" if t_ == "PUT" else "below"
     side_bad = "below" if t_ == "PUT" else "above"
@@ -165,7 +165,7 @@ def _strike_belief(pos, legs, checks, latest_check):
         now += " · %s the strike at %d consecutive daily checks" % (side_bad, streak)
     fine = ("distance from spot to the nearest short strike, worst reading of each day, "
             "recomputed from legs and journaled spot. Bands, measured on 194 closed "
-            "positions (s95): 1%+ = normal · under 1% = warning · past the strike on "
+            "positions: 1%+ = normal · under 1% = warning · past the strike on "
             "2+ consecutive check days = broken")
     if two_walls:
         fine += (". For condors these states describe where the position stands, not "
@@ -190,7 +190,7 @@ def _strike_belief(pos, legs, checks, latest_check):
         else:
             extra["odds"] = "the market prices ~%d%% odds the price finishes past the strike" % odds
     elif strat in ("IRON_CONDOR", "SHORT_STRANGLE", "JADE_LIZARD"):
-        extra["odds"] = "odds unavailable — per-leg greeks not captured (W27)"
+        extra["odds"] = "odds unavailable — per-leg greeks are not captured for multi-leg positions"
     return _belief("strike", title,
                    "entered with the strike at $%.0f" % (series[0][1][1],),
                    now, state, fine, extra)
@@ -230,7 +230,7 @@ def _premium_belief(pos, legs, entry_snap, cur_sig, latest_check):
     if e_vrp is not None:
         then_bits.append("VRP %+.1f" % e_vrp)
     elif e_iv is not None or e_ivr is not None:
-        then_bits.append("entry HV not captured (W26) — rich-vs-realized not gradable")
+        then_bits.append("entry realized vol was not captured at open — rich-vs-realized not gradable")
     then = " · ".join(then_bits) or "entry measures not captured"
     if e_ivr is None and e_iv is None:
         return _belief("premium", title, then,
@@ -301,9 +301,9 @@ def _direction_belief(pos, entry_thesis_row, checks, cur_sig, want_up=True):
     word = "keeps going up" if want_up else "keeps going down"
     title = "%s %s" % (pos.get("ticker"), word)
     if not entry_thesis_row:
-        return _belief("direction", title, "position predates thesis capture (s90)",
+        return _belief("direction", title, "position predates thesis capture",
                        "never armed — no entry thesis on record",
-                       UNKNOWN, "NULL means 'predates capture' (W67); nothing is invented")
+                       UNKNOWN, "blank history means the position predates capture; nothing is invented")
     e_bias = _f(entry_thesis_row.get("bias_score"))
     then = "entry bias %+.1f · spot %.2f vs SMA50 %.2f" % (
         e_bias or 0.0, _f(entry_thesis_row.get("spot_price")) or 0.0,
@@ -335,9 +335,9 @@ def _direction_belief(pos, entry_thesis_row, checks, cur_sig, want_up=True):
     else:
         state = HOLDS
         now += " · intact on the latest check"
-    fine = "the HELM-112 doctrine, displayed: entry bias vs current bias from the same " \
-           "current_context() the exit agent compares; 2-day confirmation; this belief ACTS " \
-           "(THESIS_BREAK) for longs — the one belief that is already a gate"
+    fine = "entry bias vs current bias, from the same context the exit agent " \
+           "compares; 2-day confirmation; this belief ACTS (THESIS_BREAK) for " \
+           "longs — the one belief that is already a gate"
     return _belief("direction", title, then, now, state, fine)
 
 
@@ -345,7 +345,7 @@ def _own_belief(pos, ownership):
     title = "if I end up owning %s, I want to" % pos.get("ticker")
     if not ownership:
         return _belief("own", title, "asserted at entry",
-                       "no ownership grade on file (coverage is partial — W23)",
+                       "no ownership grade on file — coverage is partial",
                        UNKNOWN, "graded quarterly-ish by helm quality; absence is a fact")
     g = (ownership.get("grade") or "?").upper()
     when = (ownership.get("updated_at") or ownership.get("date") or "")[:10]
@@ -628,7 +628,7 @@ def evaluate(pos, legs, checks, entry_snap=None, entry_thesis_row=None,
             _money(_f(pos.get("realized_pnl"))))
     elif n_bad:
         cue = "this needs a decision today — a confirmed break is information being ignored, " \
-              "and holding past it is what the book has paid for before (W15)"
+              "and holding past it is what this book has paid for before"
     elif n_warn:
         cue = "worth watching, not acting — a warning is amber by measurement, not an alarm"
     else:
