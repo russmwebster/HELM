@@ -443,8 +443,12 @@ def evaluate(pos, legs, checks, entry_snap=None, entry_thesis_row=None,
     if conv:
         read += ". " + conv
 
+    _exps = sorted({(l.get("expiration") or "")[:10] for l in legs or []
+                    if l.get("option_type") not in (None, "STOCK") and l.get("expiration")})
     return {
         "position_id": pos.get("id"), "ticker": pos.get("ticker"),
+        "spot": _f((latest or {}).get("spot_price")),
+        "expirations": _exps,
         "strategy": strat, "book": pos.get("book"), "closed": closed,
         "deal": deal_sentence(pos, legs),
         "beliefs": beliefs,
