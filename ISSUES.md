@@ -31,7 +31,7 @@ _Snapshot; refreshed each `helm checkpoint`, read via `helm status`._
   W74 is resolved (HELM-138); W68 stays open but has fired zero times since
   instrumentation.
 - **Blocked (market/RTH):** none outstanding — HELM-031 `shadow_*` capture verified live (s79); the deep-ITM spec CSPs (RKLB/IREN/OKLO/IONQ) are no longer open in the book, so the re-pull is moot.
-- **Counts:** 35 active (25 OPEN · 10 DEFERRED) · last shipped s95 (HELM-143) · **Last-updated 2026-08-01 (s95)**
+- **Counts:** 33 active (23 OPEN · 10 DEFERRED) · last shipped s95 (HELM-143) · **Last-updated 2026-08-01 (s95)**
 - **Next RTH:** confirm HELM-068 parenting stamps `parent_position_id` on the next real roll; validate HELM-081 live vol-context capture (`hv_30d`/skew) during RTH; watch the first live board after HELM-111 -- the bullish side should now decline rather than route BPS, and the Declined section says why; confirm a routed DIAGONAL opens its short leg at >= 28 DTE.
 
 _Last updated_: 2026-07-28 (s93. The lesson this session: a deterministic defect had been filed under an intermittent one -- W74's three unmarked positions re-measured to one, with a mechanism nothing intermittent about it: an expired leg quotes nothing, forever. Meanwhile the instrumented HELM-128 fault has fired zero times since the tracebacks went in. Before chasing the suspected mechanism, re-measure whether it is still occurring at all.)
