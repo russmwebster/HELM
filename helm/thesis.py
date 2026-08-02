@@ -688,6 +688,27 @@ def close_series(pos, checks, closed=False, today=None):
     if tday and pts[-1]["date"] == tday and pts[-1]["n"] < 3:
         pts[-1]["provisional"] = True
     last = pts[-1]
+    trend = None
+    if len(pts) >= 2:
+        diffs = [pts[i + 1]["value"] - pts[i]["value"] for i in range(len(pts) - 1)]
+        d1 = diffs[-1]
+        sgn = (d1 > 0) - (d1 < 0)
+        streak = 0
+        for d in reversed(diffs):
+            if sgn != 0 and ((d > 0) - (d < 0)) == sgn:
+                streak += 1
+            else:
+                break
+        prev = pts[-2]
+        # HELM-147: the noise guard. A day-over-day move only counts as a
+        # direction when it exceeds the overlap of the two days' own intraday
+        # ranges -- overlapping mid-quote ranges whipsaw and must not read as
+        # a trend (LRCX's condor swings thousands intraday on wide quotes).
+        _ovl = min(prev["hi"], last["hi"]) - max(prev["lo"], last["lo"])
+        trend = {"d1": d1, "streak": streak,
+                 "from": pts[-1 - streak]["value"] if streak else prev["value"],
+                 "better": (d1 < 0) if prem > 0 else (d1 > 0),
+                 "clear": abs(d1) > max(0.0, _ovl)}
     return {
         "credit": prem > 0, "premium": paid, "points": pts,
         "now": last["value"], "now_date": last["date"], "now_time": last["time"],
@@ -695,7 +716,38 @@ def close_series(pos, checks, closed=False, today=None):
         "peak": max(p["value"] for p in pts),
         "trough": min(p["value"] for p in pts),
         "n_days": len(pts), "provisional": bool(last.get("provisional")),
+        "trend": trend,
     }
+
+
+def trend_sentence(track, closed=False):
+    """Is the exit getting better or worse? Day-over-day on the same
+    last-check-per-day series the chart draws (HELM-147). The noise guard
+    keeps mid-quote whipsaw from reading as a direction; past tense on
+    closed cards. Display only, like everything on the card."""
+    t = (track or {}).get("trend")
+    if not t:
+        return None
+    d1, streak, base = t["d1"], t["streak"], t["from"]
+    if d1 == 0:
+        return "unchanged from the prior check day"
+    if not t["clear"]:
+        return ("moved %s vs the prior check day — within the days' own quote spread, "
+                "not a clear move" % _amt(abs(d1)))
+    if track["credit"]:
+        word = "cheaper" if d1 < 0 else "dearer"
+        head = ("was getting %s into the close" % word) if closed else ("getting %s" % word)
+    else:
+        word = "fetching more" if d1 > 0 else "fetching less"
+        head = ("the sale was %s into the close" % word) if closed else ("the sale is %s" % word)
+    s = "%s — %s %s than the prior check day" % (head, _amt(abs(d1)),
+                                                 "less" if d1 < 0 else "more")
+    if streak >= 2:
+        s += ", %s %d check days running (from %s)" % (
+            "improving" if t["better"] else "worsening", streak, _amt(base))
+    if track.get("provisional") and not closed:
+        s += " · today still has checks to come"
+    return s
 
 
 def close_headline(track, closed=False):
@@ -816,6 +868,14 @@ def close_svg(track, width=760, height=230):
              % (X(n - 1), Y(last["value"]), fill, ring))
     e.append('<text x="%.1f" y="%.1f" font-size="11" font-weight="600" fill="var(--viz-ink,#0b0b0b)">%s</text>'
              % (X(n - 1) + 9, Y(last["value"]) + 4, _amt(last["value"])))
+    tr = track.get("trend")
+    if tr and tr.get("clear") and tr.get("d1"):
+        # HELM-147: the day-over-day delta at the last point, coloured by
+        # better/worse -- the same side-aware flip the area fill uses.
+        _tc = "var(--viz-good,#2a78d6)" if tr["better"] else "var(--viz-bad,#e34948)"
+        e.append('<text x="%.1f" y="%.1f" font-size="10.5" font-weight="600" fill="%s">%s %s</text>'
+                 % (X(n - 1) + 9, Y(last["value"]) + 17, _tc,
+                    "▼" if tr["d1"] < 0 else "▲", _amt(abs(tr["d1"]))))
 
     every = max(1, -(-n // 6))
     gap = -(-every * 7 // 10)
@@ -998,6 +1058,7 @@ def evaluate(pos, legs, checks, entry_snap=None, entry_thesis_row=None,
         "ladder": ladder, "convergence": conv,
         "exit_track": xt,
         "close_track": ct, "close_headline": ct_head, "close_svg": ct_svg,
+        "close_trend": trend_sentence(ct, closed),
         "earnings": earn,
         "condor_honesty": strat in ("IRON_CONDOR", "SHORT_STRANGLE", "JADE_LIZARD"),
     }
