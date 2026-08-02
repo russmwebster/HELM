@@ -61,7 +61,7 @@ ck("no premium -> None", th.close_series({"net_premium": None}, checks) is None)
 h_meta = th.close_headline(th.close_series({"net_premium": 2069.0},
          [{"checked_at": "2026-07-31T15:48:00", "pnl_unrealized": -4961.0}]))
 ck("META headline says debit", "debit" in h_meta and "$7,030" in h_meta)
-ck("META headline says worse", "worse" in h_meta)
+ck("META headline leads with the net (HELM-146 copy)", "new money" in h_meta)
 h_csco = th.close_headline(th.close_series({"net_premium": 2935.0},
          [{"checked_at": "2026-07-31T15:47:00", "pnl_unrealized": 310.0}]))
 ck("CSCO headline says debit too (credit structures always are)", "debit" in h_csco)

@@ -162,20 +162,32 @@ def _strike_belief(pos, legs, checks, latest_check):
     d_last, (b, k, t_) = series[-1]
     side_safe = "above" if t_ == "PUT" else "below"
     side_bad = "below" if t_ == "PUT" else "above"
-    if b >= 0:
-        now = "%s is %.1f%% %s the $%.0f strike (as of %s)" % (
-            pos.get("ticker"), b, side_safe, k, d_last)
-    else:
-        now = "%s is %.1f%% %s the $%.0f strike (as of %s)" % (
-            pos.get("ticker"), abs(b), side_bad, k, d_last)
+    # HELM-146: present tense may only assert the LATEST journaled reading.
+    # Worst-of-day still governs the STATE (slice-1 discipline unchanged), but
+    # "X is below the strike" built from it was false whenever the day
+    # recovered intraday -- the HELM-144 lesson: when a rendered sentence
+    # makes a factual claim, the fact must be an input to it.
+    _lb = buffer_pct(legs, (latest_check or {}).get("spot_price"))
+    cb, _ck, _ctp = _lb if _lb is not None else (b, k, t_)
+    _ts = (((latest_check or {}).get("checked_at") or d_last)[:16]).replace("T", " ")
+    _cside = ("above" if _ctp == "PUT" else "below") if cb >= 0 else ("below" if _ctp == "PUT" else "above")
+    now = "%s is %.1f%% %s the $%.0f strike at the latest check (%s)" % (
+        pos.get("ticker"), abs(cb), _cside, _ck, _ts)
+    if cb >= 0 and b < 0:
+        now += " — but the worst reading of that day dipped %.1f%% %s" % (abs(b), side_bad)
     healed = (state == HOLDS and worst is not None and worst < 1.0)
     if healed:
         fray_day = next(d for d, (bb, _kk, _tt) in series if bb < 1.0)
         now += " · dipped to %.1f%% on %s, since recovered" % (max(worst, -99.9), fray_day)
+    recovered_latest = False
     if state in (BROKEN, BROKEN_LOUD):
-        now += " · %s the strike at %d consecutive daily checks" % (side_bad, streak)
-    fine = ("distance from spot to the nearest short strike, worst reading of each day, "
-            "recomputed from legs and journaled spot. Bands, measured on 194 closed "
+        now += " · past the strike at the day's worst reading on %d consecutive days" % streak
+        if cb >= 0:
+            recovered_latest = True
+            now += " — the break state clears only when a full check day stays clear of the strike"
+    fine = ("distance from spot to the nearest short strike, recomputed from legs and "
+            "journaled spot; the sentence reads the latest check, the state is judged on "
+            "the worst reading of each day. Bands, measured on 194 closed "
             "positions: 1%+ = normal · under 1% = warning · past the strike on "
             "2+ consecutive check days = broken")
     if two_walls:
@@ -185,6 +197,8 @@ def _strike_belief(pos, legs, checks, latest_check):
         fine += (" — for CSPs and credit verticals a confirmed cross precedes losses "
                  "at 1.7–3.2× the base rate")
     extra = {}
+    if recovered_latest:
+        extra["recovered_latest"] = True
     dlt = _f((latest_check or {}).get("delta"))
     if strat in _SINGLE_SHORT and dlt is not None:
         odds = min(99, max(1, round(abs(dlt) * 100)))
@@ -464,10 +478,11 @@ def expiry_ladder(pos, legs, spot, latest_mark, dte):
     if here is not None and latest_mark is not None:
         gap = here - latest_mark
         direction = "working FOR" if gap > 0 else "working AGAINST"
+        verb = "adding" if gap > 0 else "costing"
         weeks = max(1.0, (dte or 7) / 7.0)
         conv = ("if nothing moves, expiry is worth %s vs today's mark %s — time is %s "
-                "this position, ≈ %s/week" % (_money(here), _money(latest_mark),
-                                              direction, _money(abs(gap) / weeks)))
+                "this position, %s ≈ %s/week" % (_money(here), _money(latest_mark),
+                                                 direction, verb, _amt(abs(gap) / weeks)))
     return rows, conv
 
 
@@ -536,6 +551,15 @@ def deal_sentence(pos, legs):
                 "by the wing." % (_money(abs(prem or 0)), tk, side, _f(shorts[0].get("strike")) or 0, exp))
     if strat in _LONGS and longs:
         word = "rise" if strat == "LONG_CALL" else "fall"
+        _bes = breakevens(legs)
+        if _bes:
+            # HELM-146: profit starts at the break-even, not the strike -- the
+            # facts row shows the BE and this sentence must not contradict it.
+            return ("You paid %s for the right to profit if %s can %s past $%.2f — your "
+                    "break-even %s the $%.0f strike — by %s." %
+                    (_money(abs(prem or 0)), tk, word, _bes[0],
+                     "over" if word == "rise" else "under",
+                     _f(longs[0].get("strike")) or 0, exp))
         return ("You paid %s for the right to profit if %s can %s past $%.0f by %s." %
                 (_money(abs(prem or 0)), tk, word, _f(longs[0].get("strike")) or 0, exp))
     if strat in _DIAG:
@@ -674,7 +698,7 @@ def close_series(pos, checks, closed=False, today=None):
     }
 
 
-def close_headline(track):
+def close_headline(track, closed=False):
     """One plain sentence for the track.
 
     Closing a credit structure is ALWAYS a debit — you sold it, you buy it back.
@@ -683,12 +707,29 @@ def close_headline(track):
     if not track:
         return None
     now, paid, net = track["now"], track["premium"], track["net"]
-    kept = ("you keep %s" % _amt(net)) if net > 0 else ("%s worse" % _amt(-net))
+    # HELM-146: the NET number leads -- a trader's "cost to close" is
+    # new-money-out (or kept), not the gross debit, which follows as the
+    # mechanism. Past tense on closed cards: a frozen post-mortem must not
+    # say "today".
     if track["credit"]:
-        return ("close today for a %s debit against the %s credit you took in — %s"
-                % (_amt(now), _amt(paid), kept))
-    return ("close today for a %s credit against the %s debit you paid — %s"
-            % (_amt(now), _amt(paid), kept))
+        if net > 0:
+            return (("closing at the last check would have kept %s of the %s credit — a %s buy-back debit"
+                     if closed else
+                     "closing today keeps %s of the %s credit — the buy-back debit is %s")
+                    % (_amt(net), _amt(paid), _amt(now)))
+        return (("closing at the last check would have taken %s of new money — a %s debit against the %s credit you banked"
+                 if closed else
+                 "closing today takes %s of new money — a %s debit against the %s credit you banked")
+                % (_amt(-net), _amt(now), _amt(paid)))
+    if net > 0:
+        return (("closing at the last check would have sold it back for a %s credit — %s ahead of the %s paid"
+                 if closed else
+                 "closing today sells it back for a %s credit — %s ahead of the %s you paid")
+                % (_amt(now), _amt(net), _amt(paid)))
+    return (("closing at the last check would have sold it back for a %s credit — %s of the %s paid was gone"
+             if closed else
+             "closing today sells it back for a %s credit — %s of the %s you paid is gone")
+            % (_amt(now), _amt(-net), _amt(paid)))
 
 
 def _nice_step(span):
@@ -826,8 +867,13 @@ def evaluate(pos, legs, checks, entry_snap=None, entry_thesis_row=None,
         label = "⚠ %d of %d warning" % (n_warn, len(beliefs))
     elif n_unknown == len(beliefs):
         label = "○ unknown"
+    elif n_unknown:
+        # HELM-146: an ungraded belief must not vanish from the denominator --
+        # a bare green check on a card whose acting belief was never armed is
+        # a false green (the W15 ghosts wore exactly this).
+        label = "✓ %d/%d · %d not graded" % (n_ok, len(beliefs) - n_unknown, n_unknown)
     else:
-        label = "✓ %d/%d" % (n_ok, len(beliefs) - n_unknown)
+        label = "✓ %d/%d" % (n_ok, len(beliefs))
 
     mark = _f((latest or {}).get("pnl_unrealized"))
     dte = (latest or {}).get("dte_now")
@@ -840,7 +886,20 @@ def evaluate(pos, legs, checks, entry_snap=None, entry_thesis_row=None,
     # every position with a premium and traces the LAST check of each day. Both
     # read the journal through _day_marks, so they cannot drift on what a day is.
     ct = close_series(pos, checks, closed, today=today)
-    ct_head = close_headline(ct)
+    if ct and latest is not None and not closed:
+        _xpnl = _pnl_at_expiry(legs, latest.get("spot_price"))
+        _xcost = position_value(_f(pos.get("net_premium")), _xpnl) if _xpnl is not None else None
+        if (_xcost is not None and ct.get("now") is not None
+                and _xcost - ct["now"] > max(100.0, 0.02 * _xcost)):
+            # HELM-146: deep-ITM honesty -- when the mids quote the structure
+            # below its value at expiry at today's spot, say so; a real fill
+            # will not be kinder than intrinsic.
+            ct["itm_note"] = ("a caveat on the quotes: at today's spot this structure is worth "
+                              "%s at expiry, more than the %s the mid-quotes offer — deep "
+                              "in-the-money legs quote wide and below true value, so a real "
+                              "fill will likely cost nearer the higher number"
+                              % (_amt(_xcost), _amt(ct["now"])))
+    ct_head = close_headline(ct, closed)
     ct_svg = close_svg(ct)
 
     # The Read — synthesis, ending with the action cue (the HELM-134 job, per position)
@@ -856,14 +915,37 @@ def evaluate(pos, legs, checks, entry_snap=None, entry_thesis_row=None,
             (pos.get("closed_at") or "")[:10], pos.get("exit_reason") or "—",
             _money(_f(pos.get("realized_pnl"))))
     elif n_bad:
-        cue = "this needs a decision today — a confirmed break is information being ignored, " \
-              "and holding past it is what this book has paid for before"
+        _broken = [b for b in beliefs if b["state"] in (BROKEN, BROKEN_LOUD)]
+        if _broken and all((b.get("extra") or {}).get("recovered_latest") for b in _broken):
+            cue = "this needs a decision today — the confirmed break stands, but the latest " \
+                  "check is back on the right side of the strike; decide the position " \
+                  "rather than let the bounce decide it"
+        else:
+            cue = "this needs a decision today — a confirmed break is information being ignored, " \
+                  "and holding past it is what this book has paid for before"
     elif n_warn:
         cue = "worth watching, not acting — a warning is amber by measurement, not an alarm"
     else:
-        cue = "no decision needed today — a losing mark with beliefs intact is noise you " \
-              "are being paid to tolerate; sitting still is a decision"
-    read = ((" ; ".join(bits) + ". ") if bits else "Every graded belief holds. ") + cue
+        if any(b.get("key") in ("direction", "strike") and b["state"] == UNKNOWN
+               for b in beliefs):
+            cue = "no decision signalled — but the belief that would signal one was never " \
+                  "armed; any exit here is yours by hand"
+        elif (_f(pos.get("net_premium")) or 0) < 0:
+            cue = "no decision needed today — a losing mark with beliefs intact is drawdown " \
+                  "inside the plan; sitting still is a decision"
+        else:
+            cue = "no decision needed today — a losing mark with beliefs intact is noise you " \
+                  "are being paid to tolerate; sitting still is a decision"
+    if bits:
+        _lead = " ; ".join(bits) + ". "
+    elif n_unknown:
+        _ung = " · ".join("'%s'" % b["title"] for b in beliefs
+                          if b["state"] in (UNKNOWN, PARTIAL))
+        _lead = ("No graded belief is broken — but %s %s ungraded, so this card asserts "
+                 "less than it appears to. " % (_ung, "is" if n_unknown == 1 else "are"))
+    else:
+        _lead = "Every graded belief holds. "
+    read = _lead + cue
     if conv:
         read += ". " + conv
 
