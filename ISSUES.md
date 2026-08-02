@@ -17,7 +17,16 @@ _Snapshot; refreshed each `helm checkpoint`, read via `helm status`._
 
 - **Phase:** scaffolding complete (live · paper · edge). `schema.sql` faithfully builds live incl. constraints/defaults/FKs (HELM-002); hot `positions` table indexed live (HELM-021). Decision core (HELM-027) reaches every open family — one verdict engine reading `strategy_settings`, `/health` wired for CSP · LONG_CALL (single-leg) and iron condor / bear put spread (multi-leg) via `_core_band_ml` off `leg_checks`. Earnings now surfaced at the entry decision on both surfaces — `helm open` banner and `helm scan` column, unified on `classify_earnings` (HELM-044). Learning loop (HELM-023) is the frontier — entry+exit capture complete (`iv_rank`/`days_to_earnings`/`signal_id` wired); Track A (exit-lever scorecard) held on corpus maturity. Structural map lives in `ORIENTATION.md`.
 - **Next highest-leverage:** **concentration and loss sizing.** With the DTE artifacts excluded (HELM-107), the closed book wins **79%** of the time -- CSPs 85% at a mean +5.1% of risk -- and still totals -$12,341. Many small wins, few very large losses, exactly the shape the 7/19 concentration work found (nine closed CSP losers, six flushed 7/13). Selection and win rate are not the problem; correlated loss size is. HELM-023 Track A remains held on corpus maturity, and the corpus is now 91 rows smaller and honest.
-- **Last shipped (s96):** **HELM-144** (the card's buy-back
+- **Last shipped (s97):** **HELM-146** — card sentences must read the facts
+they assert: the strike-belief Now line reads the latest check (worst-of-day
+still governs the state), close headlines lead with the net number (past tense
+on frozen cards), ungraded beliefs surface in the badge and Read, deep-ITM mids
+carry a caveat against expiry value, convergence and long-deal wording fixed.
+Display only; nothing gates. Found by Russ reading the CSCO and LRCX cards —
+the s96 lesson caught live. helm **0267bc2** · helm-pg **f5750d8**, both
+pushed 0 0; 27-check suite (control run failed 13); all four cards verified
+served after PG restart.
+- **Prior shipped (s96):** **HELM-144** (the card's buy-back
   clause was built from the IV sign and never read the price — backwards on 23
   of 34 open credit positions; the IV attribution is kept, the price claim now
   comes from the price) and **HELM-145** (cost-to-close track: what closing
@@ -37,7 +46,7 @@ _Snapshot; refreshed each `helm checkpoint`, read via `helm status`._
   single-rule event in the book, on a convention nobody chose, ungraded. That
   is the W19 corpus arriving.
 - **Blocked (market/RTH):** none outstanding — HELM-031 `shadow_*` capture verified live (s79); the deep-ITM spec CSPs (RKLB/IREN/OKLO/IONQ) are no longer open in the book, so the re-pull is moot.
-- **Counts:** 33 active (23 OPEN · 10 DEFERRED) · last shipped s96 (HELM-144 · HELM-145) · **Last-updated 2026-08-02 (s96)**
+- **Counts:** 33 active (23 OPEN · 10 DEFERRED) · last shipped s97 (HELM-146) · **Last-updated 2026-08-02 (s97)**
 - **Next RTH:** confirm HELM-068 parenting stamps `parent_position_id` on the next real roll; validate HELM-081 live vol-context capture (`hv_30d`/skew) during RTH; watch the first live board after HELM-111 -- the bullish side should now decline rather than route BPS, and the Declined section says why; confirm a routed DIAGONAL opens its short leg at >= 28 DTE.
 
 _Last updated_: 2026-08-02 (s96 checkpoint. The lesson this session: a sentence can be built from a real input and still assert something the data beside it contradicts. The card's buy-back clause was driven by the sign of the IV move — a true attribution — and turned into a flat claim about the price, which it never read. It was wrong on 23 of 34 open credit positions, and the 11 it got right it got right by coincidence. When a rendered sentence makes a factual claim, check that the fact is an input to it.)
@@ -198,6 +207,7 @@ _s78: parenting **SHIPPED** (commit 5cd12b5) -- the replacement is now parented 
 
 ## Resolved log
 
+- **HELM-146 · BUG** (2026-08-02, s97) -- thesis-card sentences asserted facts they never read: the strike-belief Now line rendered worst-of-day in the present tense (CSCO 'is 0.3% below' while the latest check sat 1.4% above -- Russ's catch); a bare green badge hid an unarmed direction belief (GOOG, the W15 ghost); long and closed cards carried seller/present-tense chart copy; and the close headline led with the gross debit where a trader's cost-to-close is net new money (LRCX $17,020 vs $7,460 -- his number was the net damage; spot feed verified right vs yfinance 293.02, intrinsic floor ~$20k, so a deep-ITM caveat now renders when mids sit below expiry value). All card copy now reads the fact it asserts; net leads; past tense on frozen cards. Display only. helm 0267bc2 + helm-pg f5750d8; verify_s97_h146 27 checks (control failed 13); s96 close-track suite updated to the net-first copy.
 - **HELM-144 · BUG** (2026-08-02, s96) -- **the thesis card's buy-back clause
   stated the price backwards on 23 of 34 open credit positions.** The premium
   belief built "the option you sold costs less/more to buy back" from the SIGN
