@@ -3,7 +3,7 @@
 
 The panel must reuse the ENGINE's constants (never re-declare them) and must
 agree with long_exit.long_verdict on which rule fires. Pure fixtures; no DB."""
-import os, re, sys
+import json, os, re, sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 from helm import thesis as th
 from helm import long_exit as le
@@ -89,6 +89,50 @@ ck("no register references in a card with nothing captured", not hits)
 snapless = th.evaluate(POS(), LEG, [C(30, -1000.0), C(31, -1000.0)], entry_snap=None)
 ck("the ungradable premium line is clean",
    not [s for s in _strings(snapless) if _REF.search(s)])
+
+# --- journal coverage behind the high-water mark (HELM-149) ---------------------
+def CJ(day, pnl, armed=None, dte=60, broken=0):
+    r = C(day, pnl, dte=dte, broken=broken)
+    if armed is not None:
+        r["lc_arms_json"] = json.dumps({"thesis": {"armed": armed, "ctx_source":
+                                                   "signals" if armed else None}})
+    return r
+
+blindp = POS(opened_at="2026-07-20T14:00:00")
+bc = th.evaluate(blindp, LEG, [C(30, 500.0), C(31, 400.0)])
+fr = rules_of(bc)["profit_floor"]
+ck("floor row states how many check days it rests on", "2 check days" in fr["text"])
+ck("blind days after opening are named", "were never journaled" in fr["text"])
+ck("blind-day text says which way it errs", "may be understated" in fr["text"])
+one_blind = rules_of(th.evaluate(POS(opened_at="2026-07-29T14:00:00"), LEG,
+                                 [C(30, 500.0), C(31, 400.0)]))["profit_floor"]
+ck("one blind day reads as singular", "first 1 day after opening was never" in one_blind["text"])
+ck("many blind days read as plural", "days after opening were never" in fr["text"])
+sameday = POS(opened_at="2026-07-30T14:00:00")
+fr2 = rules_of(th.evaluate(sameday, LEG, [C(30, 500.0), C(31, 400.0)]))["profit_floor"]
+ck("no blind clause when journalled from day one", "never journaled" not in fr2["text"])
+ck("coverage still stated when nothing was missed", "2 check days" in fr2["text"])
+noopen = rules_of(th.evaluate(POS(), LEG, [C(30, 500.0), C(31, 400.0)]))["profit_floor"]
+ck("no blind clause without an open date", "never journaled" not in noopen["text"])
+
+# --- a rule that was never evaluated must not read as reassurance ---------------
+ET = {"bias_score": 2.0, "spot_price": 200.0, "sma_50": 190.0}
+ne = th.evaluate(POS(), LEG, [CJ(30, -500.0, armed=False), CJ(31, -500.0, armed=False)],
+                 entry_thesis_row=ET)
+tr = rules_of(ne)["thesis"]
+ck("unevaluated thesis gets its own state", tr["state"] == "NOT_EVALUATED")
+ck("unevaluated text says it was not tested", "not tested at the latest check" in tr["text"])
+ck("unevaluated does not claim the direction holds", "still holds" not in tr["text"])
+ck("unevaluated is not counted as firing", ne["exit_rules"]["firing"] != "thesis")
+evd = th.evaluate(POS(), LEG, [CJ(30, -500.0, armed=True), CJ(31, -500.0, armed=True)],
+                  entry_thesis_row=ET)
+ck("an evaluated clear thesis still reads as holding",
+   rules_of(evd)["thesis"]["state"] == "CLEAR")
+ck("no entry thesis still outranks the unevaluated state",
+   rules_of(th.evaluate(POS(), LEG, [CJ(30, -500.0, armed=False)]))["thesis"]["state"]
+   == "CANNOT_ARM")
+ck("the market read's source is stated",
+   "came from the day's scan" in evd["exit_rules"]["fine"])
 
 # --- dte gate -------------------------------------------------------------------
 gate = th.evaluate(POS(), LEG, [C(30, -500.0, dte=19), C(31, -500.0, dte=19)])

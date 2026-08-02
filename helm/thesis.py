@@ -926,12 +926,50 @@ def exit_rules(pos, checks, latest, entry_thesis_row):
         else:
             break
 
+    # HELM-149: two honesty additions. (1) The high-water mark behind the floor
+    # is only as good as the journal's coverage -- a position that ran unchecked
+    # after opening can have peaked in the blind window, which understates the
+    # floor's arming point with nothing saying so. (2) "the direction still
+    # holds" was asserted from a zero streak even when the rule was never
+    # evaluated, because a failed market read leaves broken_today None inside a
+    # bare except -- silence reading as reassurance, which is the defect this
+    # whole panel exists to stop.
+    dates = sorted({(r.get("checked_at") or "")[:10] for r in (checks or [])
+                    if r.get("checked_at")})
+    n_days = len(dates)
+    opened = (pos.get("opened_at") or "")[:10]
+    blind = None
+    if opened and dates:
+        try:
+            blind = (date.fromisoformat(dates[0]) - date.fromisoformat(opened)).days
+        except Exception:
+            blind = None
+    cov = " — from %d check day%s" % (n_days, "" if n_days == 1 else "s")
+    if blind and blind >= 1:
+        cov += (", and the first %d day%s after opening %s never journaled, so the "
+                "best-ever figure may be understated"
+                % (blind, "" if blind == 1 else "s", "was" if blind == 1 else "were"))
+    _arms = None
+    _raw = (latest or {}).get("lc_arms_json")
+    if _raw:
+        try:
+            _arms = json.loads(_raw)
+        except Exception:
+            _arms = None
+    _th = ((_arms or {}).get("thesis") or {})
+    _ctx = _th.get("ctx_source")
+
     rows = []
     if not entry_thesis_row:
         rows.append({"key": "thesis", "label": "the reason you bought it is gone",
                      "state": "CANNOT_ARM",
                      "text": "cannot arm — no entry thesis on record for this position, "
                              "so this exit can never fire here"})
+    elif _th.get("armed") is False:
+        rows.append({"key": "thesis", "label": "the reason you bought it is gone",
+                     "state": "NOT_EVALUATED",
+                     "text": "not tested at the latest check — no market read was available, "
+                             "so this exit was not evaluated either way"})
     elif streak >= _le.CONFIRM_DAYS:
         rows.append({"key": "thesis", "label": "the reason you bought it is gone",
                      "state": "FIRES",
@@ -953,18 +991,18 @@ def exit_rules(pos, checks, latest, entry_thesis_row):
     elif floor is None:
         rows.append({"key": "profit_floor", "label": "a winner gives back too much",
                      "state": "NOT_ARMED",
-                     "text": "not armed — best it has been is %+.1f%%, and the floor arms at +%.0f%%"
-                             % (hwm * 100, arm_pct)})
+                     "text": ("not armed — best it has been is %+.1f%%, and the floor arms at +%.0f%%"
+                              % (hwm * 100, arm_pct)) + cov})
     elif cur is not None and cur <= floor:
         rows.append({"key": "profit_floor", "label": "a winner gives back too much",
                      "state": "FIRES",
-                     "text": "back to the +%.0f%% floor (best was %+.1f%%, now %+.1f%%)"
-                             % (floor * 100, hwm * 100, cur * 100)})
+                     "text": ("back to the +%.0f%% floor (best was %+.1f%%, now %+.1f%%)"
+                              % (floor * 100, hwm * 100, cur * 100)) + cov})
     else:
         rows.append({"key": "profit_floor", "label": "a winner gives back too much",
                      "state": "ARMED",
-                     "text": "floor at +%.0f%% — best was %+.1f%%, now %+.1f%%; falling to the floor closes it"
-                             % (floor * 100, hwm * 100, (cur or 0) * 100)})
+                     "text": ("floor at +%.0f%% — best was %+.1f%%, now %+.1f%%; falling to the "
+                              "floor closes it" % (floor * 100, hwm * 100, (cur or 0) * 100)) + cov})
 
     if dte is None:
         rows.append({"key": "dte_gate", "label": "the calendar", "state": "UNKNOWN",
@@ -1000,11 +1038,16 @@ def exit_rules(pos, checks, latest, entry_thesis_row):
     else:
         note = ("on the real book these are advisory — they are computed and shown, "
                 "and nothing acts on them")
+    fine = ("first match wins, top to bottom. Confirmation for the first rule counts "
+            "consecutive checks rather than calendar days — three checks run each "
+            "weekday, so two can complete within a single afternoon. Percentages are "
+            "measured against the premium paid, from journaled marks only.")
+    if _ctx == "signals":
+        fine += " The direction read came from the day's scan."
+    elif _ctx == "live":
+        fine += " The direction read came from a live price pull, not the day's scan."
     return {"rows": rows, "firing": firing, "summary": summary, "book_note": note,
-            "fine": ("first match wins, top to bottom. Confirmation for the first rule counts "
-                     "consecutive checks rather than calendar days — three checks run each "
-                     "weekday, so two can complete within a single afternoon. Percentages are "
-                     "measured against the premium paid, from journaled marks only.")}
+            "fine": fine}
 
 
 def evaluate(pos, legs, checks, entry_snap=None, entry_thesis_row=None,
