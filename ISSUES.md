@@ -17,24 +17,30 @@ _Snapshot; refreshed each `helm checkpoint`, read via `helm status`._
 
 - **Phase:** scaffolding complete (live · paper · edge). `schema.sql` faithfully builds live incl. constraints/defaults/FKs (HELM-002); hot `positions` table indexed live (HELM-021). Decision core (HELM-027) reaches every open family — one verdict engine reading `strategy_settings`, `/health` wired for CSP · LONG_CALL (single-leg) and iron condor / bear put spread (multi-leg) via `_core_band_ml` off `leg_checks`. Earnings now surfaced at the entry decision on both surfaces — `helm open` banner and `helm scan` column, unified on `classify_earnings` (HELM-044). Learning loop (HELM-023) is the frontier — entry+exit capture complete (`iv_rank`/`days_to_earnings`/`signal_id` wired); Track A (exit-lever scorecard) held on corpus maturity. Structural map lives in `ORIENTATION.md`.
 - **Next highest-leverage:** **concentration and loss sizing.** With the DTE artifacts excluded (HELM-107), the closed book wins **79%** of the time -- CSPs 85% at a mean +5.1% of risk -- and still totals -$12,341. Many small wins, few very large losses, exactly the shape the 7/19 concentration work found (nine closed CSP losers, six flushed 7/13). Selection and win rate are not the problem; correlated loss size is. HELM-023 Track A remains held on corpus maturity, and the corpus is now 91 rows smaller and honest.
-- **Last shipped (s93):** **HELM-138** (an expired leg no longer makes its
-  position unmarkable: expired legs mark at settlement intrinsic on both the
-  check and paper-exit paths, save_check refuses GOOD without a mark, and the
-  six lying EQT rows are re-graded PARTIAL; commit a7e907e) and **HELM-139**
-  (the 38% gateway figure was a round-the-clock diagnostic; sampler retired,
-  boundary map documented; d2bc247). Evening batch also cleared W25 / W41 /
-  W44 / W58 / W60 / W61 (4a7052e, helm-pg f9c31f6).
-- **Next session (Russ):** **run `helm scan` + `helm paper generate` in market
-  hours** -- GE (0.884) and RTX (0.877) passed the screen on the 2026-07-28
-  15:53 board and nothing has booked since the s91 regime break
-  (`origin_screen` still NULL on all 285). Then **W12** (sizing), then **W19**.
-  W74 is resolved (HELM-138); W68 stays open but has fired zero times since
-  instrumentation.
+- **Last shipped (s96):** **HELM-144** (the card's buy-back
+  clause was built from the IV sign and never read the price — backwards on 23
+  of 34 open credit positions; the IV attribution is kept, the price claim now
+  comes from the price) and **HELM-145** (cost-to-close track: what closing
+  would have cost, or paid, on every check day, from the
+  `|premium| ± mark` identity, one point per check day at the last check of
+  that day; inline SVG on the thesis card, display only). Both display-only,
+  neither gates. helm **2cd1f08**, helm-pg **590e8fe**, both pushed `0 0`.
+- **Next session (Russ):** **Monday's 10:00 slot carries three
+  confirmations** — condor `buffer_pct` non-NULL (HELM-141; baseline measured
+  2026-07-31: 62 of 62 GOOD condor rows NULL), the `exit_alerts` table
+  appearing on the first live post-pass (HELM-143), and a visual pass over a
+  few thesis cards on a live board. Then **the W84 fill guard**, still the top
+  safety item and the only open item that can lose real money silently, then
+  **W12** (sizing). Note also: on 2026-07-31 the paper book closed **29
+  positions on `DTE_MANAGE` for -$12,572** (CSP 15 closes / 6 winners /
+  -$10,143; IRON_CONDOR 14 / 2 / -$2,429; median -$110) — the largest
+  single-rule event in the book, on a convention nobody chose, ungraded. That
+  is the W19 corpus arriving.
 - **Blocked (market/RTH):** none outstanding — HELM-031 `shadow_*` capture verified live (s79); the deep-ITM spec CSPs (RKLB/IREN/OKLO/IONQ) are no longer open in the book, so the re-pull is moot.
-- **Counts:** 33 active (23 OPEN · 10 DEFERRED) · last shipped s95 (HELM-143) · **Last-updated 2026-08-01 (s95)**
+- **Counts:** 33 active (23 OPEN · 10 DEFERRED) · last shipped s96 (HELM-144 · HELM-145) · **Last-updated 2026-08-02 (s96)**
 - **Next RTH:** confirm HELM-068 parenting stamps `parent_position_id` on the next real roll; validate HELM-081 live vol-context capture (`hv_30d`/skew) during RTH; watch the first live board after HELM-111 -- the bullish side should now decline rather than route BPS, and the Declined section says why; confirm a routed DIAGONAL opens its short leg at >= 28 DTE.
 
-_Last updated_: 2026-07-28 (s93. The lesson this session: a deterministic defect had been filed under an intermittent one -- W74's three unmarked positions re-measured to one, with a mechanism nothing intermittent about it: an expired leg quotes nothing, forever. Meanwhile the instrumented HELM-128 fault has fired zero times since the tracebacks went in. Before chasing the suspected mechanism, re-measure whether it is still occurring at all.)
+_Last updated_: 2026-08-02 (s96 checkpoint. The lesson this session: a sentence can be built from a real input and still assert something the data beside it contradicts. The card's buy-back clause was driven by the sign of the IV move — a true attribution — and turned into a flat claim about the price, which it never read. It was wrong on 23 of 34 open credit positions, and the 11 it got right it got right by coincidence. When a rendered sentence makes a factual claim, check that the fact is an input to it.)
 
 ## Active
 
@@ -191,6 +197,36 @@ _s78: parenting **SHIPPED** (commit 5cd12b5) -- the replacement is now parented 
 **HELM-081 · `DEBT` · `OPEN` · `hv_30d`/`skew_*` entry capture — paper + real capture SHIPPED s72, live-RTH validation pending** _s72: sourceable from IBKR read-only (frozen OK) — `reqHistoricalData(HISTORICAL_VOLATILITY)` for hv_30d, `reqMktData(opt,'106')`+`modelGreeks.impliedVol` for skew. Shipped `helm/vol_context.py` (`vol_context` + best-effort `backfill_entry_vol`) and hooked it into `_paper_generate` right after booking (never blocks the batch); verified read-only (vol_context returned hv/skew for AMZN; UPDATE hits exactly the snapshot row). Forward-only. Real opens now enrich via the shared `open_*_with_snapshot` functions gated to book=='REAL' (paper via `_paper_generate`), always best-effort. Remaining: (1) validate a live capture during RTH; (2) skew convention fixed ±7% wings vs 25-delta; (3) thin-wing partial fills (KO put null in test)._
 
 ## Resolved log
+
+- **HELM-144 · BUG** (2026-08-02, s96) -- **the thesis card's buy-back clause
+  stated the price backwards on 23 of 34 open credit positions.** The premium
+  belief built "the option you sold costs less/more to buy back" from the SIGN
+  of `iv_vs_entry` alone; it never read a price, though `current_price` and the
+  position's `net_premium` sat on the same journal row. Measured 2026-08-02 on
+  the open book: IV-down-and-losing 22 cases, IV-up-and-winning 1 (CSCO) — all
+  23 backwards; the 11 that read correctly did so by coincidence. Found by Russ
+  on META (card said "costs less"; sold $2,069, costs $7,030 — 3.4x) and again
+  on CSCO (card said "costs more"; sold $2,935, costs $2,625). The IV
+  attribution is KEPT — it is true, and vega x dIV is worth about +$386 of
+  META's -$4,961 — and only the price claim changed, now derived from
+  `position_value()`. commit 2cd1f08.
+
+- **HELM-145 · FEATURE** (2026-08-02, s96) -- **cost-to-close track on the
+  thesis card** -- from Russ's question "would it help to see whether the cost
+  of buying to close is increasing?" New `close_series` / `close_headline` /
+  `close_svg` in `helm/thesis.py`, rendered as inline SVG on the card.
+  value = |premium| - mark for a credit structure, |premium| + mark for a debit
+  one: an identity rather than an estimate, and the only form correct on
+  multi-leg structures (LRCX reads $133,240 by price x contracts against a true
+  $17,020). ONE POINT PER CHECK DAY, the LAST check of that day — Russ's rule —
+  so the line moves with the market rather than with how many times a check ran
+  (three checks on 1,333 position-days, two on 401, one on 287); today's point
+  renders hollow while its day is incomplete, and prior days carry the time of
+  their last check because 24% end before the closing slot. Needs no new
+  collection: the series exists retroactively over every journaled mark.
+  Display only; gates nothing. `exit_track` untouched — different question,
+  and both now bucket days through `_day_marks`. 40 new checks; the 45 existing
+  W88 slice-2 checks stay green. helm 2cd1f08 · helm-pg 590e8fe.
 
 - **HELM-143 · FEATURE** (2026-08-01, s95) -- **exit-improvement push alert (notify-only, never acts)** -- the thesis card's exit-tracking line answers "is today a better exit?" on pull; this is the push half, from Russ's question and sign-off. New helm/exit_alert.py: post-pass after cmd_snapshot journals; for OPEN REAL-book positions whose strike belief is confirmed-broken (thesis states), fires when today's best journaled mark beats the best of the last 5 check days by >= max($250, 5% of |max_loss|). Quiet by construction: one alert per position per day (unique index), never the same offer level twice, PAPER book excluded (the 15:55 agent owns those exits). Writes only to the new exit_alerts table (schema.sql updated -- the W4 rule); macOS notification via osascript; PG positions board renders today's alerts as a banner (engine_store.exit_alerts_today, mode=ro, never raises). Checks incl. a run against a VACUUM INTO copy -- the suite never writes the live DB -- and a measured LRCX regression (the 7/30 bounce correctly stays under the 5-day rule). Worklist W91.
 
