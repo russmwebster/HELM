@@ -259,7 +259,7 @@ def _premium_belief(pos, legs, entry_snap, cur_sig, latest_check):
     then = " · ".join(then_bits) or "entry measures not captured"
     if e_ivr is None and e_iv is None:
         return _belief("premium", title, then,
-                       "cannot grade — no entry volatility snapshot (W26)",
+                       "cannot grade — entry volatility was not captured when this was opened",
                        PARTIAL, "shown as incomplete rather than estimated; never back-filled")
     contested = (e_ivr is not None and e_ivr >= 50 and e_vrp is not None and e_vrp <= 0)
     forces = []
@@ -890,6 +890,123 @@ def close_svg(track, width=760, height=230):
             % (width, height, "".join(e)))
 
 
+def exit_rules(pos, checks, latest, entry_thesis_row):
+    """The four long-family exit rules, in precedence order, with what each one
+    would do right now (HELM-148).
+
+    The card previously rendered only the thesis belief, so three of the four
+    rules that can close a long position were invisible -- a card could say
+    "no decision needed" on a position sitting past the loss backstop.
+
+    Constants and the floor itself come from the ENGINE (helm.long_exit), never
+    re-declared here: a panel that drifts from the rule it describes is worse
+    than no panel. Percentages are computed from journaled marks over the
+    premium paid -- the same identity the engine uses -- rather than read from
+    a stored percentage column, so a row written on a corrected basis cannot
+    disagree with the card. Display only, like the rest of the card."""
+    from helm import long_exit as _le
+    strat = (pos.get("strategy") or "").upper()
+    if strat not in _LONGS or pos.get("status") == "CLOSED":
+        return None
+    prem = _f(pos.get("net_premium"))
+    if not prem:
+        return None
+    paid = abs(prem)
+    pcts = [_f(r.get("pnl_unrealized")) / paid for r in (checks or [])
+            if _f(r.get("pnl_unrealized")) is not None]
+    cur = pcts[-1] if pcts else None
+    hwm = max(pcts) if pcts else None
+    floor = _le.floor_for(hwm)
+    dte = _f((latest or {}).get("dte_now"))
+
+    streak = 0
+    for r in reversed(checks or []):
+        if r.get("thesis_broken") == 1:
+            streak += 1
+        else:
+            break
+
+    rows = []
+    if not entry_thesis_row:
+        rows.append({"key": "thesis", "label": "the reason you bought it is gone",
+                     "state": "CANNOT_ARM",
+                     "text": "cannot arm — no entry thesis on record for this position, "
+                             "so this exit can never fire here"})
+    elif streak >= _le.CONFIRM_DAYS:
+        rows.append({"key": "thesis", "label": "the reason you bought it is gone",
+                     "state": "FIRES",
+                     "text": "confirmed broken at %d consecutive checks (needs %d)"
+                             % (streak, _le.CONFIRM_DAYS)})
+    elif streak:
+        rows.append({"key": "thesis", "label": "the reason you bought it is gone",
+                     "state": "ARMED",
+                     "text": "broken at the latest check — %d of the %d checks needed to confirm"
+                             % (streak, _le.CONFIRM_DAYS)})
+    else:
+        rows.append({"key": "thesis", "label": "the reason you bought it is gone",
+                     "state": "CLEAR", "text": "the direction still holds at the latest check"})
+
+    arm_pct = _le.PROFIT_FLOOR_ARM * 100
+    if hwm is None:
+        rows.append({"key": "profit_floor", "label": "a winner gives back too much",
+                     "state": "UNKNOWN", "text": "no journaled marks yet"})
+    elif floor is None:
+        rows.append({"key": "profit_floor", "label": "a winner gives back too much",
+                     "state": "NOT_ARMED",
+                     "text": "not armed — best it has been is %+.1f%%, and the floor arms at +%.0f%%"
+                             % (hwm * 100, arm_pct)})
+    elif cur is not None and cur <= floor:
+        rows.append({"key": "profit_floor", "label": "a winner gives back too much",
+                     "state": "FIRES",
+                     "text": "back to the +%.0f%% floor (best was %+.1f%%, now %+.1f%%)"
+                             % (floor * 100, hwm * 100, cur * 100)})
+    else:
+        rows.append({"key": "profit_floor", "label": "a winner gives back too much",
+                     "state": "ARMED",
+                     "text": "floor at +%.0f%% — best was %+.1f%%, now %+.1f%%; falling to the floor closes it"
+                             % (floor * 100, hwm * 100, (cur or 0) * 100)})
+
+    if dte is None:
+        rows.append({"key": "dte_gate", "label": "the calendar", "state": "UNKNOWN",
+                     "text": "no expiry on the latest check"})
+    elif dte <= _le.DTE_GATE_DAYS:
+        rows.append({"key": "dte_gate", "label": "the calendar", "state": "FIRES",
+                     "text": "%d days left — inside the %d-day gate, a decision is due"
+                             % (dte, _le.DTE_GATE_DAYS)})
+    else:
+        rows.append({"key": "dte_gate", "label": "the calendar", "state": "CLEAR",
+                     "text": "%d days left; the gate is at %d"
+                             % (dte, _le.DTE_GATE_DAYS)})
+
+    back_pct = abs(_le.CATASTROPHE_PCT) * 100
+    if cur is None:
+        rows.append({"key": "catastrophe", "label": "the loss backstop", "state": "UNKNOWN",
+                     "text": "no journaled mark"})
+    elif cur <= _le.CATASTROPHE_PCT:
+        rows.append({"key": "catastrophe", "label": "the loss backstop", "state": "FIRES",
+                     "text": "down %.0f%% — past the %.0f%% backstop" % (abs(cur) * 100, back_pct)})
+    else:
+        rows.append({"key": "catastrophe", "label": "the loss backstop", "state": "CLEAR",
+                     "text": "%s%.0f%% — the backstop is at %.0f%%"
+                             % ("down " if cur < 0 else "up ", abs(cur) * 100, back_pct)})
+
+    firing = next((r["key"] for r in rows if r["state"] == "FIRES"), None)
+    label = next((r["label"] for r in rows if r["key"] == firing), None)
+    summary = ("would close today: %s — it outranks anything below it"
+               % label) if firing else "nothing would close this position today"
+    book = (pos.get("book") or "").upper()
+    if book == "PAPER":
+        note = "the paper book acts on these automatically at 15:55 each weekday"
+    else:
+        note = ("on the real book these are advisory — they are computed and shown, "
+                "and nothing acts on them")
+    return {"rows": rows, "firing": firing, "summary": summary, "book_note": note,
+            "fine": ("first match wins, top to bottom. Confirmation for the first rule counts "
+                     "consecutive checks rather than calendar days — three checks run each "
+                     "weekday, so two can complete within a single afternoon. Percentages are "
+                     "measured against the premium paid, from journaled marks only.")}
+
+
 def evaluate(pos, legs, checks, entry_snap=None, entry_thesis_row=None,
              ownership=None, cur_sig=None, earnings=None, today=None):
     """Assemble the full card content for one position. Pure."""
@@ -1059,6 +1176,7 @@ def evaluate(pos, legs, checks, entry_snap=None, entry_thesis_row=None,
         "exit_track": xt,
         "close_track": ct, "close_headline": ct_head, "close_svg": ct_svg,
         "close_trend": trend_sentence(ct, closed),
+        "exit_rules": exit_rules(pos, checks, latest, entry_thesis_row),
         "earnings": earn,
         "condor_honesty": strat in ("IRON_CONDOR", "SHORT_STRANGLE", "JADE_LIZARD"),
     }
