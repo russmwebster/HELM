@@ -58,6 +58,17 @@ def _money(x):
     return ("+$%s" % format(round(x), ",")) if x >= 0 else ("−$%s" % format(-round(x), ","))
 
 
+def _amt(x):
+    """An unsigned dollar amount — a cost, a premium, an axis tick.
+
+    _money() is for signed P&L and always prefixes + or −, which reads wrong on
+    "a $7,030 debit" or on a y-axis. Negatives still show their sign, because a
+    negative amount is a real thing and must not be hidden by abs()."""
+    if x is None:
+        return "—"
+    return ("−$%s" % format(-round(x), ",")) if x < 0 else ("$%s" % format(round(x), ","))
+
+
 # ── the strike observable (nearest wall), same construction HELM-141 journals ─
 def buffer_pct(legs, spot):
     """Signed % distance from spot to the nearest short strike; None if any
@@ -246,17 +257,27 @@ def _premium_belief(pos, legs, entry_snap, cur_sig, latest_check):
             forces.append("price $%.2f → $%.2f — %s you" % (e_spot, n_spot,
                           "for" if good else "against"))
     if ive is not None and e_iv is not None and c_iv is not None:
-        if credit:
-            forces.append("IV %.1f → %.1f — %s you (the option you sold costs %s to buy back)"
-                          % (e_iv, c_iv, "for" if ive < 0 else "against",
-                             "less" if ive < 0 else "more"))
-        else:
-            forces.append("IV %.1f → %.1f — %s you (the option you own is repriced %s)"
-                          % (e_iv, c_iv, "for" if ive > 0 else "against",
-                             "higher" if ive > 0 else "lower"))
+        # The attribution is true and worth keeping: for a short option falling IV
+        # is a tailwind, for a long one a headwind, all else equal. What was wrong
+        # was the gloss that used to hang off it -- "costs less to buy back" was
+        # decided by the SIGN of this move alone and never consulted the price, so
+        # it read backwards on 23 of the 34 open credit positions when measured on
+        # 2026-08-02. The price claim now lives below, derived from the price.
+        forces.append("IV %.1f → %.1f — %s you"
+                      % (e_iv, c_iv, "for" if (ive < 0) == credit else "against"))
     elif ive is not None:
         forces.append("IV %+.1f vs entry — %s you"
                       % (ive, "for" if (ive < 0) == credit else "against"))
+    _val = position_value(pos.get("net_premium"), (latest_check or {}).get("pnl_unrealized"))
+    _paid = _f(pos.get("net_premium"))
+    if _val is not None and _paid:
+        _paid = abs(_paid)
+        if credit:
+            forces.append("costs %s to buy back what you sold for %s — %s than you were paid"
+                          % (_money(_val), _money(_paid), "less" if _val < _paid else "more"))
+        else:
+            forces.append("sells for %s against the %s you paid — %s than you paid"
+                          % (_money(_val), _money(_paid), "more" if _val > _paid else "less"))
     theta = _f((latest_check or {}).get("theta"))
     if theta is not None and strat in _SINGLE_SHORT:
         wall = None
@@ -567,8 +588,209 @@ def exit_track(legs, checks, closed):
     }
 
 
+def _day_marks(checks):
+    """Journaled marks bucketed by check day, each day ordered by time.
+
+    One place decides what a check day is, so every reader of the journal agrees
+    on it. Rows without a timestamp or without a mark are skipped rather than
+    defaulted — an absent mark is not a zero."""
+    byday = {}
+    for r in checks or []:
+        ts = r.get("checked_at") or ""
+        d, p = ts[:10], _f(r.get("pnl_unrealized"))
+        if not d or p is None:
+            continue
+        byday.setdefault(d, []).append((ts, p))
+    for d in byday:
+        byday[d].sort()
+    return byday
+
+
+def position_value(net_premium, mark):
+    """What the position is worth to close right now, from the journal alone.
+
+    For a credit structure you were paid |premium| and you buy it back, so the
+    value is |premium| − mark. For a debit structure you paid |premium| and you
+    sell it back, so it is |premium| + mark. Both are the same thing — the market
+    value of the structure — and both are identities rather than estimates: no
+    greeks, no per-leg arithmetic, and correct on multi-leg structures, where a
+    quoted leg price times contracts is NOT the position's price (LRCX's condor
+    reads $133,240 that way against a true $17,020). None when either input is
+    missing."""
+    prem, mk = _f(net_premium), _f(mark)
+    if prem is None or prem == 0 or mk is None:
+        return None
+    paid = abs(prem)
+    return (paid - mk) if prem > 0 else (paid + mk)
+
+
+def close_series(pos, checks, closed=False, today=None):
+    """What closing the position would have cost — or paid — on every check day.
+
+    ONE POINT PER CHECK DAY, the LAST check of that day. Deliberately not the
+    cheapest: a minimum over however many times a check happened to run moves
+    with the sampling rather than with the market, and the count is not constant
+    (measured over ~2,045 position-days: three checks on 1,333, two on 401, one
+    on 287). The last check is defined the same way on every day regardless.
+
+    The last point is flagged provisional when it is TODAY'S and that day has not
+    yet had its full three checks — i.e. more are still to come and it will move.
+    `today` is passed in rather than read from the clock, so this stays pure and
+    a card rendered from a fixture says the same thing every time. Prior days
+    carry the time of their last check, since 24% of them end before the closing
+    slot and a midday reading must not pass itself off as a close.
+
+    Journaled marks only; None when there are none — never invented. Display
+    only: nothing here can trigger an exit."""
+    prem = _f(pos.get("net_premium"))
+    if prem is None or prem == 0:
+        return None
+    byday = _day_marks(checks)
+    if not byday:
+        return None
+    paid = abs(prem)
+    pts = []
+    for d in sorted(byday):
+        rows = byday[d]
+        vals = [v for v in (position_value(prem, p) for _ts, p in rows) if v is not None]
+        if not vals:
+            continue
+        ts, mk = rows[-1]
+        pts.append({"date": d, "time": ts[11:16], "value": position_value(prem, mk),
+                    "mark": mk, "lo": min(vals), "hi": max(vals), "n": len(vals)})
+    if not pts:
+        return None
+    tday = "" if closed else (today or "")[:10]
+    if tday and pts[-1]["date"] == tday and pts[-1]["n"] < 3:
+        pts[-1]["provisional"] = True
+    last = pts[-1]
+    return {
+        "credit": prem > 0, "premium": paid, "points": pts,
+        "now": last["value"], "now_date": last["date"], "now_time": last["time"],
+        "net": last["mark"],
+        "peak": max(p["value"] for p in pts),
+        "trough": min(p["value"] for p in pts),
+        "n_days": len(pts), "provisional": bool(last.get("provisional")),
+    }
+
+
+def close_headline(track):
+    """One plain sentence for the track.
+
+    Closing a credit structure is ALWAYS a debit — you sold it, you buy it back.
+    What varies is whether that debit is smaller or larger than the credit taken
+    in. A debit structure is the mirror: closing it always pays a credit."""
+    if not track:
+        return None
+    now, paid, net = track["now"], track["premium"], track["net"]
+    kept = ("you keep %s" % _amt(net)) if net > 0 else ("%s worse" % _amt(-net))
+    if track["credit"]:
+        return ("close today for a %s debit against the %s credit you took in — %s"
+                % (_amt(now), _amt(paid), kept))
+    return ("close today for a %s credit against the %s debit you paid — %s"
+            % (_amt(now), _amt(paid), kept))
+
+
+def _nice_step(span):
+    """A round y-axis step giving at most ~4 gridlines."""
+    import math
+    if span <= 0:
+        return 1.0
+    base = 10 ** math.floor(math.log10(span / 4.0))
+    for k in (1, 2, 2.5, 5, 10):
+        if span / (base * k) <= 4.5:
+            return base * k
+    return base * 10
+
+
+def close_svg(track, width=760, height=230):
+    """Inline SVG for the cost-to-close track. No chart library, no external
+    asset, no script — it renders from the markup alone.
+
+    Colour carries exactly one meaning: above the rule you would pay more than
+    you were paid, below it less. The line itself is ink so it never competes
+    with that. The blue/red pair is the one that clears colour-blind separation
+    in both light and dark (red/green does not, by a wide margin), and the
+    arrows, labels and figures beside the chart repeat the same information
+    without relying on colour at all."""
+    if not track or not track.get("points"):
+        return None
+    pts, paid = track["points"], track["premium"]
+    n = len(pts)
+    ml, mr, mt, mb = 66, 84, 20, 28
+    pw, ph = width - ml - mr, height - mt - mb
+    lo = min([p["lo"] for p in pts] + [paid])
+    hi = max([p["hi"] for p in pts] + [paid])
+    pad = (hi - lo) * 0.12 or max(abs(hi) * 0.1, 50.0)
+    y0, y1 = lo - pad, hi + pad
+
+    def X(i):
+        return ml + (pw / 2.0 if n == 1 else pw * i / (n - 1.0))
+
+    def Y(v):
+        return mt + ph - ((v - y0) / (y1 - y0)) * ph if y1 > y0 else mt + ph / 2.0
+
+    e = []
+    step = _nice_step(y1 - y0)
+    t, guard_n = (int(y0 / step) + (1 if y0 > 0 else 0)) * step, 0
+    while t <= y1 and guard_n < 8:
+        e.append('<line x1="%.1f" x2="%.1f" y1="%.1f" y2="%.1f" stroke="var(--viz-grid,#e1e0d9)" stroke-width="1"/>'
+                 % (ml, ml + pw, Y(t), Y(t)))
+        e.append('<text x="%.1f" y="%.1f" text-anchor="end" font-size="10.5" fill="var(--viz-muted,#898781)">%s</text>'
+                 % (ml - 9, Y(t) + 3.5, _amt(t)))
+        t += step
+        guard_n += 1
+
+    line = " ".join("%s%.1f %.1f" % ("L" if i else "M", X(i), Y(p["value"]))
+                    for i, p in enumerate(pts))
+    yp = Y(paid)
+    area = "%s L%.1f %.1f L%.1f %.1f Z" % (line, X(n - 1), yp, X(0), yp)
+    uid = str(abs(hash((pts[0]["date"], n, int(paid)))) % 100000)
+    worse = "var(--viz-bad,#e34948)" if track["credit"] else "var(--viz-good,#2a78d6)"
+    better = "var(--viz-good,#2a78d6)" if track["credit"] else "var(--viz-bad,#e34948)"
+    e.append('<clipPath id="ca%s"><rect x="%.1f" y="%.1f" width="%.1f" height="%.1f"/></clipPath>'
+             % (uid, ml, mt - 4, pw, max(0.0, yp - mt + 4)))
+    e.append('<clipPath id="cb%s"><rect x="%.1f" y="%.1f" width="%.1f" height="%.1f"/></clipPath>'
+             % (uid, ml, yp, pw, max(0.0, mt + ph - yp + 4)))
+    e.append('<path d="%s" fill="%s" fill-opacity="0.15" clip-path="url(#ca%s)"/>' % (area, worse, uid))
+    e.append('<path d="%s" fill="%s" fill-opacity="0.15" clip-path="url(#cb%s)"/>' % (area, better, uid))
+
+    for i, p in enumerate(pts):
+        if p["hi"] > p["lo"]:
+            e.append('<line x1="%.1f" x2="%.1f" y1="%.1f" y2="%.1f" stroke="var(--viz-muted,#898781)" stroke-width="1" stroke-opacity="0.5"/>'
+                     % (X(i), X(i), Y(p["lo"]), Y(p["hi"])))
+
+    e.append('<line x1="%.1f" x2="%.1f" y1="%.1f" y2="%.1f" stroke="var(--viz-ink2,#52514e)" stroke-width="1.5" stroke-dasharray="5 4"/>'
+             % (ml, ml + pw, yp, yp))
+    e.append('<text x="%.1f" y="%.1f" font-size="10.5" fill="var(--viz-ink2,#52514e)">%s %s</text>'
+             % (ml + pw + 8, yp + 3.5, "took in" if track["credit"] else "paid", _amt(paid)))
+    e.append('<path d="%s" fill="none" stroke="var(--viz-ink,#0b0b0b)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>' % line)
+    for i, p in enumerate(pts[:-1]):
+        e.append('<circle cx="%.1f" cy="%.1f" r="2.4" fill="var(--viz-ink,#0b0b0b)"/>' % (X(i), Y(p["value"])))
+
+    last = pts[-1]
+    fill = "var(--viz-surface,#fcfcfb)" if last.get("provisional") else "var(--viz-ink,#0b0b0b)"
+    ring = "var(--viz-ink,#0b0b0b)" if last.get("provisional") else "var(--viz-surface,#fcfcfb)"
+    e.append('<circle cx="%.1f" cy="%.1f" r="4.5" fill="%s" stroke="%s" stroke-width="2"/>'
+             % (X(n - 1), Y(last["value"]), fill, ring))
+    e.append('<text x="%.1f" y="%.1f" font-size="11" font-weight="600" fill="var(--viz-ink,#0b0b0b)">%s</text>'
+             % (X(n - 1) + 9, Y(last["value"]) + 4, _amt(last["value"])))
+
+    every = max(1, -(-n // 6))
+    gap = -(-every * 7 // 10)
+    for i, p in enumerate(pts):
+        if i == n - 1 or (i % every == 0 and i <= n - 1 - gap):
+            e.append('<text x="%.1f" y="%.1f" text-anchor="middle" font-size="10.5" fill="var(--viz-muted,#898781)">%s</text>'
+                     % (X(i), mt + ph + 16, p["date"][5:]))
+    e.append('<line x1="%.1f" x2="%.1f" y1="%.1f" y2="%.1f" stroke="var(--viz-axis,#c3c2b7)" stroke-width="1"/>'
+             % (ml, ml + pw, mt + ph, mt + ph))
+    return ('<svg viewBox="0 0 %d %d" role="img" aria-label="What it would cost to close, on each check day" '
+            'style="display:block;width:100%%;height:auto;overflow:visible">%s</svg>'
+            % (width, height, "".join(e)))
+
+
 def evaluate(pos, legs, checks, entry_snap=None, entry_thesis_row=None,
-             ownership=None, cur_sig=None, earnings=None):
+             ownership=None, cur_sig=None, earnings=None, today=None):
     """Assemble the full card content for one position. Pure."""
     strat = (pos.get("strategy") or "").upper()
     closed = (pos.get("status") == "CLOSED")
@@ -613,6 +835,13 @@ def evaluate(pos, legs, checks, entry_snap=None, entry_thesis_row=None,
     if not closed and latest:
         ladder, conv = expiry_ladder(pos, legs, latest.get("spot_price"), mark, _f(dte))
     xt = exit_track(legs, checks, closed)
+    # The cost-to-close track. exit_track answers a different question — the BEST
+    # exit offered since a confirmed break — and stays as it is; this one runs on
+    # every position with a premium and traces the LAST check of each day. Both
+    # read the journal through _day_marks, so they cannot drift on what a day is.
+    ct = close_series(pos, checks, closed, today=today)
+    ct_head = close_headline(ct)
+    ct_svg = close_svg(ct)
 
     # The Read — synthesis, ending with the action cue (the HELM-134 job, per position)
     bits = []
@@ -686,6 +915,7 @@ def evaluate(pos, legs, checks, entry_snap=None, entry_thesis_row=None,
         "dte": dte, "read": read,
         "ladder": ladder, "convergence": conv,
         "exit_track": xt,
+        "close_track": ct, "close_headline": ct_head, "close_svg": ct_svg,
         "earnings": earn,
         "condor_honesty": strat in ("IRON_CONDOR", "SHORT_STRANGLE", "JADE_LIZARD"),
     }
