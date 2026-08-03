@@ -46,8 +46,15 @@ sys.path.insert(0, str(ROOT))
 # time from a full daily read -- including CATASTROPHE_STOP, which is a -50%
 # backstop for gaps that outrun the 2-day thesis confirmation, not a standing
 # order. Real book stays advisory (HELM-093); only paper acts.
+# HELM-150 (v3): the LONG_* acting set is now GIVE_BACK / STOP_LOSS / DTE_21 /
+# DTE_7. The v2 names stay in the set deliberately -- they are no longer emitted
+# by long_verdict, but removing them would silently strand any position that
+# still produces one. This whitelist is exactly where the s82 near-miss lived:
+# when LONG_* stopped emitting PROFIT_TARGET/DTE_MANAGE the paper long book
+# would have gone act-less with nothing saying so.
 ACT_REASONS = {"PROFIT_TARGET", "DTE_MANAGE", "EXPIRY",
-               "THESIS_BREAK", "PROFIT_FLOOR", "DTE_GATE", "CATASTROPHE_STOP"}
+               "THESIS_BREAK", "PROFIT_FLOOR", "DTE_GATE", "CATASTROPHE_STOP",
+               "GIVE_BACK", "STOP_LOSS", "DTE_21", "DTE_7"}
 DRY = ("--dry-run" in sys.argv) or os.environ.get("HELM_PAPER_DRY") == "1"
 
 

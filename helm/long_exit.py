@@ -30,6 +30,24 @@ RATCHET_STEP     = 0.10    # floor moves in 10-point steps
 DTE_GATE_DAYS    = 30      # forced decision point
 CATASTROPHE_PCT  = -0.50   # backstop
 CONFIRM_DAYS     = 2       # consecutive daily checks before THESIS_BREAK fires
+
+# ---- v3 (2026-08-03, Russ) -------------------------------------------------
+# The acting set for LONG_* is now five rules, every one a FACT about the
+# position. The direction read (bias / SMA50) stops acting and becomes display
+# only -- it gated on a judgment, which contradicts the standing doctrine, and
+# it fired once in the book's history.
+#
+# The give-back trail replaces the v2 ratcheted floor. Same idea, one change:
+# the +50% arming threshold is DELETED. No real-book position ever reached it,
+# so the floor was dormant for the entire life of all nine while they round-
+# tripped (TSLA +34% -> -98%, UNH +41.7% -> -34.1%). Band measured on this
+# book's own 17 journaled long positions; 20 points beat 15 and 25, and below
+# 20 sits inside the normal breathing room of a winning long call.
+GIVE_BACK_BAND   = 0.20    # exit this many POINTS of debit below the peak P&L
+STOP_LOSS_PCT    = -0.50   # fixed stop from entry; also caps the trail
+DTE_SOFT         = 21      # close here only if the position is not positive
+DTE_HARD         = 7       # close here regardless -- avoids auto-exercise
+GIVE_BACK_ARMS   = (0.15, 0.25)   # logged as counterfactuals, never acted on
 CTX_MAX_AGE_DAYS = 1       # a signals row older than this is not "today's read"
 
 LONG_STRATEGIES = ('LONG_CALL', 'LONG_PUT')
@@ -211,6 +229,18 @@ def floor_for(hwm):
     return round(steps * RATCHET_STEP - RATCHET_STEP, 4)
 
 
+def trail_floor(hwm, band=GIVE_BACK_BAND):
+    """The give-back floor for a high-water mark: that many points below it,
+    never deeper than the fixed stop (v3).
+
+    No arming threshold -- this is live from the first check, which is the whole
+    point of the change. Capped at STOP_LOSS_PCT so the trail and the stop can
+    never disagree about which fires first."""
+    if hwm is None:
+        return None
+    return max(hwm - band, STOP_LOSS_PCT)
+
+
 def thesis_is_broken(entry, cur):
     """True/False, or None when the test cannot be run (unarmed or no context).
 
@@ -250,7 +280,9 @@ def long_verdict(total_pnl, debit, dte_now, entry, cur, jstate,
     hwm = jstate.get('hwm_pct')
     if pnl_pct is not None:
         hwm = pnl_pct if hwm is None else max(hwm, pnl_pct)
-    floor = floor_for(hwm)
+    floor = floor_for(hwm)              # v2 ratchet -- counterfactual only now
+    trail = trail_floor(hwm)            # v3 acting floor
+    positive = (pnl_pct is not None and pnl_pct > 0)
 
     arms = {
         'pnl_pct': None if pnl_pct is None else round(pnl_pct, 4),
@@ -283,15 +315,42 @@ def long_verdict(total_pnl, debit, dte_now, entry, cur, jstate,
         },
     }
 
+    # v3 counterfactual record: the acting band, the two alternates, and what
+    # the retired v2 set would have said. Logging all of it is what lets the
+    # band be settled on evidence later instead of re-argued.
+    arms['give_back'] = {
+        'band': GIVE_BACK_BAND, 'hwm': None if hwm is None else round(hwm, 4),
+        'floor': None if trail is None else round(trail, 4),
+        'alt': {str(b): (None if hwm is None else round(trail_floor(hwm, b), 4))
+                for b in GIVE_BACK_ARMS},
+        'alt_would_fire': {
+            str(b): (pnl_pct is not None and hwm is not None
+                     and pnl_pct <= trail_floor(hwm, b))
+            for b in GIVE_BACK_ARMS},
+    }
+    arms['v3'] = {'positive': positive, 'dte_soft': DTE_SOFT, 'dte_hard': DTE_HARD,
+                  'stop': STOP_LOSS_PCT}
+    arms['v2_retired'] = {
+        'thesis_break': bool(arms['thesis']['armed'] and broken_today
+                             and streak >= CONFIRM_DAYS),
+        'profit_floor': bool(floor is not None and pnl_pct is not None
+                             and pnl_pct <= floor),
+        'dte_gate_30': bool(dte_now is not None and dte_now <= DTE_GATE_DAYS),
+    }
+
+    # PRECEDENCE (v3): loss causes before calendar causes, so a stop-out is
+    # never recorded as a calendar exit. DTE_7 is checked before DTE_21 because
+    # it is the more specific condition -- inside 7 days the label should say so
+    # rather than reporting the wider gate the position also happens to satisfy.
     reason = None
-    if arms['thesis']['armed'] and broken_today and streak >= CONFIRM_DAYS:
-        reason = 'THESIS_BREAK'
-    elif floor is not None and pnl_pct is not None and pnl_pct <= floor:
-        reason = 'PROFIT_FLOOR'
-    elif dte_now is not None and dte_now <= DTE_GATE_DAYS:
-        reason = 'DTE_GATE'
-    elif pnl_pct is not None and pnl_pct <= CATASTROPHE_PCT:
-        reason = 'CATASTROPHE_STOP'
+    if pnl_pct is not None and pnl_pct <= STOP_LOSS_PCT:
+        reason = 'STOP_LOSS'
+    elif trail is not None and pnl_pct is not None and pnl_pct <= trail:
+        reason = 'GIVE_BACK'
+    elif dte_now is not None and dte_now <= DTE_HARD:
+        reason = 'DTE_7'
+    elif dte_now is not None and dte_now <= DTE_SOFT and not positive:
+        reason = 'DTE_21'
     arms['fired'] = reason
     return reason, arms
 

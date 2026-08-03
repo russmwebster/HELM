@@ -131,6 +131,15 @@ def evaluate(pos, legs, marks: dict, arms_out=None):
     # of scope (deferred roll layer). Others manage off the nearest leg.
     dte_cal = (max([d for d in dtes if d is not None], default=None)
                if fam == DIAGONAL_FAMILY else dte_now)
+    # HELM-150: the LONG_* families own their whole calendar in long_verdict
+    # (DTE_21 conditional, DTE_7 hard). They must NOT fall through to the
+    # credit-family block below -- under v2 the 30-day gate always fired first
+    # so this was unreachable, but v3 deliberately holds a POSITIVE position
+    # past 21 days, and that position would otherwise be closed here as
+    # DTE_MANAGE by a rule written for premium sellers. The s82 whitelist trap,
+    # arriving from the other side.
+    if fam == LONG_DEBIT_FAMILY:
+        dte_cal = None
     if reason is None and dte_cal is not None:
         if dte_cal <= 0:
             reason = 'EXPIRY'
