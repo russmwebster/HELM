@@ -330,6 +330,85 @@ def _premium_belief(pos, legs, entry_snap, cur_sig, latest_check):
     return _belief("premium", title, then, now, state, fine, {"forces": forces})
 
 
+# ---- HELM-151 (W95): one source of truth for "what acts" ---------------------
+# Three sentences on this card used to restate the acting doctrine by hand: the
+# belief fine print, the broken-state line, and the footer. v3 changed the
+# doctrine and rewrote only the panel, so the card told the trader that a bias
+# flip could close the position -- which it cannot, and has not since HELM-150.
+# Everything below derives from helm.long_exit.ACTING_VERDICTS.
+
+_RULE_LABEL = {
+    "STOP_LOSS": "the stop",
+    "GIVE_BACK": "giving back the gain",
+    "DTE_7": "the hard close",
+    "DTE_21": "the calendar",
+}
+
+
+def acting_rules():
+    """[(verdict, label)] for the rules that can actually close a long.
+
+    Raises if the engine gains an acting verdict this card has no label for --
+    a v4 rule must not render as silence on the surface that explains the book.
+    """
+    from helm import long_exit as _le
+    names = tuple(getattr(_le, "ACTING_VERDICTS", ()) or ())
+    missing = [n for n in names if n not in _RULE_LABEL]
+    if missing:
+        raise KeyError("thesis card has no label for acting verdict(s): %s"
+                       % ", ".join(missing))
+    return [(n, _RULE_LABEL[n]) for n in names]
+
+
+def direction_acts():
+    """Whether the direction belief is itself a gate. False since v3."""
+    from helm import long_exit as _le
+    return bool(getattr(_le, "DIRECTION_ACTS", False))
+
+
+def _direction_verdict_phrase():
+    """Tail of the broken-state line. Never says 'acting' unless it is."""
+    if direction_acts():
+        return "this is the acting exit"
+    return ("recorded, but it closes nothing — kept as a counterfactual so the "
+            "rule can be graded later")
+
+
+def _direction_fine():
+    """Fine print under the direction belief."""
+    if direction_acts():
+        return ("this belief ACTS (THESIS_BREAK) for longs — the one belief that "
+                "is already a gate")
+    labels = [lbl for _n, lbl in acting_rules()]
+    which = (", ".join(labels[:-1]) + " and " + labels[-1]) if len(labels) > 1 \
+        else (labels[0] if labels else "nothing")
+    return ("this belief closes nothing — it is read, graded and journalled as "
+            "information. What can close a long: %s" % which)
+
+
+def doctrine_note(strategy=None, closed=False):
+    """The card footer's leading sentence, derived rather than restated."""
+    lead = "Doctrine: facts gate, judgments display"
+    if closed:
+        return ("%s — this is a frozen post-mortem; nothing on it acts, and it "
+                "is not re-read against today's market." % lead)
+    strat = (strategy or "").upper()
+    if strat in _LONGS:
+        labels = [lbl for _n, lbl in acting_rules()]
+        which = (", ".join(labels[:-1]) + " and " + labels[-1]) if len(labels) > 1 \
+            else (labels[0] if labels else "nothing")
+        body = ("%s — what can close this position: %s. Nothing else on this "
+                "card acts" % (lead, which))
+    else:
+        body = "%s — nothing on this card acts" % lead
+    if strat in _LONGS or strat in _VERT_DEBIT:
+        if direction_acts():
+            body += ", except the direction belief, which is also a gate"
+        else:
+            body += ", the direction read included"
+    return body + "."
+
+
 def _direction_belief(pos, entry_thesis_row, checks, cur_sig, want_up=True):
     """P1/P2 for longs and debit verticals — the acting THESIS_BREAK machinery,
     rendered. Reads what HELM-112 already journals; computes nothing new."""
@@ -363,16 +442,16 @@ def _direction_belief(pos, entry_thesis_row, checks, cur_sig, want_up=True):
     now = "bias %+.1f → %+.1f" % (e_bias or 0.0, cur if cur is not None else 0.0)
     if broken_today and streak >= confirm:
         state = BROKEN
-        now += " · broken %d consecutive checks (confirm %d) — this is the acting exit" % (streak, confirm)
+        now += (" · broken %d consecutive checks (confirm %d) — %s"
+                % (streak, confirm, _direction_verdict_phrase()))
     elif broken_today:
         state = FRAYING
         now += " · broken today, streak %d of %d — one more confirms" % (streak, confirm)
     else:
         state = HOLDS
         now += " · intact on the latest check"
-    fine = "entry bias vs current bias, from the same context the exit agent " \
-           "compares; 2-day confirmation; this belief ACTS (THESIS_BREAK) for " \
-           "longs — the one belief that is already a gate"
+    fine = ("entry bias vs current bias, from the same context the exit agent "
+            "compares; 2-day confirmation; " + _direction_fine())
     return _belief("direction", title, then, now, state, fine)
 
 
@@ -1181,6 +1260,7 @@ def evaluate(pos, legs, checks, entry_snap=None, entry_thesis_row=None,
         "close_track": ct, "close_headline": ct_head, "close_svg": ct_svg,
         "close_trend": trend_sentence(ct, closed),
         "exit_rules": exit_rules(pos, checks, latest, entry_thesis_row),
+        "doctrine": doctrine_note(strat, closed),
         "earnings": earn,
         "condor_honesty": strat in ("IRON_CONDOR", "SHORT_STRANGLE", "JADE_LIZARD"),
     }

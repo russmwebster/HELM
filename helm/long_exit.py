@@ -1,17 +1,31 @@
 # helm/long_exit.py
-# HELM-101 §4 -- exit doctrine v2 for the LONG_* families (LONG_CALL / LONG_PUT).
+# HELM-101 §4 -- exit doctrine for the LONG_* families (LONG_CALL / LONG_PUT).
+# v3 since 2026-08-03 (HELM-150). Design record: claude/HELM-long-exit-v3-rules.md
 #
-# Doctrine, in precedence order:
-#   1. THESIS_BREAK      -- the primary loser exit. Fires on information (the
-#                           directional read that justified the trade is gone),
-#                           confirmed over consecutive daily checks so a shakeout
-#                           does not trigger it.
-#   2. PROFIT_FLOOR      -- ratcheted winner management. No fixed profit target;
-#                           a floor arms at +50% and ratchets in 10-point steps,
-#                           trailing the high-water mark by one step.
-#   3. DTE_GATE          -- a forced decision at 30 DTE, not a dawdle point.
-#   4. CATASTROPHE_STOP  -- a -50% backstop for gaps that outrun confirmation.
+# ACTING doctrine, in precedence order -- loss causes before calendar causes:
+#   1. STOP_LOSS   -- -50% from entry. Also caps the trail, so the two rules
+#                     can never disagree.
+#   2. GIVE_BACK   -- exit 20 POINTS of debit below the high-water mark, live
+#                     from the first check. No arming threshold: v2's +50% arm
+#                     never once fired on this book while nine positions round-
+#                     tripped, and any threshold rebuilds that hole lower down.
+#   3. DTE_7       -- hard close, regardless of sign. A long call left ITM to
+#                     expiry auto-exercises into stock nobody decided to buy.
+#   4. DTE_21      -- close only if the position is NOT positive. A working
+#                     long call is mostly intrinsic and does not decay; a
+#                     failing one is mostly extrinsic and is falling away.
 #
+# RETIRED in v3, still computed and journalled as counterfactuals so W19 can
+# grade them later -- but they close NOTHING:
+#   THESIS_BREAK / PROFIT_FLOOR / DTE_GATE / CATASTROPHE_STOP.
+# THESIS_BREAK in particular gated on a judgment rather than a fact, has no
+# published counterpart, fired once in the book's history (PNC, -$395), and
+# its entry-thesis row was only ever a presence check.
+#
+# HELM-151 (W95): ACTING_VERDICTS below is the single source of truth for
+# every surface that tells a trader which rules can close a position. Do not
+# restate it in prose anywhere -- derive from it. The thesis card contradicted
+# itself for a day because three sentences restated v2 by hand.
 # HELM-094 boundary: every verdict here is a DAILY-CHECK DECISION evaluated at
 # mark time. None of them is a resting broker order, and none of them acts on the
 # REAL book -- HELM-093 makes real-book exits advisory. The paper book acts.
@@ -49,6 +63,22 @@ DTE_SOFT         = 21      # close here only if the position is not positive
 DTE_HARD         = 7       # close here regardless -- avoids auto-exercise
 GIVE_BACK_ARMS   = (0.15, 0.25)   # logged as counterfactuals, never acted on
 CTX_MAX_AGE_DAYS = 1       # a signals row older than this is not "today's read"
+
+
+# ---- HELM-151 (W95): what actually acts, declared once ----------------------
+# long_verdict() can return exactly these, or None. Every trader-facing
+# sentence about which rules close a position must derive from this tuple;
+# prose that restates it drifts the moment the doctrine changes, which is
+# precisely what W95 was. Order is the acting PRECEDENCE order.
+ACTING_VERDICTS = ('STOP_LOSS', 'GIVE_BACK', 'DTE_7', 'DTE_21')
+
+# Emitted by nothing; kept in arms['v2_retired'] as counterfactuals only.
+RETIRED_VERDICTS = ('THESIS_BREAK', 'PROFIT_FLOOR', 'DTE_GATE',
+                    'CATASTROPHE_STOP')
+
+# Derived, never hand-set: the direction belief acts iff its verdict is in
+# the acting set. A v4 that re-arms it flips every sentence automatically.
+DIRECTION_ACTS = 'THESIS_BREAK' in ACTING_VERDICTS
 
 LONG_STRATEGIES = ('LONG_CALL', 'LONG_PUT')
 
