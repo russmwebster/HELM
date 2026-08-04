@@ -788,6 +788,12 @@ ALTER TABLE checks ADD COLUMN shadow_loss_pct REAL;
 ALTER TABLE entry_snapshots ADD COLUMN open_interest INTEGER;
 ALTER TABLE entry_snapshots ADD COLUMN bid_ask_spread REAL;
 ALTER TABLE entry_snapshots ADD COLUMN bid_ask_spread_pct REAL;
+-- HELM-152 (W84): the quote LEVELS, not just the gap between them.
+-- Only bid_ask_spread/_pct were ever stored, so no fill can be replayed
+-- against the market it was filled into, and no price threshold can be
+-- set on this book's own evidence. Display/analysis only; gates nothing.
+ALTER TABLE entry_snapshots ADD COLUMN bid REAL;
+ALTER TABLE entry_snapshots ADD COLUMN ask REAL;
 
 -- s25 index reconcile: forward-gap indexes (exist live, were undeclared)
 CREATE INDEX IF NOT EXISTS idx_ptx_hash ON processed_transactions(tx_hash);

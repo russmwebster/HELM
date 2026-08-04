@@ -1166,6 +1166,33 @@ def _pin_refusal(kind, err, items, strike_key="strike"):
     console.print()
 
 
+# ---- HELM-152 (W84): the receipt check ---------------------------------------
+# What the CALLER said it wanted, from --expect-contracts / --expect-fill. A
+# module global rather than a threaded parameter on purpose: `helm open` is a
+# single-shot process (PG spawns one per logged fill), there is no second
+# booking in flight, and threading two more arguments through three confirm
+# flows and their call sites is more places to get wrong than this is.
+# Unset => no check, which is the interactive case: the person reading the
+# prompts is the receipt.
+_EXPECT = {"contracts": None, "fill": None}
+
+
+def _expectation_holds(num_contracts, fill) -> bool:
+    """False -> print the refusal and book nothing. Called before the final
+    confirmation in every flow that writes a position, so a mismatch never
+    reaches the database: a MISSING position is visible to the trader, a
+    wrong one is not."""
+    from helm.fill_guard import compare, refusal_text
+    reason = compare(_EXPECT.get("contracts"), _EXPECT.get("fill"),
+                     num_contracts, fill)
+    if reason is None:
+        return True
+    console.print()
+    console.print("[red]%s[/red]" % refusal_text(reason))
+    console.print()
+    return False
+
+
 def confirm_and_log(ticker: str, strategy: str, contracts: list, config: dict,
                     spot: Optional[float], scan_data: Optional[dict] = None,
                     pin_strike=None, pin_expiry=None):
@@ -1265,7 +1292,18 @@ def confirm_and_log(ticker: str, strategy: str, contracts: list, config: dict,
     try:
         num_contracts = int(contracts_str)
     except ValueError:
-        num_contracts = suggested
+        # HELM-152 (W84): REFUSE, never substitute. This branch used to
+        # read `num_contracts = suggested`, and that is precisely how GM
+        # entered the book at 5 contracts when 10 were bought: a
+        # prompt-order shift put a non-integer here and the CLI sized
+        # the position itself, silently. A position booked at a size
+        # nobody chose is worse than no position at all.
+        console.print("[red]Cannot read the contract count: "
+                      "%r[/red]" % (contracts_str,))
+        console.print("[dim]Refusing rather than sizing this myself. "
+                      "Nothing was recorded.[/dim]")
+        console.print()
+        return
     if num_contracts <= 0:
         console.print("[dim]Cancelled -- zero contracts.[/dim]")
         console.print()
@@ -1277,6 +1315,8 @@ def confirm_and_log(ticker: str, strategy: str, contracts: list, config: dict,
     premium_label = f"collect ${total_premium:.0f}" if direction == "SHORT" else f"pay ${total_premium:.0f}"
 
     console.print()
+    if not _expectation_holds(num_contracts, fill_price):
+        return
     if not Confirm.ask(
         f"  Open [bold]{num_contracts}x {ticker} {selected['opt_type']} "
         f"${selected['strike']:.1f} {selected['expiration']}[/bold] "
@@ -1417,7 +1457,18 @@ def confirm_spread(ticker: str, strategy: str, spreads: list, config: dict,
     try:
         num_contracts = int(contracts_str)
     except ValueError:
-        num_contracts = suggested_n
+        # HELM-152 (W84): REFUSE, never substitute. This branch used to
+        # read `num_contracts = suggested_n`, and that is precisely how GM
+        # entered the book at 5 contracts when 10 were bought: a
+        # prompt-order shift put a non-integer here and the CLI sized
+        # the position itself, silently. A position booked at a size
+        # nobody chose is worse than no position at all.
+        console.print("[red]Cannot read the contract count: "
+                      "%r[/red]" % (contracts_str,))
+        console.print("[dim]Refusing rather than sizing this myself. "
+                      "Nothing was recorded.[/dim]")
+        console.print()
+        return
     short_bid = float(b["short_bid"])
     long_ask = float(b["long_ask"])
     modeled_net = round(short_bid - long_ask, 2)
@@ -1435,6 +1486,8 @@ def confirm_spread(ticker: str, strategy: str, spreads: list, config: dict,
     total_credit_amt = round(net_credit * 100 * num_contracts, 2)
     max_risk = round((width - net_credit) * 100 * num_contracts, 2)
     console.print()
+    if not _expectation_holds(num_contracts, net_credit):
+        return
     if not Confirm.ask(f"  Open [bold]{num_contracts}x {ticker} {pretty} ${ss:.0f}/${lstk:.0f} {opt_type} {exp}[/bold] @ net ${net_credit:.2f} (collect ${total_credit_amt:.0f})?", default=True):
         console.print("[dim]Cancelled.[/dim]")
         console.print()
@@ -1878,7 +1931,18 @@ def confirm_condor(ticker: str, strategy: str, condors: list, config: dict,
     try:
         num_contracts = int(contracts_str)
     except ValueError:
-        num_contracts = suggested
+        # HELM-152 (W84): REFUSE, never substitute. This branch used to
+        # read `num_contracts = suggested`, and that is precisely how GM
+        # entered the book at 5 contracts when 10 were bought: a
+        # prompt-order shift put a non-integer here and the CLI sized
+        # the position itself, silently. A position booked at a size
+        # nobody chose is worse than no position at all.
+        console.print("[red]Cannot read the contract count: "
+                      "%r[/red]" % (contracts_str,))
+        console.print("[dim]Refusing rather than sizing this myself. "
+                      "Nothing was recorded.[/dim]")
+        console.print()
+        return
 
     # Conservative per-leg fills (short -> bid, long -> ask); modeled net = signed sum.
     sp_bid = float(c["short_put_bid"]); lp_ask = float(c["long_put_ask"])
@@ -1906,6 +1970,8 @@ def confirm_condor(ticker: str, strategy: str, condors: list, config: dict,
 
     total_credit_amt = round(net_credit * 100 * num_contracts, 2)
     console.print()
+    if not _expectation_holds(num_contracts, net_credit):
+        return
     if not Confirm.ask(
         f"  Open [bold]{num_contracts}x {ticker} Iron Condor "
         f"{c['short_put']:.0f}/{c['long_put']:.0f}P {c['short_call']:.0f}/{c['long_call']:.0f}C "
@@ -3028,6 +3094,12 @@ def run():
         elif args[i] == "--strike" and i+1 < len(args):      pin_strike = args[i+1]; i += 2
         elif args[i] == "--expiry" and i+1 < len(args):      pin_expiry = args[i+1]; i += 2
         elif args[i] == "--long-strike" and i+1 < len(args): pin_long = args[i+1]; i += 2
+        # HELM-152 (W84): what the caller says it is logging. Checked against
+        # what is about to be booked, before anything is written.
+        elif args[i] == "--expect-contracts" and i+1 < len(args):
+            _EXPECT["contracts"] = args[i+1]; i += 2
+        elif args[i] == "--expect-fill" and i+1 < len(args):
+            _EXPECT["fill"] = args[i+1]; i += 2
         else: positional.append(args[i]); i += 1
 
     # Half a pin is worse than none: it reads as "this exact contract" while

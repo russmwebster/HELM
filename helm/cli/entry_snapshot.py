@@ -50,6 +50,8 @@ def capture_entry_snapshot(
     open_interest: Optional[int] = None,
     bid_ask_spread: Optional[float] = None,
     bid_ask_spread_pct: Optional[float] = None,
+    bid: Optional[float] = None,
+    ask: Optional[float] = None,
     ticker: Optional[str] = None,
     conn=None,
 ) -> str:
@@ -110,16 +112,16 @@ def capture_entry_snapshot(
                 iv_current, iv_rank, iv_percentile, delta, gamma, theta, vega,
                 atr_14, atr_strikes_otm, dte,
                 days_to_earnings, premium_collected,
-                open_interest, bid_ask_spread, bid_ask_spread_pct,
+                open_interest, bid_ask_spread, bid_ask_spread_pct, bid, ask,
                 theta_per_day, settings_snapshot, created_at
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, (
             snap_id, position_id, leg_id, now,
             spot_price, week_52_high, week_52_low,
             iv_current, iv_rank, iv_percentile, delta, gamma, theta, vega,
             atr_14, atr_strikes_otm, dte,
             days_to_earnings, premium_collected,
-            open_interest, bid_ask_spread, bid_ask_spread_pct,
+            open_interest, bid_ask_spread, bid_ask_spread_pct, bid, ask,
             theta, settings_snap, now
         ))
 
@@ -239,6 +241,7 @@ def open_position_with_snapshot(
             portfolio_value=portfolio_value,
             open_interest=contract.get("oi"),
             bid_ask_spread=contract.get("spread"),
+        bid=contract.get("bid"), ask=contract.get("ask"),
             bid_ask_spread_pct=contract.get("spread_pct"),
             conn=conn,
         )
@@ -418,6 +421,7 @@ def open_multileg_with_snapshot(
             portfolio_value=portfolio_value,
             open_interest=p_lg.get("oi"),
             bid_ask_spread=p_lg.get("spread"),
+            bid=p_lg.get("bid"), ask=p_lg.get("ask"),
             bid_ask_spread_pct=p_lg.get("spread_pct"),
             conn=conn,
         )
