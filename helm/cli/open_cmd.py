@@ -2158,7 +2158,14 @@ def display_condors(ticker: str, strategy: str, config: dict, condors: list,
         # a pin and quietly ignore it -- which would read as "this exact
         # structure" while behaving exactly as before -- refuse. Silently
         # ignoring a safety argument is the worse failure of the two.
-        if pin_strike is not None:
+        # HELM-153 (s99): read the pin from `args`, which this function is
+        # actually given. This tested `pin_strike`, a name never passed in,
+        # so the refusal path RAISED NameError instead of refusing -- before
+        # any prompt and before any write. Every condor `--confirm` has
+        # crashed this way since s86; the intent below was always right, the
+        # variable was not. Same behaviour: a pinned condor is refused, an
+        # unpinned one goes on to the prompts.
+        if "--strike" in args or "--expiry" in args:
             console.print("[red]--strike/--expiry are not wired for iron "
                           "condors.[/red]")
             console.print("[dim]A condor is four legs; one strike does not name "
