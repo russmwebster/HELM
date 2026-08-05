@@ -92,6 +92,7 @@ def leg_mid(tk, leg):
 
 
 def main():
+    _started = datetime.now().isoformat()
     mode = "DRY RUN" if DRY else "ACTING"
     print(f"[{datetime.now().isoformat(timespec='seconds')}] paper_exit_agent "
           f"start ({mode}, root {ROOT})")
@@ -167,6 +168,23 @@ def main():
             skipped += 1
             print(f"  {pos['ticker']}: close write failed")
 
+    # s100: record the run in the ledger. Until now this agent left only a
+    # log file, so a night it never fired looked identical to a quiet one.
+    # DRY runs are excluded deliberately: they journal nothing by design and
+    # would derive EMPTY.
+    if not DRY:
+        try:
+            from helm import agent_runs as _ar
+            _c = get_conn()
+            _ar.ensure_table(_c)
+            _ar.record_run(_c, _ar.AGENT_EXITS, _started,
+                           datetime.now().isoformat(),
+                           len(rows), closed, skipped,
+                           notes=("held %d" % held) if held else None)
+            _c.close()
+        except Exception as _e:
+            # not silent: this whole change exists to stop silent gaps
+            print('  ledger write failed: %s' % _e)
     tail = (f"{would} would-close" if DRY else f"{closed} closed")
     print(f"[{datetime.now().isoformat(timespec='seconds')}] done: {tail}, "
           f"{held} held, {skipped} skipped")

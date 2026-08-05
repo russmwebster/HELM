@@ -131,6 +131,7 @@ def _chunks(lst, n):
 
 def cmd_refresh(args: list) -> None:
     """Fetch IV history from IBKR and compute IVR/IVP for watchlist tickers."""
+    _ivr_started = datetime.now().isoformat()
     from helm.ibkr import get_ib
     # HELM-037: refresh open-position earnings_date on this pre-market run
     # (moved off /health render so /health is read-only)
@@ -225,6 +226,22 @@ def cmd_refresh(args: list) -> None:
     except Exception:
         pass
 
+    # s100: record this run in the ledger. It used to leave only a log
+    # file, so a morning it never fired read the same as a quiet one --
+    # and it fires inside the gateway warm-up window, where failing is
+    # the documented risk.
+    try:
+        from helm import agent_runs as _ar
+        _c = get_conn()
+        _ar.ensure_table(_c)
+        _ar.record_run(_c, _ar.AGENT_IVR, _ivr_started,
+                       datetime.now().isoformat(),
+                       len(tickers), results['ok'], results['fail'],
+                       notes=("; ".join(failures[:12]) or None))
+        _c.close()
+    except Exception as _e:
+        # not silent: this whole change exists to stop silent gaps
+        console.print('  [yellow]ledger write failed:[/yellow] %s' % _e)
     console.print()
     console.print(f"  [green]✓[/green]  {results['ok']} tickers updated")
     if failures:

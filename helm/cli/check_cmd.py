@@ -2805,6 +2805,7 @@ def cmd_snapshot(args):
     VERDICT_FAILURES.clear()
     _started = datetime.now().isoformat()
     attempted = 0
+    _attempted_ids = []
     for pos in positions:
         conn = get_conn()
         legs = [dict(r) for r in conn.execute(
@@ -2813,6 +2814,7 @@ def cmd_snapshot(args):
         conn.close()
         check_one(pos, legs, persist=True)
         attempted += 1
+        _attempted_ids.append(pos["id"])
     _finished = datetime.now().isoformat()
 
     journaled = 0
@@ -2823,11 +2825,24 @@ def cmd_snapshot(args):
             "SELECT COUNT(*) FROM checks WHERE checked_at >= ?",
             (_started,)).fetchone()[0]
         _failed = list(VERDICT_FAILURES)
+        # s100: name the positions that were attempted but never reached the
+        # journal. save_check drops a non-live reading silently, so without
+        # this the only trace is attempted != journaled with no clue which.
+        _landed = {r[0] for r in conn.execute(
+            "SELECT DISTINCT position_id FROM checks WHERE checked_at >= ?",
+            (_started,)).fetchall()}
+        _dropped = sorted(p for p in _attempted_ids if p not in _landed)
+        _bits = []
+        _ft = sorted({f["ticker"] or "?" for f in _failed})
+        if _ft:
+            _bits.append("verdict-failed: " + "; ".join(_ft))
+        if _dropped:
+            _bits.append("not-journaled (%d): %s" % (
+                len(_dropped), "; ".join(_dropped[:12])))
         _ar.record_run(
             conn, _ar.AGENT_SNAPSHOT, _started, _finished,
             attempted, journaled, len(_failed),
-            notes=("; ".join(sorted({f["ticker"] or "?" for f in _failed}))
-                   or None))
+            notes=(" | ".join(_bits) or None))
         conn.close()
     except Exception:
         pass

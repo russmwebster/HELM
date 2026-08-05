@@ -27,6 +27,8 @@ trade for a counter that gates an exit.
 from datetime import datetime, timedelta, date
 
 AGENT_SNAPSHOT = 'com.helm.snapshot.daily'
+AGENT_EXITS    = 'com.helm.paper.exits'
+AGENT_IVR      = 'com.helm.ivr.refresh'
 
 # The schedule com.helm.snapshot.daily actually carries (15 explicit entries:
 # weekdays 1-5 x three slots). Mirrored here rather than parsed from the plist,
@@ -97,6 +99,13 @@ def record_run(conn, agent, started_at, finished_at, attempted, journaled,
         status = 'EMPTY'
     elif failed:
         status = 'PARTIAL'
+    elif (attempted or 0) > (journaled or 0):
+        # s100: a slot can journal fewer rows than it attempted with no
+        # verdict failing at all -- save_check drops a reading whose quote
+        # was not live (HELM-037). That drop is deliberate; reporting it as
+        # OK is not. 2026-07-29 lost 59 readings this way and recorded a
+        # clean day. attempted vs journaled was already in scope, unused.
+        status = 'SHORTFALL'
     else:
         status = 'OK'
     try:
