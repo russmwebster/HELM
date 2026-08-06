@@ -31,7 +31,8 @@ dict and returns clauses. That is what makes it testable without a database.
 SELL_STRATEGIES = ("CSP", "IRON_CONDOR", "BEAR_CALL_SPREAD", "BULL_PUT_SPREAD")
 BUY_STRATEGIES = ("LONG_CALL",)
 
-EARN_NEAR_DAYS = 10      # a print this close is what the rank is pricing
+EARN_NEAR_DAYS = 10
+EARN_HV_WINDOW = 30   # a print inside this many days sits in HV30 and distorts VRP      # a print this close is what the rank is pricing
 DIVERGENCE_PTS = 20      # IVR vs IVP gap that implies a single-spike rank
 IVR_RICH = 50.0
 IVR_CHEAP = 25.0
@@ -74,6 +75,8 @@ def vol_read(row):
     vrp = _num(row.get("vrp"))
     d2e = _num(row.get("days_to_earnings"))
     src = row.get("hv_30_source")
+    hvx = _num(row.get("hv_30_ex_earn"))
+    dsince = _num(row.get("earn_days_since"))
 
     # 1 - CAUSE. An elevated rank with a print days away is the event being
     # priced. Avoiding or deliberately structuring around a print inside the
@@ -93,8 +96,17 @@ def vol_read(row):
     if iv is not None and hv is not None and vrp is not None:
         if selling:
             if vrp < 0:
-                out.append("⚠ IV %.0f vs HV %.0f - selling BELOW realized (VRP %+.1f)"
-                           % (iv, hv, vrp))
+                _msg = ("⚠ IV %.0f vs HV %.0f - selling BELOW realized (VRP %+.1f)"
+                        % (iv, hv, vrp))
+                # s100: name what the realized figure contains. A print inside the 30-day
+                # window inflates HV and makes premium read thin - on the 2026-08-05 board
+                # that was 18 of 33 routes, and 3 of 4 negative-VRP CSP names turned
+                # positive once the earnings day was removed. The warning is left exactly
+                # as computed; only the input it read is stated.
+                if hvx is not None and dsince is not None and dsince <= EARN_HV_WINDOW:
+                    _msg += ("; HV includes a print %.0fd ago, ex-earnings VRP %+.1f"
+                             % (dsince, iv - hvx))
+                out.append(_msg)
             elif ivr is not None and ivr >= IVR_RICH:
                 out.append("✓ IVR %.0f elevated and IV %.0f > HV %.0f - rich on both "
                            "tests (VRP %+.1f)" % (ivr, iv, hv, vrp))
