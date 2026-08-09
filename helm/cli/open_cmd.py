@@ -1343,6 +1343,15 @@ def confirm_and_log(ticker: str, strategy: str, contracts: list, config: dict,
             fill_price=fill_price,
             contracts=num_contracts,
             scan_data=scan_data,
+            # W97 (s101): a pinned booking is not a screen
+            # recommendation. W19 grades which screens produce good
+            # outcomes, so do not credit one with a trade it never
+            # proposed.
+            origin_screen=(
+                "MANUAL_PIN"
+                if (pin_strike is not None and pin_expiry is not None)
+                else None
+            ),
         )
 
         net_premium = fill_price * 100 * num_contracts
@@ -3331,7 +3340,15 @@ def run():
         return
 
     try:
-        contracts = evaluate_contracts(ticker, strategy, config, dte_target, top_n)
+        # W97 (s101): a pin is an identity, not a candidate. Give the pin
+        # resolver W85's annotated list (enforce=False keeps refused
+        # contracts) and skip top-N, so a contract the screen would not
+        # PROPOSE can still be RECORDED. Unpinned callers are unchanged.
+        _w97_pinned = pin_strike is not None and pin_expiry is not None
+        contracts = evaluate_contracts(
+            ticker, strategy, config, dte_target,
+            10000 if _w97_pinned else top_n,
+            enforce_long_gates=not _w97_pinned)
     except Exception as e:
         console.print(f"[red]Error:[/red] {e}")
         return
