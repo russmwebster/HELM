@@ -494,6 +494,12 @@ def _confirm_and_add(results, wto_default):
             week_52_high=res.get("week_52_high"),
             week_52_low=res.get("week_52_low"),
             beta=res.get("beta"),
+            # s101: the evaluation above just established whether this
+            # ticker has a real options market. Write it down -- without
+            # these two the row lands active=0 / is_optionable=0 and
+            # `helm scan` (active=1 AND is_optionable=1) never sees it.
+            is_optionable=0 if res.get("verdict") == "FLAG" else 1,
+            active=1,
         )
         added += 1
 
@@ -596,7 +602,7 @@ def cmd_add(args):
             added.append(ticker)
         console.print(f"[green]Added ({len(added)}):[/green] {', '.join(added)}")
         console.print(f"[dim]Watchlist: {len(WatchlistItem.all())} tickers total.[/dim]")
-        console.print(f"[dim]Tip: use [bold]--evaluate[/bold] flag for optionability feedback.[/dim]")
+        console.print(f"[dim]Added, but NOT in scans -- helm scan only sees evaluated tickers. Re-add with [bold]--evaluate[/bold] to include them.[/dim]")
         console.print()
 
 
