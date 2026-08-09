@@ -132,6 +132,16 @@ def _chunks(lst, n):
 def cmd_refresh(args: list) -> None:
     """Fetch IV history from IBKR and compute IVR/IVP for watchlist tickers."""
     _ivr_started = datetime.now().isoformat()
+    # W110 (s102): the IV refresh has no Weekday key at all, so it fires every
+    # calendar day. Holidays are handled here; weekends are decision 1, a plist
+    # change. A weekend/holiday reading skews low and overwrites the stored row
+    # that `helm scan` reads.
+    from helm.market_calendar import agent_should_run, stand_down, AGENT_IVR
+    _run_ok, _why = agent_should_run()
+    if not _run_ok:
+        print("ivr refresh: market closed (%s) -- standing down" % _why)
+        stand_down(AGENT_IVR, _ivr_started, _why)
+        return
     from helm.ibkr import get_ib
     # HELM-037: refresh open-position earnings_date on this pre-market run
     # (moved off /health render so /health is read-only)

@@ -2774,6 +2774,12 @@ def cmd_check_integrity(verbose=False):
         console.print("[green]Integrity: all invariants hold.[/green]")
 
 
+def _dt_now_iso():
+    """W110: local ISO timestamp for the snapshot stand-down record."""
+    from datetime import datetime as _d
+    return _d.now().isoformat()
+
+
 def cmd_snapshot(args):
     """helm snapshot -- sanctioned scheduled writer (HELM-037).
 
@@ -2784,7 +2790,18 @@ def cmd_snapshot(args):
     path. The only difference is that the write lives in this dedicated command
     rather than the overloaded ad-hoc check path. No display table -- this is a
     writer, not a view.
+
+    W110 (s102): stands down when the exchange is shut. Before this, the three
+    slots fired on any weekday -- Juneteenth 2026 journalled 84 marks against a
+    closed market -- and on a 13:00 half-day the 15:15 slot fired hours late.
     """
+    from helm.market_calendar import agent_should_run, stand_down, AGENT_SNAPSHOT
+    _snap_started = _dt_now_iso()
+    _run_ok, _why = agent_should_run()
+    if not _run_ok:
+        print("snapshot: market closed (%s) -- standing down" % _why)
+        stand_down(AGENT_SNAPSHOT, _snap_started, _why)
+        return
     conn = get_conn()
     account_id = get_active_account()
     bc, bp = book_filter(args)

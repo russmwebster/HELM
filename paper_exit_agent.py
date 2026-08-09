@@ -96,8 +96,16 @@ def main():
     mode = "DRY RUN" if DRY else "ACTING"
     print(f"[{datetime.now().isoformat(timespec='seconds')}] paper_exit_agent "
           f"start ({mode}, root {ROOT})")
-    if date.today().weekday() >= 5:
-        print("weekend — nothing to do")
+    # W110 (s102): weekday != trading day. This guard used to test only the
+    # weekday, so it ran on 2026-07-03 and closed seven paper positions against
+    # a shut exchange. Holidays and post-early-close afternoons now stand down,
+    # and the stand-down is RECORDED -- a silent return is indistinguishable
+    # from a crash (HELM-154).
+    from helm.market_calendar import agent_should_run, stand_down, AGENT_EXITS
+    _run_ok, _why = agent_should_run()
+    if not _run_ok:
+        print("market closed (%s) — nothing to do" % _why)
+        stand_down(AGENT_EXITS, _started, _why)
         return
 
     from helm.db import get_conn
