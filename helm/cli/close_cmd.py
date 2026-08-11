@@ -82,6 +82,31 @@ def _show_position_summary(pos, legs):
     console.print(tbl)
 
 
+# HELM-161 (W105): a real close must be able to say WHY. Until now the CLI
+# entrypoint hardcoded reason="manual" -- the parameter existed and was threaded
+# all the way to pos.close(), but nothing ever passed anything else (roll.py is
+# the sole exception). 55 real closes carry "manual" and 15 carry nothing, so
+# "took profit at target" and "changed my mind" are the same row.
+#
+# The vocabulary is DELIBERATELY IDENTICAL to what the paper exit agent writes,
+# so real and paper closes pool in one analysis. Do not add a synonym here that
+# the agent does not emit. (Note: the real book also holds 5 legacy "TARGET"
+# rows, which are PROFIT_TARGET under an older name -- not normalised here.)
+EXIT_REASONS = (
+    "PROFIT_TARGET",   # hit the profit objective
+    "DTE_MANAGE",      # closed at/near the management deadline
+    "STOP",            # cut the loss
+    "GIVE_BACK",       # gave back too much from the peak (long side)
+    "THESIS_BREAK",    # the reason for the trade stopped being true
+    "PROFIT_FLOOR",    # locked a floor in on a winner
+    "ASSIGNED",        # short leg assigned
+    "EXPIRED",         # expired worthless
+    "ROLLED",          # closed as one half of a roll
+    "DISCRETIONARY",   # my judgement, no rule fired -- honest, not unrecorded
+)
+DEFAULT_EXIT_REASON = "manual"
+
+
 def _finalize_close(pos, legs, close_prices, reason="manual"):
     """Write a close: net P&L across legs, close legs + position, snapshot.
     Pure persistence -- no prompts, no confirm. Shared by interactive close
@@ -181,20 +206,32 @@ def run():
         console.print("                     the selection prompt. For non-interactive")
         console.print("                     callers (the PG web UI) that must not")
         console.print("                     identify a trade by its place in a list.\n")
+        console.print("  [cyan]--reason NAME[/cyan]     Why the position was closed. One of:")
+        console.print("                     [dim]" + ", ".join(EXIT_REASONS) + "[/dim]")
+        console.print("                     [dim]Omitted records the legacy 'manual'.[/dim]\n")
         return
 
     # Parse. --position-id is the only flag; everything else stays positional so
     # `helm close TICKER` is byte-for-byte the command it has always been.
     position_id = None
+    reason = DEFAULT_EXIT_REASON
     positional = []
     i = 0
     while i < len(args):
         if args[i] == "--position-id" and i + 1 < len(args):
             position_id = args[i + 1].strip()
             i += 2
+        elif args[i] == "--reason" and i + 1 < len(args):
+            reason = args[i + 1].strip().upper()
+            i += 2
         else:
             positional.append(args[i])
             i += 1
+
+    if reason != DEFAULT_EXIT_REASON and reason not in EXIT_REASONS:
+        console.print(f"\n[red]Unknown --reason {reason}.[/red]")
+        console.print("[dim]One of: " + ", ".join(EXIT_REASONS) + "[/dim]\n")
+        return
 
     if not positional:
         console.print("[red]Specify a ticker.[/red]  [dim]helm close AAPL[/dim]")
@@ -245,4 +282,4 @@ def run():
     if not legs:
         console.print(f"\n[red]No legs found for {ticker}.[/red]\n")
         return
-    close_position(pos, legs, reason="manual")
+    close_position(pos, legs, reason=reason)
