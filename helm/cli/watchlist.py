@@ -667,18 +667,16 @@ def cmd_list(args):
     t.add_column("Mkt Cap",    justify="right", width=8)
     t.add_column("Optionable", justify="center", width=11)
     t.add_column("WTO",        justify="center", width=5)
-    t.add_column("Screened",   style="dim", width=12)
     t.add_column("Open Pos",   justify="center", width=8)
 
     for item in items:
         opt     = "[green]YES[/green]" if item.is_optionable else "[dim]no[/dim]"
         wto     = "[green]Y[/green]" if item.willing_to_own else "[red]N[/red]"
-        screened= item.last_screened_at[:10] if item.last_screened_at else "[dim]never[/dim]"
         cap     = f"${item.market_cap:.0f}B" if item.market_cap else "--"
         open_pos= Position.by_ticker(item.ticker, status="OPEN")
         pos_str = str(len(open_pos)) if open_pos else "[dim]—[/dim]"
         t.add_row(item.ticker, (item.company_name or "")[:20],
-                  (item.sector or "")[:13], cap, opt, wto, screened, pos_str)
+                  (item.sector or "")[:13], cap, opt, wto, pos_str)
 
     console.print(t)
     total = len(WatchlistItem.all())
