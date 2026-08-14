@@ -286,6 +286,11 @@ class Audit:
                 if near:
                     self.add(PASS, name, f"ran at {(near[0]['started_at'] or '')[11:16]}")
                     continue
+                if not self._slot_due(nominal):
+                    self.add(SKIP, name,
+                             "not due yet — scheduled %s, it is %s"
+                             % (nominal, self._now_hhmm()))
+                    continue
                 up = self.machine_up_at(nominal)
                 if up is False:
                     self.add(
@@ -610,6 +615,23 @@ class Audit:
         except (TypeError, ValueError):
             return None
 
+    @staticmethod
+    def _now_hhmm():
+        return datetime.now().strftime("%H:%M")
+
+    def _slot_due(self, nominal):
+        """Has this slot's window closed yet?
+
+        Only meaningful when auditing TODAY. A run may start up to
+        SLOT_TOLERANCE_MIN late and still be its slot, so the slot is not
+        overdue until that window has passed. Before then the absence of a run
+        means "not yet", which is a different fact from "missing" and must
+        never be rendered as one.
+        """
+        if not getattr(self, "is_today", False):
+            return True
+        return _mins(self._now_hhmm()) > _mins(nominal) + SLOT_TOLERANCE_MIN
+
     def _slot_for(self, started_at, nominals):
         """Nearest nominal slot, and the signed drift in minutes.
 
@@ -629,6 +651,112 @@ class Audit:
                 best = nominal
                 drift = delta
         return best, drift
+
+    def build_sampler(self):
+        """Typed connectivity timeline from the sampler CSV.
+
+        machine_liveness() counts rows per hour and discards `connected` and
+        `note`. That is enough to answer "was the machine up", which is all the
+        assertions need, but not enough to answer "when was the broker
+        unreachable" -- which is the question a trader actually has when a day
+        looks thin.
+
+        A SWEEP is one timestamp across all sampled tickers. A sweep counts as
+        disconnected only when EVERY row in it is disconnected, so a single
+        ticker failing does not manufacture an outage.
+        """
+        out = {
+            "source": "logs/mktdata_samples.csv",
+            "available": False,
+            "note": ("The sampler is the load-bearing witness for machine "
+                     "liveness and nothing witnesses the sampler. Its silence "
+                     "cannot distinguish 'machine off' from 'sampler dead'."),
+            "sweeps": 0,
+            "rth_sweeps": 0,
+            "rth_sweeps_normal": "123-126 ROWS/day; ~41 sweeps",
+            "connected_sweeps": 0,
+            "disconnected_sweeps": 0,
+            "first_ts": None,
+            "last_ts": None,
+            "hours": [],
+            "outages": [],
+        }
+        if not SAMPLER_CSV.exists():
+            return out
+
+        sweeps = {}
+        try:
+            with open(SAMPLER_CSV, errors="replace") as fh:
+                for row in csv.DictReader(fh):
+                    ts = row.get("ts", "") or ""
+                    if not ts.startswith(self.date):
+                        continue
+                    live = str(row.get("connected", "")).strip() == "1"
+                    rec = sweeps.setdefault(ts, {"live": False, "rows": 0,
+                                                 "note": ""})
+                    rec["rows"] += 1
+                    if live:
+                        rec["live"] = True
+                    elif not rec["note"]:
+                        rec["note"] = (row.get("note") or "")[:80]
+        except Exception:
+            return out
+
+        out["available"] = True
+        if not sweeps:
+            return out
+
+        keys = sorted(sweeps)
+        out["sweeps"] = len(keys)
+        out["first_ts"] = keys[0]
+        out["last_ts"] = keys[-1]
+
+        hours = {}
+        for ts in keys:
+            hh = ts[11:13]
+            h = hours.setdefault(hh, {"hh": hh, "sweeps": 0, "connected": 0,
+                                      "disconnected": 0})
+            h["sweeps"] += 1
+            if sweeps[ts]["live"]:
+                h["connected"] += 1
+                out["connected_sweeps"] += 1
+            else:
+                h["disconnected"] += 1
+                out["disconnected_sweeps"] += 1
+            if "09:30" <= ts[11:16] <= "16:00":
+                out["rth_sweeps"] += 1
+        out["hours"] = [hours[k] for k in sorted(hours)]
+
+        # Contiguous runs of fully-disconnected sweeps.
+        start = None
+        last = None
+        reason = ""
+        for ts in keys:
+            if not sweeps[ts]["live"]:
+                if start is None:
+                    start = ts
+                    reason = sweeps[ts]["note"]
+                last = ts
+            elif start is not None:
+                out["outages"].append({"from": start[11:16], "to": last[11:16],
+                                       "sweeps": 0, "reason": reason})
+                start = None
+        if start is not None:
+            out["outages"].append({"from": start[11:16], "to": last[11:16],
+                                   "sweeps": 0, "reason": reason})
+        for o in out["outages"]:
+            o["sweeps"] = sum(
+                1 for ts in keys
+                if o["from"] <= ts[11:16] <= o["to"] and not sweeps[ts]["live"]
+            )
+            # An outage matters when it overlaps RTH. Outside it, a shut
+            # gateway is the normal overnight state, not a fault.
+            o["in_rth"] = bool(o["from"] <= "16:00" and o["to"] >= "09:30")
+        out["rth_outages"] = [o for o in out["outages"] if o["in_rth"]]
+        out["rth_outage_sweeps"] = sum(
+            o["sweeps"] for o in out["rth_outages"]
+        )
+        return out
 
     def build_agents(self, is_today):
         """Typed per-agent brief. Called only on the --json path."""
@@ -706,6 +834,14 @@ class Audit:
                 entry["state_reason"] = (
                     "non-session day, and this agent recorded nothing at all"
                 )
+            elif not entry["runs"] and not any(
+                    self._slot_due(s) for s in nominals):
+                entry["state"] = "NOT_DUE"
+                entry["state_reason"] = (
+                    "nothing scheduled has come round yet today: "
+                    + ", ".join(nominals)
+                )
+                entry["pending_slots"] = list(nominals)
             elif not entry["runs"]:
                 entry["state"] = "NO_EVIDENCE"
                 entry["state_reason"] = (
@@ -716,10 +852,19 @@ class Audit:
                     "is broken."
                 )
             else:
-                entry["missing_slots"] = [
-                    s for s in nominals if s not in landed
+                absent = [s for s in nominals if s not in landed]
+                entry["pending_slots"] = [
+                    s for s in absent if not self._slot_due(s)
                 ]
-                if entry["missing_slots"]:
+                entry["missing_slots"] = [
+                    s for s in absent if self._slot_due(s)
+                ]
+                if entry["pending_slots"] and not entry["missing_slots"]:
+                    entry["state"] = "IN_PROGRESS"
+                    entry["state_reason"] = (
+                        "still to come today: " + ", ".join(entry["pending_slots"])
+                    )
+                elif entry["missing_slots"]:
                     entry["state"] = "PARTIAL_SLOTS"
                     entry["state_reason"] = (
                         "no run row landed on: "
@@ -759,6 +904,10 @@ class Audit:
                 _e["outcome_reason"] = (
                     "market closed; the agent declined to work, as designed"
                 )
+                continue
+            if _e["state"] in ("NOT_DUE", "IN_PROGRESS") and not _e["runs"]:
+                _e["outcome"] = "PENDING"
+                _e["outcome_reason"] = "the day is not finished"
                 continue
             if not _e["runs"]:
                 _e["outcome"] = "NO_RUNS"
@@ -842,6 +991,7 @@ class Audit:
         return agents
 
     def run(self, is_today):
+        self.is_today = is_today
         self.check_session()
         self.check_roster(is_today)
         if not getattr(self, "is_session", True):
@@ -941,9 +1091,11 @@ def run():
 
     if args.json:
         a.build_agents(is_today)
+        a.sampler = a.build_sampler()
         print(_json.dumps(
             {"date": date_str, "run_at": clock, "failed": a.failed,
              "agents": a.agents,
+             "sampler": a.sampler,
              "results": a.results, "blind_spots": a.blind}, indent=2))
     else:
         text = render(a, clock)
