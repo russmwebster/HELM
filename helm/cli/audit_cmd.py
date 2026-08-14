@@ -532,6 +532,315 @@ class Audit:
 
     # ---------- run ----------
 
+    # ---------- per-agent brief (typed; consumed by the PG dashboard) ----------
+    #
+    # Everything below is TYPED. A UI must never parse the human-readable
+    # strings in `results` -- that is scraping our own rendering, and it breaks
+    # silently the day someone improves the wording.
+    #
+    # Three rules this block obeys:
+    #   1. THREE states, never two. An agent that left no evidence is not
+    #      "fine", and must not share a rendering with one that reported.
+    #   2. The slot is DERIVED from started_at, never read from
+    #      agent_runs.slot, which is NULL on a large minority of rows
+    #      (measured s105: 8 of 28 snapshot.daily rows since 2026-08-01).
+    #      A UI keyed on that column would lose runs silently.
+    #   3. paper.exits' status word is derived on a different axis from every
+    #      other agent and does not mean what it means elsewhere (W102). It is
+    #      exposed as raw_status with its meaning stated, never as health.
+
+    AGENT_SPEC = [
+        ("com.helm.ivr.refresh", "ivr", ["09:35"],
+         "Refreshes IV rank across the watchlist", "agent_runs"),
+        ("com.helm.snapshot.daily", "snapshot", ["10:00", "12:30", "15:15"],
+         "Journals a mark for every open position", "agent_runs"),
+        ("com.helm.paper.exits", "exits", ["15:35"],
+         "Applies the exit doctrine to the paper book", "agent_runs"),
+        ("com.helm.mktsampler", None, [],
+         "Samples the market every 10 minutes; the liveness witness",
+         "sampler_csv"),
+        ("com.helm.audit.eod", None, ["16:15"],
+         "Audits whether the day collected properly", "self"),
+    ]
+
+    @staticmethod
+    def _parse_notes(notes):
+        """Pull the NAMES out of a run note. Returns (names, kind).
+
+        A count is not a name. "82 of 83" hides that it is the SAME ticker
+        failing every day, which is the difference between a transient failure
+        and a structural exclusion.
+
+        Two shapes are written today:
+            snapshot: "not-journaled (13): AMD-IRON_CONDOR-...; DELL-..."
+            ivr:      "SKHY"
+        Anything unrecognised returns kind="raw" rather than being dropped.
+        """
+        if not notes:
+            return [], "none"
+        text = str(notes).strip()
+        if ":" in text and "(" in text.split(":", 1)[0]:
+            head, tail = text.split(":", 1)
+            names = [x.strip() for x in tail.split(";") if x.strip()]
+            return names, (head.split("(")[0].strip() or "listed")
+        if text.lower().startswith("held "):
+            return [], "held"
+        parts = [x.strip() for x in text.replace(";", ",").split(",") if x.strip()]
+        if parts and all(len(x) <= 12 and " " not in x for x in parts):
+            return parts, "tickers"
+        return [], "raw"
+
+    @staticmethod
+    def _claimed_count(notes):
+        """The count a run note CLAIMS, e.g. 13 from "not-journaled (13): ...".
+
+        Returned separately from the parsed names so the two can be compared.
+        They do not always agree -- see the header of the patch that added
+        this -- and a list that is quietly shorter than its own count is worse
+        than no list, because it reads as complete.
+        """
+        if not notes:
+            return None
+        text = str(notes)
+        if "(" not in text or ")" not in text:
+            return None
+        inner = text.split("(", 1)[1].split(")", 1)[0].strip()
+        try:
+            return int(inner)
+        except (TypeError, ValueError):
+            return None
+
+    def _slot_for(self, started_at, nominals):
+        """Nearest nominal slot, and the signed drift in minutes.
+
+        Drift is a NUMBER on purpose. A 10:00 snapshot that launchd fired at
+        14:20 when the lid opened produced a mark stamped with the wrong market
+        moment -- a wrong number, not a missing one -- and a UI cannot show the
+        severity of that from the string "ran at 14:20".
+        """
+        if not started_at or not nominals:
+            return None, None
+        actual = _mins(started_at[11:16])
+        best = None
+        drift = None
+        for nominal in nominals:
+            delta = actual - _mins(nominal)
+            if drift is None or abs(delta) < abs(drift):
+                best = nominal
+                drift = delta
+        return best, drift
+
+    def build_agents(self, is_today):
+        """Typed per-agent brief. Called only on the --json path."""
+        session = getattr(self, "is_session", True)
+        rows = self.q(
+            "select agent, started_at, status, attempted, journaled, failed, "
+            "notes from agent_runs where date(started_at) = ? "
+            "order by started_at",
+            (self.date,),
+        )
+
+        agents = {}
+        for label, match, nominals, role, source in self.AGENT_SPEC:
+            entry = {
+                "label": label.replace("com.helm.", ""),
+                "role": role,
+                "evidence_source": source,
+                "expected_slots": list(nominals),
+                "runs": [],
+                "missing_slots": [],
+                "state": "",
+                "state_reason": "",
+            }
+
+            if source != "agent_runs":
+                # These two write no run row BY DESIGN. Absence from the ledger
+                # is expected here, and rendering it as a missed run would be
+                # the same defect this block exists to prevent, inverted.
+                entry["state"] = "NO_LEDGER_BY_DESIGN"
+                entry["state_reason"] = (
+                    "samples to logs/mktdata_samples.csv and writes no run row"
+                    if source == "sampler_csv"
+                    else "runs read-only and records nothing about itself"
+                )
+                agents[label] = entry
+                continue
+
+            mine = [r for r in rows if match in (r["agent"] or "")]
+            for r in mine:
+                slot, drift = self._slot_for(r["started_at"], nominals)
+                names, kind = self._parse_notes(r["notes"])
+                entry["runs"].append({
+                    "started_at": r["started_at"],
+                    "slot": slot,
+                    "drift_min": drift,
+                    "mistimed": bool(
+                        drift is not None and abs(drift) > SLOT_TOLERANCE_MIN
+                    ),
+                    "raw_status": r["status"],
+                    "attempted": r["attempted"],
+                    "journaled": r["journaled"],
+                    "failed": r["failed"],
+                    "names": names,
+                    "names_kind": kind,
+                    "names_claimed": self._claimed_count(r["notes"]),
+                    "names_incomplete": bool(
+                        self._claimed_count(r["notes"]) is not None
+                        and self._claimed_count(r["notes"]) != len(names)
+                    ),
+                })
+
+            landed = set()
+            for r in entry["runs"]:
+                if r["slot"] and not r["mistimed"]:
+                    landed.add(r["slot"])
+            stood_down = any(
+                r["raw_status"] == "SKIPPED_CLOSED" for r in entry["runs"]
+            )
+
+            if stood_down:
+                entry["state"] = "STOOD_DOWN"
+                entry["state_reason"] = "recorded SKIPPED_CLOSED"
+            elif not session:
+                entry["state"] = "NO_EVIDENCE"
+                entry["state_reason"] = (
+                    "non-session day, and this agent recorded nothing at all"
+                )
+            elif not entry["runs"]:
+                entry["state"] = "NO_EVIDENCE"
+                entry["state_reason"] = (
+                    "no run row for this date. An agent that cannot reach the "
+                    "broker exits WITHOUT writing one, so this is "
+                    "indistinguishable from the agent never having been "
+                    "loaded. Read machine liveness before concluding the agent "
+                    "is broken."
+                )
+            else:
+                entry["missing_slots"] = [
+                    s for s in nominals if s not in landed
+                ]
+                if entry["missing_slots"]:
+                    entry["state"] = "PARTIAL_SLOTS"
+                    entry["state_reason"] = (
+                        "no run row landed on: "
+                        + ", ".join(entry["missing_slots"])
+                    )
+                else:
+                    entry["state"] = "REPORTED"
+                    entry["state_reason"] = (
+                        "every expected slot has a run row within tolerance"
+                    )
+
+            agents[label] = entry
+
+        # paper.exits: its status word is meaningless, and what the agent
+        # actually DID is not in the ledger at all -- it is in the book.
+        # ---- outcome: a SECOND axis, deliberately not folded into state ----
+        #
+        # state   answers "did the agent report?"
+        # outcome answers "did it produce anything?"
+        #
+        # These are different questions and 2026-08-12 is the proof: three
+        # snapshot runs landed exactly on their slots and journaled NOTHING
+        # through a broker outage. On one axis that day is indistinguishable
+        # from a clean one. Measured s105 -- the first cut of this block did
+        # exactly that, which is why the axis exists.
+        for _label, _e in agents.items():
+            _e["attempted_total"] = None
+            _e["journaled_total"] = None
+            _e["lost"] = None
+
+            if _e["state"] == "NO_LEDGER_BY_DESIGN":
+                _e["outcome"] = "NOT_APPLICABLE"
+                _e["outcome_reason"] = "no run ledger to judge work from"
+                continue
+            if _e["state"] == "STOOD_DOWN":
+                _e["outcome"] = "STOOD_DOWN"
+                _e["outcome_reason"] = (
+                    "market closed; the agent declined to work, as designed"
+                )
+                continue
+            if not _e["runs"]:
+                _e["outcome"] = "NO_RUNS"
+                _e["outcome_reason"] = (
+                    "nothing to judge -- the agent left no row at all"
+                )
+                continue
+            if _label == "com.helm.paper.exits":
+                # Its attempted/journaled are evaluated/closed, so summing them
+                # as work would repeat the very error this brief documents.
+                _e["outcome"] = "SEE_CLOSED"
+                _e["outcome_reason"] = (
+                    "this agent's attempted/journaled mean EVALUATED/CLOSED, "
+                    "so they cannot be read as work done. Read closed_count "
+                    "and closed[] instead."
+                )
+                continue
+
+            _att = sum((r["attempted"] or 0) for r in _e["runs"])
+            _jou = sum((r["journaled"] or 0) for r in _e["runs"])
+            _e["attempted_total"] = _att
+            _e["journaled_total"] = _jou
+            _e["lost"] = _att - _jou
+
+            if _att == 0:
+                _e["outcome"] = "NOTHING_ATTEMPTED"
+                _e["outcome_reason"] = "the agent ran but had nothing to do"
+            elif _jou == 0:
+                _e["outcome"] = "NOTHING_JOURNALED"
+                _e["outcome_reason"] = (
+                    "ran %d time(s) and recorded NOTHING. It reported; it did "
+                    "not work." % len(_e["runs"])
+                )
+            elif _jou < _att:
+                _e["outcome"] = "SHORTFALL"
+                _e["outcome_reason"] = (
+                    "%d of %d journaled; %d lost" % (_jou, _att, _att - _jou)
+                )
+            else:
+                _e["outcome"] = "COMPLETE"
+                _e["outcome_reason"] = "%d of %d journaled" % (_jou, _att)
+
+        exits = agents.get("com.helm.paper.exits")
+        if exits is not None:
+            exits["status_meaning"] = (
+                "attempted = positions EVALUATED, journaled = positions "
+                "CLOSED. Derived on a different axis from every other agent, "
+                "so the status word does not mean here what it means "
+                "elsewhere. Do not render it as health."
+            )
+            closed = self.q(
+                "select ticker, strategy, exit_reason, realized_pnl, "
+                "closed_at from positions "
+                "where date(closed_at) = ? and book = 'PAPER' "
+                "order by closed_at",
+                (self.date,),
+            )
+            exits["closed"] = [{
+                "ticker": c["ticker"],
+                "strategy": c["strategy"],
+                "reason": c["exit_reason"],
+                "pnl": (round(c["realized_pnl"], 2)
+                        if c["realized_pnl"] is not None else None),
+                "at": c["closed_at"],
+            } for c in closed]
+            exits["closed_count"] = len(exits["closed"])
+            exits["not_captured"] = (
+                "Near-misses are not recorded anywhere. A position that came "
+                "within a whisker of an exit rule firing appears nowhere in "
+                "this brief, because the agent does not journal what it "
+                "considered and declined."
+            )
+
+        self.agents = agents
+        self.blind_spot(
+            "The per-agent brief reports what each agent RECORDED, not what it "
+            "decided. An agent that died before writing its row is reported as "
+            "NO_EVIDENCE, which is honest but is not the same as knowing it "
+            "failed."
+        )
+        return agents
+
     def run(self, is_today):
         self.check_session()
         self.check_roster(is_today)
@@ -631,8 +940,10 @@ def run():
     clock = now.strftime("%Y-%m-%d %H:%M:%S %a")
 
     if args.json:
+        a.build_agents(is_today)
         print(_json.dumps(
             {"date": date_str, "run_at": clock, "failed": a.failed,
+             "agents": a.agents,
              "results": a.results, "blind_spots": a.blind}, indent=2))
     else:
         text = render(a, clock)
