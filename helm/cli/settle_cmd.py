@@ -71,7 +71,11 @@ def run():
         if not single:
             console.print("    [yellow]multi-leg -- settle by hand.[/yellow] A %d-leg structure does not"
                           % r["nlegs"])
-            console.print("    reduce to assigned/not. Check the broker, then:")
+            console.print("    reduce to assigned/not. Fidelity records a closing price")
+            console.print("    per leg, and `helm activity` reads that export and closes")
+            console.print("    leg by leg -- prefer it:")
+            console.print("      [dim]helm activity[/dim]   (reads the latest Accounts_History*.csv)")
+            console.print("    If the export does not carry the expiry, record it by hand:")
             console.print("      [dim]helm close %s --position-id %s --reason EXPIRED[/dim]"
                           % (r["ticker"], r["id"]))
             console.print()
