@@ -1240,6 +1240,18 @@ def evaluate(pos, legs, checks, entry_snap=None, entry_thesis_row=None,
         else:
             earn = {"state": "unknown"}
 
+    # s105 (W123): the header showed dollars only. The percentage comes from
+    # the SAME journaled mark the exit rules read, so header and rules cannot
+    # disagree about how much has been given back.
+    _prem = _f(pos.get("net_premium")) or 0.0
+    # Computed from the mark against the premium paid -- NOT read from the
+    # check row, which carries no pnl_pct. This is the same arithmetic the
+    # close-track and the give-back rule use, so the three cannot disagree.
+    _mark_pct = (round(100.0 * mark / abs(_prem), 1)
+                 if (mark is not None and _prem) else None)
+    _real = _f(pos.get("realized_pnl"))
+    _real_pct = (round(100.0 * _real / abs(_prem), 1)
+                 if (closed and _real is not None and _prem) else None)
     return {
         "position_id": pos.get("id"), "ticker": pos.get("ticker"),
         "contract": contract_line(pos, legs),
@@ -1252,6 +1264,7 @@ def evaluate(pos, legs, checks, entry_snap=None, entry_thesis_row=None,
         "summary": {"ok": n_ok, "warn": n_warn, "bad": n_bad,
                     "unknown": n_unknown, "label": label},
         "mark": mark, "mark_asof": (latest or {}).get("checked_at"),
+        "mark_pct": _mark_pct, "realized_pct": _real_pct,
         "realized": _f(pos.get("realized_pnl")) if closed else None,
         "exit_reason": pos.get("exit_reason") if closed else None,
         "dte": dte, "read": read,
