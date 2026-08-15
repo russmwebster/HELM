@@ -4,7 +4,7 @@ helm stock -- Manage equity positions for covered call tracking
 Commands:
   helm stock list                   Show all stock positions
   helm stock add TICKER SHARES      Add or update a stock position
-  helm stock add TICKER SHARES COST Add with cost basis
+  helm stock add TICKER SHARES COST Add with cost basis (PER SHARE)
   helm stock remove TICKER          Remove a stock position
 """
 

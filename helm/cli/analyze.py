@@ -481,7 +481,14 @@ def _edge_cash_tied_up(row, stock):
     if s == 'COVERED_CALL':
         sc = stock.get(row['ticker'])
         if sc and sc.get('shares'):
-            return (sc['cost_basis'] / sc['shares']) * 100 * (row['total_contracts'] or 1)
+            # s105 (W125): cost_basis is PER SHARE -- that is what
+            # `helm stock list` displays and what `helm assign` writes.
+            # This previously divided by shares, treating it as a total,
+            # which understated covered-call capital by a factor of the
+            # share count (100x on a single round lot) and inflated every
+            # annualised return computed from it. Never fired: the table
+            # had no writer until now.
+            return sc['cost_basis'] * 100 * (row['total_contracts'] or 1)
         return None
     if s in _EDGE_LONGS:
         np_ = row['net_premium']
