@@ -1075,15 +1075,15 @@ def exit_rules(pos, checks, latest, entry_thesis_row):
     rows.sort(key=lambda r: order.index(r["key"]))
     firing = next((r["key"] for r in rows if r["state"] == "FIRES"), None)
     label = next((r["label"] for r in rows if r["key"] == firing), None)
-    summary = ("would close today: %s -- it outranks anything below it"
-               % label) if firing else "nothing would close this position today"
+    summary = ("%s: condition met"
+               % label) if firing else "no rule's condition is met today"
     book = (pos.get("book") or "").upper()
     if book == "PAPER":
-        note = "the paper book acts on these automatically at 15:55 each weekday"
+        note = "the paper book acts on these automatically at 15:35 each weekday"
     else:
         note = ("on the real book these are advisory -- they are computed and shown, "
                 "and nothing acts on them")
-    fine = ("first match wins, top to bottom. Percentages are measured against the "
+    fine = ("Rules are listed in a fixed order: on the paper book the first match sets the exit label; on the real book that order is presentational and has never been confirmed. Percentages are measured against the "
             "premium paid, from journaled marks only. The direction read above is "
             "information: it closes nothing.")
     return {"rows": rows, "firing": firing, "summary": summary, "book_note": note,
@@ -1177,24 +1177,24 @@ def evaluate(pos, legs, checks, entry_snap=None, entry_thesis_row=None,
     elif n_bad:
         _broken = [b for b in beliefs if b["state"] in (BROKEN, BROKEN_LOUD)]
         if _broken and all((b.get("extra") or {}).get("recovered_latest") for b in _broken):
-            cue = "this needs a decision today — the confirmed break stands, but the latest " \
+            cue = "on the graded beliefs alone — the confirmed break stands, but the latest " \
                   "check is back on the right side of the strike; decide the position " \
                   "rather than let the bounce decide it"
         else:
-            cue = "this needs a decision today — a confirmed break is information being ignored, " \
+            cue = "on the graded beliefs alone — a confirmed break is information being ignored, " \
                   "and holding past it is what this book has paid for before"
     elif n_warn:
-        cue = "worth watching, not acting — a warning is amber by measurement, not an alarm"
+        cue = "on the graded beliefs alone, nothing is signalling yet — a warning is amber by measurement, not an alarm"
     else:
         if any(b.get("key") in ("direction", "strike") and b["state"] == UNKNOWN
                for b in beliefs):
-            cue = "no decision signalled — but the belief that would signal one was never " \
+            cue = "on the graded beliefs alone, nothing is signalling — but the belief that would signal one was never " \
                   "armed; any exit here is yours by hand"
         elif (_f(pos.get("net_premium")) or 0) < 0:
-            cue = "no decision needed today — a losing mark with beliefs intact is drawdown " \
+            cue = "on the graded beliefs alone, nothing is signalling — a losing mark with beliefs intact is drawdown " \
                   "inside the plan; sitting still is a decision"
         else:
-            cue = "no decision needed today — a losing mark with beliefs intact is noise you " \
+            cue = "on the graded beliefs alone, nothing is signalling — a losing mark with beliefs intact is noise you " \
                   "are being paid to tolerate; sitting still is a decision"
     if bits:
         _lead = " ; ".join(bits) + ". "
