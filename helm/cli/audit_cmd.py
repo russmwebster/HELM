@@ -55,6 +55,11 @@ MIN_SAMPLES_PER_HOUR = 3
 # Legacy / meaningless exit reasons — a close carrying one is not labelled.
 UNLABELLED_REASONS = {None, "", "manual"}
 
+# The date com.helm.audit.eod was installed. Before this there is legitimately
+# no predecessor report, so the "previous audit" assertion must stand down
+# rather than fail on a file that could never have existed.
+AUDIT_SINCE = "2026-08-13"
+
 PASS, FAIL, WARN, SKIP = "PASS", "FAIL", "WARN", "SKIP"
 
 
@@ -516,6 +521,62 @@ class Audit:
                 f"{len(unlabelled)} of {len(rows)} close(s) carry no reason or the legacy 'manual'",
                 str([r["ticker"] for r in unlabelled])[:200],
             )
+
+    def _prev_session_day(self):
+        """The session day before the audited date, or None."""
+        try:
+            from datetime import timedelta
+
+            from helm.market_calendar import session_state
+
+            y, m, d = (int(x) for x in self.date.split("-"))
+            cur = datetime(y, m, d, 12, 0)
+            for _ in range(10):
+                cur = cur - timedelta(days=1)
+                if session_state(cur).get("run"):
+                    return cur.strftime("%Y-%m-%d")
+        except Exception:
+            return None
+        return None
+
+    def check_previous_audit(self):
+        """Did yesterday's audit run? Nothing else watches the watchman.
+
+        This audit cannot prove its own existence -- everything it writes
+        exists only if it ran, so a day it never fired looks exactly like a
+        quiet one. The fix cannot live inside it. It lives one day later: if
+        Thursday's audit never fired, Friday says so.
+
+        A file check, no write, so the read-only guarantee is untouched.
+        """
+        name = "previous audit"
+        prev = self._prev_session_day()
+        if prev is None:
+            self.add(SKIP, name, "could not determine the previous session day")
+            return
+        if prev < AUDIT_SINCE:
+            self.add(SKIP, name,
+                     "previous session %s predates the audit agent (installed "
+                     "%s), so no report could exist" % (prev, AUDIT_SINCE))
+            return
+        path = LOGS / ("audit_eod_%s.txt" % prev)
+        if not path.exists():
+            self.add(FAIL, name,
+                     "NO REPORT for the previous session day (%s). The audit "
+                     "did not run, or died before writing one." % prev,
+                     str(path))
+            return
+        verdict = ""
+        try:
+            for line in path.read_text(errors="replace").splitlines():
+                if "VERDICT" in line:
+                    verdict = line.strip()
+                    break
+        except Exception:
+            verdict = ""
+        self.add(PASS, name,
+                 "%s ran and reported — %s" % (prev, verdict or "(no verdict line)"),
+                 path.name)
 
     def check_origins(self):
         rows = self.q(
@@ -1007,6 +1068,13 @@ class Audit:
         self.check_fields()
         self.check_closes()
         self.check_origins()
+        self.check_previous_audit()
+        self.blind_spot(
+            "The 'previous audit' check only looks BACKWARD one session. If "
+            "this audit stops running for good, no later run exists to notice "
+            "it — the last thing it can tell you is that its predecessor was "
+            "fine."
+        )
         self.blind_spot(
             "Machine liveness is inferred from the SAMPLER, not from the OS. If the sampler "
             "alone died while the Mac stayed up, this audit will excuse missing slots as "
