@@ -96,12 +96,29 @@ def run():
                 "UPDATE positions SET status=?, closed_at=?, exit_reason=?, "
                 "realized_pnl=?, updated_at=? WHERE id=?",
                 ("EXPIRED", now, "EXPIRED", prem, now, r["id"]))
+            # An expiry HAS a closing price and it is zero: the option ceased to
+            # exist worthless. Closing every leg at 0.00 with a date is what makes
+            # the record checkable against the broker leg by leg, and it keeps the
+            # realized figure DERIVABLE from the legs rather than only asserted on
+            # the position. (Contrast `helm assign`, where nothing trades and the
+            # close price is left NULL on purpose.)
+            conn.execute(
+                "UPDATE legs SET status = ?, close_price = ?, close_date = ? "
+                "WHERE position_id = ? AND status = 'OPEN'",
+                ("CLOSED", 0.0, now, r["id"]))
             conn.commit()
             back = conn.execute("SELECT status, exit_reason, realized_pnl FROM positions "
                                 "WHERE id = ?", (r["id"],)).fetchone()
             console.print("    [green]recorded EXPIRED[/green] -- %s / %s / realized $%s"
                           % (back["status"], back["exit_reason"],
                              format(back["realized_pnl"] or 0, ",.2f")))
+            shut = conn.execute(
+                "SELECT COUNT(*), COALESCE(SUM(open_price * contracts * multiplier), 0) "
+                "FROM legs WHERE position_id = ? AND status = 'CLOSED'",
+                (r["id"],)).fetchone()
+            console.print("    %d leg(s) closed at $0.00 -- premium kept $%s, which is "
+                          "the realized figure derived from the legs"
+                          % (shut[0], format(shut[1] or 0, ",.2f")))
         else:
             console.print("    [dim]skipped[/dim]")
         console.print()
