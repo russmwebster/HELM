@@ -123,6 +123,14 @@ def run():
         ("SP-" + p["ticker"], acct_id, p["ticker"], new_shares, basis, now, note, now))
     conn.execute("UPDATE positions SET status=?, closed_at=?, exit_reason=?, realized_pnl=?, updated_at=? WHERE id=?",
                  ("ASSIGNED", now, "ASSIGNED", premium, now, p["id"]))
+    # The position is closed, so its leg must not still read OPEN -- anything
+    # counting open legs would keep counting a contract that no longer exists.
+    # close_price is left NULL DELIBERATELY: on an assignment nothing trades,
+    # the shares are put to us, so there is no closing price to record. That is
+    # different from not knowing it.
+    conn.execute("UPDATE legs SET status = ?, close_date = ? "
+                 "WHERE position_id = ? AND status = 'OPEN'",
+                 ("CLOSED", now, p["id"]))
     conn.commit()
 
     back = conn.execute("SELECT shares, cost_basis FROM stock_positions WHERE ticker = ?", (p["ticker"],)).fetchone()
@@ -130,5 +138,9 @@ def run():
     console.print("[green]applied.[/green]")
     console.print("  read back: %s shares %s at $%s per share" % (p["ticker"], back["shares"], format(back["cost_basis"], ",.2f")))
     console.print("  read back: position %s / %s / realized $%s" % (pos["status"], pos["exit_reason"], format(pos["realized_pnl"], ",.2f")))
+    legs_shut = conn.execute("SELECT COUNT(*) FROM legs WHERE position_id = ? "
+                             "AND status = 'CLOSED'", (p["id"],)).fetchone()[0]
+    console.print("  read back: %d leg(s) CLOSED, close price left blank "
+                  "(nothing traded on an assignment)" % legs_shut)
     console.print()
     return 0

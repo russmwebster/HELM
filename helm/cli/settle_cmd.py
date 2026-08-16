@@ -76,8 +76,8 @@ def run():
             console.print("    the broker shows, so no matching heuristic can get it wrong:")
             console.print("      [bold]helm close %s --position-id %s --reason EXPIRED[/bold]"
                           % (r["ticker"], r["id"]))
-            console.print("    [dim](`helm activity` imports the whole export instead, but it")
-            console.print("    matches legs without quantity or direction -- W104.)[/dim]")
+            console.print("    [dim](`helm activity` imports the whole export instead, but it[/dim]")
+            console.print("    [dim]matches legs without checking quantity or direction.)[/dim]")
             console.print()
             continue
         try:
