@@ -26,7 +26,8 @@ DB = Path(os.environ.get("HELM_DB", ROOT / "data" / "helm.db"))
 LOGS = ROOT / "logs"
 SAMPLER_CSV = LOGS / "mktdata_samples.csv"
 
-# The roster, per the worklist. Exactly six.
+# The roster, per the worklist. Exactly SEVEN since com.helm.audit.eod
+# was installed 2026-08-13 (s104); the comment read six until s107.
 EXPECTED_AGENTS = [
     "com.helm.audit.eod",
     "com.helm.ivr.refresh",
@@ -501,6 +502,63 @@ class Audit:
         )
 
     # ---------- A8 / A9: what the day booked ----------
+
+    def check_pnl_arithmetic(self):
+        """Does each GOOD reading's stored P&L agree with the price it came from?
+
+        COVERAGE IS NOT CORRECTNESS. Every other assertion in this file asks
+        whether the readings we EXPECTED arrived. This one asks whether the
+        readings that DID arrive are true. The 83 sign-inverted rows found in
+        s107 (W64) were every one of them data_quality='GOOD', sitting on days
+        this audit passed - because they were present. They were simply wrong.
+
+        SINGLE-LEG ONLY, deliberately: a multi-leg position's stored P&L cannot
+        be recomputed from one open_price. Stated in BLIND SPOTS, not inferred.
+        """
+        rows = self.q(
+            "select c.position_id, p.ticker, c.checked_at, c.current_price, "
+            "       c.pnl_pct, l.open_price, l.direction "
+            "from checks c "
+            "join positions p on p.id = c.position_id "
+            "join legs l on l.position_id = p.id "
+            "where date(c.checked_at) = ? "
+            "  and c.data_quality = 'GOOD' "
+            "  and c.current_price is not null and c.pnl_pct is not null "
+            "  and l.open_price is not null and l.open_price != 0 "
+            "  and (select count(*) from legs l2 where l2.position_id = p.id) = 1",
+            (self.date,),
+        )
+        if not rows:
+            self.add(SKIP, "pnl arithmetic", "no single-leg GOOD readings to recompute")
+            return
+        EPS = 0.05  # a rounding hair either side of zero proves nothing
+        bad = []
+        for r in rows:
+            sign = 1.0 if (r["direction"] or "").upper() == "LONG" else -1.0
+            truth = sign * (r["current_price"] - r["open_price"]) / abs(r["open_price"]) * 100.0
+            if abs(truth) <= EPS or abs(r["pnl_pct"]) <= EPS:
+                continue
+            if (r["pnl_pct"] > 0) != (truth > 0):
+                bad.append((r["ticker"], r["checked_at"][11:16], r["pnl_pct"], truth))
+        ev = "%d single-leg GOOD readings recomputed" % len(rows)
+        if not bad:
+            self.add(PASS, "pnl arithmetic",
+                     "every stored P&L agrees in sign with its recorded price", ev)
+            return
+        CAP = 12  # W119: a capped list must SAY it is capped.
+        named = "; ".join(
+            "%s %s stored %+.1f%% vs %+.1f%%" % (b[0], b[1], b[2], b[3]) for b in bad[:CAP]
+        )
+        if len(bad) > CAP:
+            named += "; and %d more" % (len(bad) - CAP)
+        self.add(
+            FAIL,
+            "pnl arithmetic",
+            # W128: put the magnitude in the LINE, not only in the body.
+            "%d of %d GOOD single-leg readings contradict their own price"
+            % (len(bad), len(rows)),
+            named,
+        )
 
     def check_closes(self):
         rows = self.q(
@@ -1066,6 +1124,7 @@ class Audit:
         self.check_coverage()
         self.check_marks()
         self.check_fields()
+        self.check_pnl_arithmetic()
         self.check_closes()
         self.check_origins()
         self.check_previous_audit()
@@ -1084,6 +1143,12 @@ class Audit:
         self.blind_spot(
             "This audit reads what the database RECORDED. It cannot see a reading that was "
             "correct but never attempted, or a ticker dropped before any row was written (W112)."
+        )
+        self.blind_spot(
+            "The 'pnl arithmetic' check covers SINGLE-LEG positions only. A "
+            "multi-leg position's stored P&L cannot be recomputed from one "
+            "open_price, so every condor, spread and diagonal reading is "
+            "UNCHECKED for correctness (W64, s107)."
         )
 
 
