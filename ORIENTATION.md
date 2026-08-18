@@ -23,7 +23,24 @@ A personal, Claude-native options-trading platform for a Fidelity Rollover IRA p
 - **REAL** — the live account.
 - **PAPER** — a parallel, auto-traded counterfactual book that trades candidates the REAL book passed on, building a labelled corpus for a future learning layer.
 
-Both are rows in the same `positions` table, distinguished by a `book` field, and both are driven by the same decision core.
+Both are rows in the same `positions` table, distinguished by a `book` field, and both are SCORED by the same decision core. They are not TRADED the same way.
+
+### Who acts on which book — the operating principle
+
+**The REAL book is traded by Russ. The PAPER book is traded by rules.** This holds on both sides of a position's life, and it is a deliberate design decision — not an accident of what happens to be built yet.
+
+| | entry | exit |
+| --- | --- | --- |
+| **REAL** | Russ decides. The scan and the screens propose; nothing books a real position without him. | **Russ decides.** No rule has ever closed a real position, and none is meant to. |
+| **PAPER** | `helm paper generate`, from candidates the real book passed on. | `com.helm.paper.exits`, 15:35 daily, by the exit doctrine. |
+
+Three consequences, written down because sessions keep rediscovering them:
+
+- **On the real book HELM informs; it does not act.** The exit alert (HELM-143) is real-book only and deliberately "alerts about exits; it never takes one". The thesis card reports which rule conditions are met and does not instruct (HELM-182). Anything reading as an instruction on a real-book surface is a defect, not a feature.
+- **`book` is therefore also the ACTOR field.** A real close was decided by a human; a paper close was decided by a rule. The `exit_reason` vocabulary is shared so the two books pool for outcome studies (HELM-161) — but the same word means "the rule fired" on paper and "Russ chose this label" on real. **Any study that pools them is counting two different things.** (s107: the real book carries exactly one `STOP` in 79 closes. It was Russ, not a stop rule.)
+- **"No rule has ever closed a real position" is the design working, not a finding.** Rule-precedence questions (stop -> give-back -> 7-DTE -> 21-DTE) are PAPER-book questions: the agent needs an order because it must pick one. They are not decisions about how Russ trades.
+
+So rule work has two possible products: a change to what the paper agent DOES, or a change to what HELM TELLS Russ. Say which one is intended before building it.
 
 Vision, firewall, and server-access details live in the **project charter** (the HELM project description), not here. One rule is worth repeating even so: this is **HELM only** — never touch the separate, live COTS system. (Its firewall and paths are in the charter; the old in-repo `cots2` reference copy has been removed.)
 
