@@ -462,7 +462,12 @@ CREATE TABLE IF NOT EXISTS watchlist (
 
     -- Build isolation / lifecycle (ALTER-appended in live DB)
     active          INTEGER DEFAULT 0,   -- legacy active-universe flag
-    build           TEXT                 -- build tag, e.g. 'sector_v1'
+    build           TEXT,  -- build tag, e.g. 'sector_v1'
+
+    -- W136 (s108): exposure grouping that GICS sector cannot express.
+    -- 19 of the 84 names are one trade; sector calls them two
+    -- different things, and calls two different things Industrials.
+    exposure_group  TEXT
 );
 
 -- INDEXES

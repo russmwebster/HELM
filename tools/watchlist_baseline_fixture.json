@@ -1,0 +1,83 @@
+{
+  "busy_days": 16,
+  "expected_quiet_qualifiers": 38.32,
+  "ivr_gate": 50.0,
+  "latest_cleared": 13,
+  "latest_scan_date": "2026-08-19",
+  "latest_scanned": 83,
+  "quiet_days": 16,
+  "scan_day_first": "2026-06-10",
+  "scan_day_last": "2026-08-19",
+  "scan_days_used": 48,
+  "sectors": {
+    "Basic Materials": {
+      "busy_pass": 0.9154,
+      "names": 4,
+      "quiet_expected": 2.61,
+      "quiet_pass": 0.6524
+    },
+    "Communication Services": {
+      "busy_pass": 0.7561,
+      "names": 4,
+      "quiet_expected": 0.07,
+      "quiet_pass": 0.0165
+    },
+    "Consumer Cyclical": {
+      "busy_pass": 0.692,
+      "names": 8,
+      "quiet_expected": 3.51,
+      "quiet_pass": 0.4389
+    },
+    "Consumer Defensive": {
+      "busy_pass": 0.6515,
+      "names": 7,
+      "quiet_expected": 2.62,
+      "quiet_pass": 0.3745
+    },
+    "Energy": {
+      "busy_pass": 0.5,
+      "names": 4,
+      "quiet_expected": 2.01,
+      "quiet_pass": 0.503
+    },
+    "Financial Services": {
+      "busy_pass": 0.5725,
+      "names": 8,
+      "quiet_expected": 1.39,
+      "quiet_pass": 0.1736
+    },
+    "Healthcare": {
+      "busy_pass": 0.7435,
+      "names": 10,
+      "quiet_expected": 4.14,
+      "quiet_pass": 0.4138
+    },
+    "Industrials": {
+      "busy_pass": 0.6578,
+      "names": 8,
+      "quiet_expected": 4.58,
+      "quiet_pass": 0.5723
+    },
+    "Real Estate": {
+      "busy_pass": 0.5455,
+      "names": 2,
+      "quiet_expected": 0.79,
+      "quiet_pass": 0.3951
+    },
+    "Technology": {
+      "busy_pass": 0.9341,
+      "names": 26,
+      "quiet_expected": 15.7,
+      "quiet_pass": 0.6039
+    },
+    "Utilities": {
+      "busy_pass": 0.8485,
+      "names": 3,
+      "quiet_expected": 0.9,
+      "quiet_pass": 0.3008
+    }
+  },
+  "tech_expected_quiet": 15.7,
+  "tech_share_pct": 41.0,
+  "watchlist_active": 84
+}
