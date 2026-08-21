@@ -16,6 +16,7 @@ from rich.console import Console
 from rich.table import Table
 from rich.prompt import Prompt, Confirm
 from rich import box
+from helm.chainval import oi_int
 
 console = Console()
 
@@ -130,8 +131,8 @@ def evaluate_perm(ticker: str) -> tuple:
                 "ask":          ask,
                 "mid":          mid,
                 "iv":           float(row.get("impliedVolatility", 0) or 0) * 100,
-                "volume":       int(row.get("volume", 0) or 0),
-                "oi":           int(row.get("openInterest", 0) or 0),
+                "volume":       oi_int(row.get("volume")),
+                "oi":           oi_int(row.get("openInterest")),
             })
 
     if not candidates:

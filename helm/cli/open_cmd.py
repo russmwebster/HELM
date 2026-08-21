@@ -41,6 +41,7 @@ from rich import box
 from helm.config import get_active_account
 from helm.db import get_conn
 from helm.strategies import resolve_strategy
+from helm.chainval import oi_int
 
 console = Console()
 
@@ -939,7 +940,7 @@ def evaluate_contracts(ticker: str, strategy: str, config: dict,
                     _df = _chain.puts if opt_type == "PUT" else _chain.calls
                     for _, _row in _df.iterrows():
                         _k = (exp, float(_row["strike"]))
-                        _oi_map[_k] = int(_row.get("openInterest", 0) or 0)
+                        _oi_map[_k] = oi_int(_row.get("openInterest"))
                 except Exception:
                     pass
             for c in contracts:
@@ -971,8 +972,8 @@ def evaluate_contracts(ticker: str, strategy: str, config: dict,
                 strike = float(row["strike"])
                 bid = row.get("bid", None)
                 ask = row.get("ask", None)
-                oi = int(row.get("openInterest", 0) or 0)
-                vol = int(row.get("volume", 0) or 0)
+                oi = oi_int(row.get("openInterest"))
+                vol = oi_int(row.get("volume"))
                 iv = row.get("impliedVolatility", None)
 
                 if bid is None or ask is None or bid <= 0 or ask <= 0:
@@ -1717,7 +1718,7 @@ def evaluate_condors(ticker: str, strategy: str, config: dict,
                             "ask": round(float(ask), 2),
                             "mid": round((float(bid)+float(ask))/2, 2),
                             "iv":  round(float(row.get("impliedVolatility",0) or 0)*100, 1),
-                            "oi":  int(row.get("openInterest", 0) or 0),
+                            "oi":  oi_int(row.get("openInterest")),
                         }
                 return data
 
@@ -2249,7 +2250,7 @@ def evaluate_strangles(ticker: str, strategy: str, config: dict,
                     ask = row.get("ask", 0) or 0
                     if float(bid) <= 0 or float(ask) <= 0:
                         continue
-                    oi = int(row.get("openInterest", 0) or 0)
+                    oi = oi_int(row.get("openInterest"))
                     if oi < 500:
                         continue
                     mid = (float(bid) + float(ask)) / 2
@@ -2541,7 +2542,7 @@ def evaluate_spreads(ticker: str, strategy: str, config: dict,
                 if bid > 0 and ask > 0:
                     mid = (float(bid) + float(ask)) / 2
                     iv = row.get("impliedVolatility", None)
-                    oi = int(row.get("openInterest", 0) or 0)
+                    oi = oi_int(row.get("openInterest"))
                     strike_data[s] = {
                         "bid": round(float(bid), 2),
                         "ask": round(float(ask), 2),
@@ -2557,7 +2558,7 @@ def evaluate_spreads(ticker: str, strategy: str, config: dict,
                 ask = row.get("ask", 0) or 0
                 if bid <= 0 or ask <= 0:
                     continue
-                oi = int(row.get("openInterest", 0) or 0)
+                oi = oi_int(row.get("openInterest"))
                 if oi < 500:
                     continue
 
@@ -2868,7 +2869,7 @@ def evaluate_diagonals(ticker: str, strategy: str, config: dict,
             mid = round((bid + ask) / 2, 2)
             out.append({"strike": float(r["strike"]), "bid": round(bid, 2), "ask": round(ask, 2),
                         "mid": mid, "iv": round(float(r.get("impliedVolatility", 0) or 0) * 100, 1),
-                        "oi": int(r.get("openInterest", 0) or 0),
+                        "oi": oi_int(r.get("openInterest")),
                         "spread_pct": round((ask - bid) / mid, 3) if mid > 0 else 9.0})
         return out
 

@@ -49,6 +49,7 @@ from rich import box
 from helm.config import get_active_account
 from helm.db import get_conn, book_filter
 from helm.dates import dte
+from helm.chainval import oi_int
 
 console = Console(no_color=True)  # HELM-074: monochrome -- focus on the data
 
@@ -451,8 +452,8 @@ def fetch_yf_data(ticker: str, expiration: str, strike: float,
             iv = r.get("impliedVolatility")
             if iv and float(iv) > 0:
                 result["iv"] = round(float(iv) * 100, 1)
-            result["volume"] = int(r.get("volume", 0) or 0)
-            result["oi"]     = int(r.get("openInterest", 0) or 0)
+            result["volume"] = oi_int(r.get("volume"))
+            result["oi"]     = oi_int(r.get("openInterest"))
     except Exception as e:
         result["error"] = str(e)[:60]
     return result
