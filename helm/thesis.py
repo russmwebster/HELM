@@ -215,7 +215,7 @@ def _strike_belief(pos, legs, checks, latest_check):
         else:
             extra["odds"] = "the market prices ~%d%% odds the price finishes past the strike" % odds
     elif strat in ("IRON_CONDOR", "SHORT_STRANGLE", "JADE_LIZARD"):
-        extra["odds"] = "odds unavailable — per-leg greeks are not captured for multi-leg positions"
+        extra["odds"] = "odds unavailable — a two-wall position needs both short deltas, which this card is not given"
     return _belief("strike", title,
                    "entered with the strike at $%.0f" % (series[0][1][1],),
                    now, state, fine, extra)
