@@ -2777,7 +2777,7 @@ def display_straddles(ticker, strategy, config, straddles, spot, atr, account_id
 
 def evaluate_diagonals(ticker: str, strategy: str, config: dict,
                        dte_target: int = None, top_n: int = 6,
-                       side: str = "CALL") -> list:
+                       side: str = "CALL", trace: dict = None) -> list:
     """
     Evaluate CALL diagonals (DIAGONAL, PMCC): long deeper-ITM back-month call +
     short nearer-term higher-strike call, legs at DIFFERENT expiries. Delta-
@@ -2799,6 +2799,19 @@ def evaluate_diagonals(ticker: str, strategy: str, config: dict,
     max_debit_pct = config.get("max_debit_pct", 0.75)
     is_put = (str(side).upper() == "PUT")
 
+    # W146 (s108): five gates can empty this function and it used to return a
+    # bare [] from any of them, so the CLI's "No diagonal combinations found
+    # matching risk criteria" named a verdict without naming the gate that
+    # reached it. Attributing ONE name (LIN) took a purpose-built probe. Pass a
+    # dict as trace and it comes back filled; callers that pass nothing are
+    # unchanged. Counting only -- no gate moves.
+    _t = trace if trace is not None else {}
+    _t.update({"stopped_at": None, "short_exps": 0, "long_exps": 0,
+               "short_rows": 0, "short_pass_oi": 0, "short_pass_delta": 0,
+               "long_rows": 0, "long_pass_strike": 0, "long_pass_oi": 0,
+               "long_pass_delta": 0, "dropped_no_long": 0,
+               "dropped_net_debit": 0, "dropped_debit_ratio": 0})
+
     # HELM-109 (s85, Russ): the entry-runway invariant (HELM-106) applies here
     # too. This was the one evaluate_* that never called _entry_dte_floor, so a
     # diagonal could open inside its own management window. It binds on the
@@ -2816,6 +2829,11 @@ def evaluate_diagonals(ticker: str, strategy: str, config: dict,
     # Still unwired here (HELM-109 tail): dte_target is ignored by this
     # function, so `helm open X DIAGONAL --dte N` does not retarget the legs.
     s_dte_min = _entry_dte_floor(strategy, s_dte_min)
+    # W146: the trace carries the FLOORED window, not the config's. Reporting
+    # the raw 21 in a miss message would be the same defect W147 just fixed in
+    # the panel header -- a surface naming a number the code does not use.
+    _t["short_dte_min_eff"], _t["short_dte_max_eff"] = s_dte_min, s_dte_max
+    _t["long_dte_min_eff"], _t["long_dte_max_eff"] = l_dte_min, l_dte_max
 
     tk = yf.Ticker(ticker)
     spot = getattr(tk.fast_info, "last_price", None)
@@ -2823,6 +2841,7 @@ def evaluate_diagonals(ticker: str, strategy: str, config: dict,
         hist = tk.history(period="5d")
         spot = float(hist["Close"].iloc[-1]) if not hist.empty else None
     if not spot:
+        _t["stopped_at"] = "spot"
         return []
 
     def bs_delta(strike, iv_pct, dte_days):
@@ -2851,7 +2870,9 @@ def evaluate_diagonals(ticker: str, strategy: str, config: dict,
             short_exps.append((d, exp))
         elif l_dte_min <= d <= l_dte_max:
             long_exps.append((d, exp))
+    _t["short_exps"], _t["long_exps"] = len(short_exps), len(long_exps)
     if not short_exps or not long_exps:
+        _t["stopped_at"] = "expiries"
         return []
     short_exps.sort(key=lambda x: abs(x[0] - s_dte_sweet))
     long_exps.sort(key=lambda x: abs(x[0] - l_dte_sweet))
@@ -2876,13 +2897,17 @@ def evaluate_diagonals(ticker: str, strategy: str, config: dict,
     short_cands = []
     for dte, exp in short_exps[:3]:
         for c in opt_rows(exp):
+            _t["short_rows"] += 1
             if c["oi"] < 100:
                 continue
+            _t["short_pass_oi"] += 1
             delta = bs_delta(c["strike"], c["iv"], dte)
             if delta is None or not (s_dmin <= delta <= s_dmax):
                 continue
+            _t["short_pass_delta"] += 1
             short_cands.append({**c, "exp": exp, "dte": dte, "delta": round(delta, 3)})
     if not short_cands:
+        _t["stopped_at"] = "short_leg"
         return []
     short_cands.sort(key=lambda x: abs(x["delta"] - sweet_mid(s_dsweet)))
 
@@ -2891,24 +2916,36 @@ def evaluate_diagonals(ticker: str, strategy: str, config: dict,
         best = None
         for dte, exp in long_exps[:3]:
             for c in opt_rows(exp):
+                _t["long_rows"] += 1
                 bad_strike = (c["strike"] < short["strike"]) if is_put else (c["strike"] > short["strike"])
-                if c["oi"] < 100 or bad_strike:
+                # W146: strike and OI split apart so the counters can say which
+                # one bit. Both were skips before and both still are -- the
+                # order between two continues changes nothing but the tally.
+                if bad_strike:
                     continue
+                _t["long_pass_strike"] += 1
+                if c["oi"] < 100:
+                    continue
+                _t["long_pass_oi"] += 1
                 delta = bs_delta(c["strike"], c["iv"], dte)
                 if delta is None or not (l_dmin <= delta <= l_dmax):
                     continue
+                _t["long_pass_delta"] += 1
                 prox = -abs(delta - sweet_mid(l_dsweet))
                 if best is None or prox > best[0]:
                     best = (prox, {**c, "exp": exp, "dte": dte, "delta": round(delta, 3)})
         if best is None:
+            _t["dropped_no_long"] += 1
             continue
         long = best[1]
 
         net_debit = round(long["mid"] - short["mid"], 2)
         if net_debit <= 0:
+            _t["dropped_net_debit"] += 1
             continue
         width = round(abs(short["strike"] - long["strike"]), 2)
         if width > 0 and (net_debit / width) > max_debit_pct:
+            _t["dropped_debit_ratio"] += 1
             continue
         breakeven = round(short["strike"] + (-net_debit if is_put else net_debit), 2)
 
@@ -2935,6 +2972,16 @@ def evaluate_diagonals(ticker: str, strategy: str, config: dict,
             "long_iv": long["iv"], "long_oi": long["oi"],
             "net_debit": net_debit, "width": width, "breakeven": breakeven, "score": round(score, 1),
         })
+
+    if not results:
+        # W146: name the gate that emptied it. Ordered by which is the more
+        # specific finding, not by which fires first.
+        if _t["dropped_debit_ratio"]:
+            _t["stopped_at"] = "debit_ratio"
+        elif _t["dropped_net_debit"]:
+            _t["stopped_at"] = "net_debit"
+        else:
+            _t["stopped_at"] = "long_leg"
 
     results.sort(key=lambda x: -x["score"])
     return results[:top_n]

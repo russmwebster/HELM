@@ -100,6 +100,59 @@ def _reshape_diagonal(r: dict, spot: float) -> dict:
     }
 
 
+def explain_diagonal_miss(t: dict, cfg: dict) -> str:
+    """W146 (s108): say WHICH gate emptied the search, with the count.
+
+    "No diagonal combinations found matching risk criteria" was true of five
+    different outcomes and distinguished none of them. Attributing ONE name
+    (LIN, whose back-month strikes all failed open interest) took a
+    purpose-built probe against the live chain. This turns that hour into a
+    sentence.
+
+    A caveat this message deliberately carries: open interest here comes from
+    yfinance, the same feed that leaves the column NaN on quoted strikes
+    (W145). A thin OI reading is a fact about the FEED until it is confirmed
+    against IBKR -- so the wording says "reported", not "is".
+    """
+    if not t:
+        return "No diagonal combinations found matching risk criteria."
+    where = t.get("stopped_at")
+    if where == "spot":
+        return "No spot price available -- the chain was never read."
+    if where == "expiries":
+        return (
+            "No expiry pair in range: %d short expiries at %d-%d DTE, %d long "
+            "at %d-%d DTE. A diagonal needs one of each."
+            % (t["short_exps"], t.get("short_dte_min_eff", cfg.get("short_dte_min", 0)),
+               t.get("short_dte_max_eff", cfg.get("short_dte_max", 0)),
+               t["long_exps"], t.get("long_dte_min_eff", cfg.get("long_dte_min", 0)),
+               t.get("long_dte_max_eff", cfg.get("long_dte_max", 0))))
+    if where == "short_leg":
+        return (
+            "No SHORT leg survived: %d quoted strikes -> %d reported OI 100 or "
+            "better -> %d in delta %.2f-%.2f."
+            % (t["short_rows"], t["short_pass_oi"], t["short_pass_delta"],
+               cfg.get("short_delta_min", 0), cfg.get("short_delta_max", 1)))
+    if where == "long_leg":
+        return (
+            "No LONG leg survived for any short candidate: %d quoted back-month "
+            "strikes -> %d on the right side of the short strike -> %d reported "
+            "OI 100 or better -> %d in delta %.2f-%.2f."
+            % (t["long_rows"], t["long_pass_strike"], t["long_pass_oi"],
+               t["long_pass_delta"], cfg.get("long_delta_min", 0),
+               cfg.get("long_delta_max", 1)))
+    if where == "debit_ratio":
+        return (
+            "%d pair(s) built, all rejected on cost: net debit exceeded %.0f%% "
+            "of the strike width."
+            % (t["dropped_debit_ratio"], 100 * cfg.get("max_debit_pct", 1.0)))
+    if where == "net_debit":
+        return ("%d pair(s) built, all rejected: the long leg priced at or below "
+                "the short, which is not a diagonal."
+                % t["dropped_net_debit"])
+    return "No diagonal combinations found matching risk criteria."
+
+
 def evaluate_diagonal(ticker: str, config: dict = None) -> tuple:
     """
     Best CALL diagonal combinations for the live/manual path. Delegates
@@ -122,9 +175,10 @@ def evaluate_diagonal(ticker: str, config: dict = None) -> tuple:
         spot = float(h["Close"].iloc[-1]) if not h.empty else None
     if not spot:
         raise RuntimeError(f"Could not determine spot price for {ticker}.")
-    flat = evaluate_diagonals(ticker, strategy, core_cfg, side=side)
+    _trace = {}
+    flat = evaluate_diagonals(ticker, strategy, core_cfg, side=side, trace=_trace)
     if not flat:
-        raise RuntimeError("No diagonal combinations found matching risk criteria.")
+        raise RuntimeError(explain_diagonal_miss(_trace, core_cfg))
     return spot, [_reshape_diagonal(r, spot) for r in flat]
 
 
