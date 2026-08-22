@@ -32,8 +32,11 @@ DIAGONAL_CONFIG = {
     "long_delta_min":    0.55,
     "long_delta_max":    0.85,
     "long_delta_sweet":  (0.65, 0.75),
-    # Risk filter
-    "max_debit_pct":     0.75,
+    # W147 (s108): max_debit_pct deliberately absent. It lived here as 0.75
+    # while open_cmd.STRATEGY_CONFIG["DIAGONAL"] said 1.0, and evaluate_diagonal
+    # passes core_cfg -- so 1.0 was always the number that ran and this copy had
+    # never gated anything. W4's lesson: the copy you would naturally read was
+    # not the copy that executed. STRATEGY_CONFIG is the single home.
 }
 
 PMCC_CONFIG = {
@@ -54,7 +57,9 @@ PMCC_CONFIG = {
     "long_delta_min":    0.70,
     "long_delta_max":    0.90,
     "long_delta_sweet":  (0.75, 0.85),
-    "max_debit_pct":     0.30,
+    # W147 (s108): same as DIAGONAL above, and worse -- this said 0.30 against
+    # an authoritative 1.0, so reading this file suggested PMCC caps its debit
+    # at 30% of width when nothing ever enforced tighter than 100%.
 }
 
 
@@ -264,7 +269,10 @@ DIAGONAL_PUT_CONFIG = {
     "long_delta_min":    0.55,
     "long_delta_max":    0.85,
     "long_delta_sweet":  (0.65, 0.75),
-    "max_debit_pct":     0.75,
+    # W147 (s108): third dead copy, same as DIAGONAL and PMCC above.
+    # evaluate_diagonal_put also passes core_cfg, so STRATEGY_CONFIG's 1.0 ran
+    # and this 0.75 never gated a thing. Found by a readback that expected zero
+    # occurrences and got one -- two of these were visible, the third was not.
 }
 
 

@@ -3148,26 +3148,52 @@ def run():
     config = STRATEGY_CONFIG[strategy]
     account_id = get_active_account()
 
-    # Check IBKR + market status for data source label
-    try:
-        from helm.ibkr import check_connection as _chk
-        from helm.cli.check_cmd import is_market_open as _mkt
-        _ibkr_ok = _chk()["connected"]
-        _mkt_open = _mkt()
-        if _ibkr_ok and _mkt_open:
-            data_source = "[green]IBKR live[/green]"
-        elif _ibkr_ok:
-            data_source = "[yellow]IBKR + yfinance (market closed)[/yellow]"
-        else:
-            data_source = "[dim]yfinance only[/dim]"
-    except Exception:
-        data_source = "[dim]yfinance[/dim]"
+    # W148 (s108): this label used to report whether IBKR was REACHABLE, not
+    # where the numbers below it come from. evaluate_contracts is the only
+    # evaluator with an IBKR path -- condors, spreads, strangles, straddles,
+    # debit spreads and diagonals are yfinance-only -- so
+    # "helm open BX DIAGONAL" printed "Data: IBKR live" above a table built
+    # entirely from yfinance. A panel must not claim a source it never read.
+    # The flags below are the SAME ones the dispatch further down branches on;
+    # a config that sets none of them falls through to evaluate_contracts.
+    _not_ibkr = any(config.get(_f) for _f in (
+        "is_spread", "is_strangle", "is_condor", "is_diagonal",
+        "is_diagonal_put", "is_debit_spread", "is_straddle", "is_pmcc",
+        "is_perm"))
+    if _not_ibkr:
+        data_source = "[dim]yfinance (this strategy's evaluator does not use IBKR)[/dim]"
+    else:
+        try:
+            from helm.ibkr import check_connection as _chk
+            from helm.cli.check_cmd import is_market_open as _mkt
+            _ibkr_ok = _chk()["connected"]
+            _mkt_open = _mkt()
+            if _ibkr_ok and _mkt_open:
+                data_source = "[green]IBKR live[/green]"
+            elif _ibkr_ok:
+                data_source = "[yellow]IBKR + yfinance (market closed)[/yellow]"
+            else:
+                data_source = "[dim]yfinance only[/dim]"
+        except Exception:
+            data_source = "[dim]yfinance[/dim]"
+
+    # W147 (s108): show the DTE floor that is ENFORCED, not the raw config.
+    # HELM-106's entry-runway invariant lifts dte_min on four strategies --
+    # CSP, DIAGONAL, DIAGONAL_PUT and PMCC all screen 28, not the 21 their
+    # config carries -- and every evaluate_* applies it. The header printed the
+    # unfloored number, so the panel advertised a window the code does not use.
+    # CSP is the one that matters: it is the most-used route in the system.
+    _dte_lo = dte_target or _entry_dte_floor(
+        strategy, config.get("dte_min", config.get("short_dte_min", 0)))
+    _dte_hi = dte_target or config.get("dte_max", config.get("short_dte_max", 90))
+    _dlt_lo = config.get("delta_min", config.get("short_delta_min", 0))
+    _dlt_hi = config.get("delta_max", config.get("short_delta_max", 1))
 
     console.print()
     console.print(Panel.fit(
         f"[bold cyan]HELM Open[/bold cyan] — {ticker} {config['label']}\n"
-        f"[dim]Delta {config.get("delta_min", config.get("short_delta_min",0)):.2f}-{config.get("delta_max", config.get("short_delta_max",1)):.2f} | "
-        f"DTE {dte_target or config.get("dte_min", config.get("short_dte_min",0))}-{dte_target or config.get("dte_max", config.get("short_dte_max",90))} | "
+        f"[dim]Delta {_dlt_lo:.2f}-{_dlt_hi:.2f} | "
+        f"DTE {_dte_lo}-{_dte_hi} | "
         f"Spread threshold: 25% | Data: {data_source}[/dim]",
         border_style="cyan"
     ))
