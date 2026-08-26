@@ -1,0 +1,31 @@
+﻿
+
+Run Date,Account,Account Number,Action,Symbol,Description,Type,Price ($),Quantity,Commission ($),Fees ($),Accrued Interest ($),Amount ($),Settlement Date
+08/24/2026,Rollover IRA,XXXXXXXXX,EXPIRED CALL (LRCX) LAM RESEARCH CORP AUG 21 26 $570 as of 2026-08-21 CALL (LRCX) LAM RESEARCH CORP AUG 21 26 $570 (100 SHS) (Margin)," -LRCX260821C570",CALL (LRCX) LAM RESEARCH CORP AUG 21 26 $570 (100 SHS),Margin,"","-13","","","",0.00,""
+08/24/2026,Rollover IRA,XXXXXXXXX,EXPIRED CALL (LRCX) LAM RESEARCH CORP AUG 21 26 $560 as of 2026-08-21 CALL (LRCX) LAM RESEARCH CORP AUG 21 26 $560 (100 SHS) (Margin)," -LRCX260821C560",CALL (LRCX) LAM RESEARCH CORP AUG 21 26 $560 (100 SHS),Margin,"",13,"","","",0.00,""
+08/24/2026,Rollover IRA,XXXXXXXXX,EXERCISED as of 2026-08-21 PUT (LRCX) LAM RESEARCH CORP AUG 21 26 $350 (100 SHS) (Margin)," -LRCX260821P350",PUT (LRCX) LAM RESEARCH CORP AUG 21 26 $350 (100 SHS),Margin,"","-13","","","",0.00,""
+08/24/2026,Rollover IRA,XXXXXXXXX,YOU SOLD EXERCISED PUTS AS OF 08-21-26 LAM RESEARCH CORP COM NEW (LRCX) (Margin),LRCX,LAM RESEARCH CORP COM NEW,Margin,350,"-1300","",9.38,"",454990.62,08/24/2026
+08/20/2026,Rollover IRA,XXXXXXXXX,ASSIGNED as of 2026-08-19 PUT (LRCX) LAM RESEARCH CORP AUG 21 26 $360 (100 SHS) (Margin)," -LRCX260821P360",PUT (LRCX) LAM RESEARCH CORP AUG 21 26 $360 (100 SHS),Margin,"",13,"","","",0.00,""
+08/20/2026,Rollover IRA,XXXXXXXXX,YOU SOLD CLOSING TRANSACTION CALL (LRCX) LAM RESEARCH CORP AUG 21 26 $570 (100 SHS) (Margin)," -LRCX260821C570",CALL (LRCX) LAM RESEARCH CORP AUG 21 26 $570 (100 SHS),Margin,1.07,"-7",4.55,0.11,"",744.34,08/21/2026
+08/20/2026,Rollover IRA,XXXXXXXXX,YOU BOUGHT CLOSING TRANSACTION CALL (LRCX) LAM RESEARCH CORP AUG 21 26 $560 (100 SHS) (Margin)," -LRCX260821C560",CALL (LRCX) LAM RESEARCH CORP AUG 21 26 $560 (100 SHS),Margin,1.07,7,4.55,0.09,"","-753.64",08/21/2026
+08/20/2026,Rollover IRA,XXXXXXXXX,YOU SOLD CLOSING TRANSACTION PUT (LRCX) LAM RESEARCH CORP AUG 21 26 $350 (100 SHS) (Margin)," -LRCX260821P350",PUT (LRCX) LAM RESEARCH CORP AUG 21 26 $350 (100 SHS),Margin,40.86,"-7",4.55,0.68,"",28596.77,08/21/2026
+08/20/2026,Rollover IRA,XXXXXXXXX,YOU BOUGHT CLOSING TRANSACTION PUT (LRCX) LAM RESEARCH CORP AUG 21 26 $360 (100 SHS) (Margin)," -LRCX260821P360",PUT (LRCX) LAM RESEARCH CORP AUG 21 26 $360 (100 SHS),Margin,50.86,7,4.55,0.09,"","-35606.64",08/21/2026
+08/20/2026,Rollover IRA,XXXXXXXXX,YOU BOUGHT ASSIGNED PUTS AS OF 08-19-26 LAM RESEARCH CORP COM NEW (LRCX) (Margin),LRCX,LAM RESEARCH CORP COM NEW,Margin,360,1300,"","","","-468000",08/20/2026
+06/29/2026,Rollover IRA,XXXXXXXXX,YOU BOUGHT OPENING TRANSACTION CALL (LRCX) LAM RESEARCH CORP AUG 21 26 $570 (100 SHS) (Margin)," -LRCX260821C570",CALL (LRCX) LAM RESEARCH CORP AUG 21 26 $570 (100 SHS),Margin,13.8,20,13,0.46,"","-27613.46",06/30/2026
+06/29/2026,Rollover IRA,XXXXXXXXX,YOU SOLD OPENING TRANSACTION CALL (LRCX) LAM RESEARCH CORP AUG 21 26 $560 (100 SHS) (Margin)," -LRCX260821C560",CALL (LRCX) LAM RESEARCH CORP AUG 21 26 $560 (100 SHS),Margin,14.9,"-20",13,1.08,"",29785.92,06/30/2026
+06/29/2026,Rollover IRA,XXXXXXXXX,YOU BOUGHT OPENING TRANSACTION PUT (LRCX) LAM RESEARCH CORP AUG 21 26 $350 (100 SHS) (Margin)," -LRCX260821P350",PUT (LRCX) LAM RESEARCH CORP AUG 21 26 $350 (100 SHS),Margin,24.22,20,13,0.46,"","-48453.46",06/30/2026
+06/29/2026,Rollover IRA,XXXXXXXXX,YOU SOLD OPENING TRANSACTION PUT (LRCX) LAM RESEARCH CORP AUG 21 26 $360 (100 SHS) (Margin)," -LRCX260821P360",PUT (LRCX) LAM RESEARCH CORP AUG 21 26 $360 (100 SHS),Margin,27.9,"-20",13,1.61,"",55785.39,06/30/2026
+06/15/2026,Rollover IRA,XXXXXXXXX,YOU BOUGHT CLOSING TRANSACTION PUT (LRCX) LAM RESEARCH CORP JUL 17 26 $300 (100 SHS) (Cash)," -LRCX260717P300",PUT (LRCX) LAM RESEARCH CORP JUL 17 26 $300 (100 SHS),Cash,5.2,1,0.65,0.02,"","-520.67",06/16/2026
+06/02/2026,Rollover IRA,XXXXXXXXX,YOU SOLD OPENING TRANSACTION PUT (LRCX) LAM RESEARCH CORP JUL 17 26 $300 (100 SHS) (Cash)," -LRCX260717P300",PUT (LRCX) LAM RESEARCH CORP JUL 17 26 $300 (100 SHS),Cash,16.1,"-1",0.65,0.06,"",1609.29,06/03/2026
+
+"The data and information in this spreadsheet is provided to you solely for your use and is not for distribution. The spreadsheet is provided for"
+"informational purposes only, and is not intended to provide advice, nor should it be construed as an offer to sell, a solicitation of an offer to buy or a"
+"recommendation for any security or insurance product by Fidelity or any third party. Data and information shown is based on information known to Fidelity as of the date it was"
+"exported and is subject to change. It should not be used in place of your account statements or trade confirmations and is not intended for tax reporting"
+"purposes. For more information on the data included in this spreadsheet, including any limitations thereof, go to Fidelity.com."
+
+"Brokerage services are provided by Fidelity Brokerage Services LLC (FBS), 900 Salem Street, Smithfield, RI 02917. Custody and other services provided by National"
+"Financial Services LLC (NFS). Both are Fidelity Investment companies and members SIPC, NYSE. Insurance products at Fidelity are distributed by"
+"Fidelity Insurance Agency, Inc., and, for certain products, by Fidelity Brokerage Services, Member NYSE, SIPC."
+
+Date downloaded 08/26/2026 11:22 am

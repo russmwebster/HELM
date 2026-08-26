@@ -1,0 +1,62 @@
+{
+  "_comment": "W151 test fixture - expected parse of fidelity_activity_lrcx_s108.csv.",
+  "_why": "Derived with Russ 2026-08-26 against the live LRCX condor and verified to the cent against the position's stored max_loss. A matcher that reproduces this is a matcher that works: the file carries all five Fidelity action forms, a PARTIAL close (20 -> 7 traded + 13 settled), an assignment, an exercise, and two expiries.",
+  "_ignore": "The 2026-06-02 open and 2026-06-15 close are a separate LRCX CSP (JUL 17 $300). They must NOT match the condor. That is the trap this fixture exists to catch.",
+
+  "position": "LRCX-IRON_CONDOR-20260629-2A46F6",
+
+  "entry_2026_06_29": {
+    "_note": "These are the BROKER fills. HELM currently stores 29.47 / 25.20 / 14.81 / 14.30 - synthesised by proportional scaling from the net (open_cmd.py:1975). Confirming should overwrite them with these.",
+    "legs": [
+      {"symbol": "-LRCX260821P360", "action": "SOLD OPENING",   "direction": "SHORT", "type": "PUT",  "strike": 360, "qty": -20, "price": 27.90, "commission": 13.00, "fees": 1.61, "amount":  55785.39},
+      {"symbol": "-LRCX260821P350", "action": "BOUGHT OPENING", "direction": "LONG",  "type": "PUT",  "strike": 350, "qty":  20, "price": 24.22, "commission": 13.00, "fees": 0.46, "amount": -48453.46},
+      {"symbol": "-LRCX260821C560", "action": "SOLD OPENING",   "direction": "SHORT", "type": "CALL", "strike": 560, "qty": -20, "price": 14.90, "commission": 13.00, "fees": 1.08, "amount":  29785.92},
+      {"symbol": "-LRCX260821C570", "action": "BOUGHT OPENING", "direction": "LONG",  "type": "CALL", "strike": 570, "qty":  20, "price": 13.80, "commission": 13.00, "fees": 0.46, "amount": -27613.46}
+    ],
+    "gross_credit": 9560.00,
+    "net_cash_received": 9504.39,
+    "commissions_and_fees": 55.61,
+    "helm_stored_net_premium": 9560.00
+  },
+
+  "partial_close_2026_08_20": {
+    "_note": "SEVEN of twenty. The whole reason the match key must carry quantity and direction.",
+    "legs": [
+      {"symbol": "-LRCX260821P360", "action": "BOUGHT CLOSING", "qty":  7, "price": 50.86, "commission": 4.55, "fees": 0.09, "amount": -35606.64},
+      {"symbol": "-LRCX260821P350", "action": "SOLD CLOSING",   "qty": -7, "price": 40.86, "commission": 4.55, "fees": 0.68, "amount":  28596.77},
+      {"symbol": "-LRCX260821C560", "action": "BOUGHT CLOSING", "qty":  7, "price":  1.07, "commission": 4.55, "fees": 0.09, "amount":   -753.64},
+      {"symbol": "-LRCX260821C570", "action": "SOLD CLOSING",   "qty": -7, "price":  1.07, "commission": 4.55, "fees": 0.11, "amount":    744.34}
+    ],
+    "net_cash": -7019.17,
+    "gross": -7000.00
+  },
+
+  "assignment_2026_08_19": {
+    "_note": "Run Date 08/20 but 'as of 2026-08-19'. The as-of date is the real one and the parser must prefer it.",
+    "option_row": {"symbol": "-LRCX260821P360", "action": "ASSIGNED", "qty": 13, "price": null, "amount": 0.00},
+    "share_row":  {"symbol": "LRCX", "action": "BOUGHT ASSIGNED PUTS", "qty": 1300, "price": 360.00, "amount": -468000.00}
+  },
+
+  "expiry_2026_08_21": {
+    "_note": "Run Date 08/24, 'as of 2026-08-21'. Two expiries and an exercise, all zero-amount option rows plus one share row.",
+    "rows": [
+      {"symbol": "-LRCX260821C570", "action": "EXPIRED",   "qty": -13, "amount": 0.00},
+      {"symbol": "-LRCX260821C560", "action": "EXPIRED",   "qty":  13, "amount": 0.00},
+      {"symbol": "-LRCX260821P350", "action": "EXERCISED", "qty": -13, "amount": 0.00},
+      {"symbol": "LRCX", "action": "SOLD EXERCISED PUTS", "qty": -1300, "price": 350.00, "fees": 9.38, "amount": 454990.62}
+    ]
+  },
+
+  "totals": {
+    "true_broker_cash": -10524.16,
+    "gross_max_loss": -10440.00,
+    "commissions_and_fees": -84.16,
+    "helm_stored_realized_pnl": -10440.00,
+    "_note": "HELM stores GROSS. It has no commission or fee column anywhere in the schema. Russ decided 2026-08-26 to keep disregarding fees; the -84.16 lives in the position notes."
+  },
+
+  "must_not_match": [
+    {"symbol": "-LRCX260717P300", "date": "2026-06-02", "action": "SOLD OPENING",   "qty": -1, "price": 16.10},
+    {"symbol": "-LRCX260717P300", "date": "2026-06-15", "action": "BOUGHT CLOSING", "qty":  1, "price":  5.20}
+  ]
+}
