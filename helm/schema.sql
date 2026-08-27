@@ -201,7 +201,6 @@ CREATE TABLE IF NOT EXISTS positions (
     created_at            TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at            TEXT NOT NULL DEFAULT (datetime('now')),
     book                  TEXT NOT NULL DEFAULT 'REAL',  -- REAL | PAPER | SHADOW,
-    fills_confirmed_at    TEXT,          -- W151: set only when EVERY leg matched a broker fill
 
     CHECK (strategy IN (
         'LONG_STRADDLE','CSP','COVERED_CALL','LONG_CALL','LONG_PUT','PERM',
@@ -235,8 +234,6 @@ CREATE TABLE IF NOT EXISTS legs (
     notes           TEXT,
     created_at      TEXT NOT NULL DEFAULT (datetime('now')),
     entry_delta     REAL,
-    commission      REAL,          -- W151: captured from the broker, never computed with,
-    fees            REAL,          -- stored P&L stays GROSS by decision (2026-08-26)
 
     CHECK (leg_role IN (
         'SHORT_PUT','LONG_PUT','SHORT_CALL','LONG_CALL',

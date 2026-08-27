@@ -28,11 +28,13 @@ from datetime import datetime
 HERE = os.path.dirname(os.path.abspath(__file__))
 DB = os.environ.get("HELM_DB") or os.path.join(os.path.dirname(HERE), "data", "helm.db")
 
-COLUMNS = [
-    ("positions", "fills_confirmed_at", "TEXT"),
-    ("legs", "commission", "REAL"),
-    ("legs", "fees", "REAL"),
-]
+# EMPTY BY DECISION. Russ decided 2026-08-26 that commissions and fees are not
+# tracked; this tool added columns for them anyway, on the strength of a spec
+# recommendation rather than his decision, and the migration broke `helm close`:
+# helm/models/leg.py maps SELECT * straight into the constructor, so ANY new
+# column on `legs` breaks every path that builds a Leg. All three columns were
+# dropped again 2026-08-26. Nothing goes back without an explicit decision.
+COLUMNS = []
 
 
 def existing(conn, table):
@@ -45,8 +47,11 @@ def main():
     todo = [(t, c, k) for t, c, k in COLUMNS if c not in existing(conn, t)]
 
     print("database: " + DB)
+    if not COLUMNS:
+        print("nothing to migrate: COLUMNS is empty by decision - see the note above")
+        return 0
     if not todo:
-        print("all three columns already present - nothing to do")
+        print("every declared column is already present - nothing to do")
         return 0
     for table, column, kind in todo:
         print(("would add " if not apply_it else "adding   ")
