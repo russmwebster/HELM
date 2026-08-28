@@ -38,7 +38,7 @@ def check(ok, label, got=None, want=None):
     results.append((bool(ok), label, got, want))
 
 
-def replay(day, runs_all, consecutive=None, state=None):
+def replay(day, runs_all, consecutive=None, state=None, online=True):
     """Walk one trading day at 10-minute steps. Returns the actions fired."""
     old = G.CONSECUTIVE
     if consecutive:
@@ -51,7 +51,7 @@ def replay(day, runs_all, consecutive=None, state=None):
         end = d.replace(hour=16, minute=0)
         while t <= end:
             visible = [r for r in runs_all if r[0] <= t]
-            v = G.decide(visible, t, state)
+            v = G.decide(visible, t, state, online=online)
             state = {"state": v["state"]}
             if v["action"] != "NONE":
                 fired.append((t.strftime("%H:%M"), v["action"], v["message"][:60]))
@@ -136,6 +136,39 @@ def main():
     check(fixed["action"] == "NONE",
           "with the mtime, the same skew is correctly ignored",
           fixed["action"], "NONE")
+
+    # 6c - NO INTERNET MEANS SILENCE (Russ, 2026-08-28). On a road trip the
+    #      gateway cannot hold an IBKR login, so it stops listening; that is
+    #      correct behaviour, and "restart the gateway" is advice he cannot
+    #      act on. Replay the same outage day with no connection.
+    f_off, end_state = replay("2026-08-24", runs_all, state={"state": G.OK}, online=False)
+    check(f_off == [], "offline: the outage day says nothing at all", f_off, [])
+    check(end_state["state"] == G.OFFLINE, "offline: the state records why it was quiet",
+          end_state["state"], G.OFFLINE)
+
+    # and the reconnection must not be announced as a recovery from an outage
+    # nobody was ever told about.
+    f_back, _ = replay("2026-08-26", runs_all, state=end_state, online=True)
+    check(all(a != "RECOVERED" for _t, a, _m in f_back),
+          "coming back online announces no phantom recovery",
+          [a for _t, a, _m in f_back], "no RECOVERED")
+
+    # THE CONTROL: the same day, same data, WITH internet, must still alert -
+    # proving the silence comes from the connection test and not from the day.
+    f_on, _ = replay("2026-08-24", runs_all, state={"state": G.OK}, online=True)
+    check(any(a == "OUTAGE" for _t, a, _m in f_on),
+          "with internet, the same day still raises the alarm",
+          [a for _t, a, _m in f_on][:1], "OUTAGE")
+
+    # the probe itself must never raise, whatever it finds
+    try:
+        G.has_internet(hosts=[("127.0.0.1", 9)], timeout=0.05)
+        ok_probe = True
+    except Exception:
+        ok_probe = False
+    check(ok_probe, "the internet probe never raises")
+    check(G.has_internet(hosts=[("127.0.0.1", 9)], timeout=0.05) is False,
+          "an unreachable host reads as offline")
 
     # 7 - nothing fires outside a session.
     off = G.run(now=datetime(2026, 8, 23, 12, 0), csv_path=CSV,

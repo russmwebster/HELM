@@ -24,14 +24,25 @@ Design, and each choice is deliberate:
     nothing witnesses the sampler. If the newest sample goes stale during
     RTH, that is its own alert.
 
-Quiet rules: one alert per outage, one on recovery, and nothing at all
-outside a trading session.
+Quiet rules: one alert per outage, one on recovery, nothing at all outside
+a trading session -- and NOTHING WHEN THIS MACHINE IS OFFLINE.
+
+That last rule is Russ's (2026-08-28) and it is the difference between a
+useful alert and one he learns to swipe away. On a road trip there is often
+no connection; IB Gateway cannot hold an IBKR login without one, so it stops
+listening and every sample reads "connection refused". The gateway is
+behaving correctly. Telling him to restart it would be advice he cannot act
+on, delivered every travel morning. So the watchdog tests its own
+connectivity first, says nothing when there is none, and remembers that it
+was silent -- so the eventual reconnection is not announced as a recovery
+from an outage nobody was ever told about.
 """
 from __future__ import annotations
 
 import csv
 import json
 import os
+import socket
 import time
 from datetime import datetime, timedelta
 
@@ -47,7 +58,12 @@ CONSECUTIVE = 3
 STALE_MINUTES = 30
 RTH_OPEN = (9, 30)
 
-OK, OUTAGE, STALE = "ok", "outage", "stale"
+OK, OUTAGE, STALE, OFFLINE = "ok", "outage", "stale", "offline"
+
+# Two raw IPs (no DNS needed) and one name (proves resolution works). Any one
+# answering counts as "this machine has the internet".
+CHECK_HOSTS = [("1.1.1.1", 53), ("8.8.8.8", 53), ("api.ibkr.com", 443)]
+CHECK_TIMEOUT = 2.0
 
 
 def read_runs(path=CSV_PATH, tail_bytes=400_000):
@@ -83,6 +99,27 @@ def read_runs(path=CSV_PATH, tail_bytes=400_000):
     return out
 
 
+def has_internet(hosts=None, timeout=CHECK_TIMEOUT):
+    """Does this machine have ANY internet right now? Never raises.
+
+    Why the watchdog needs to know: IB Gateway cannot hold an IBKR login
+    without a connection, so on a road trip with no signal it stops
+    listening and every sample reads "connection refused". That is the
+    gateway behaving correctly, not failing. Telling Russ to restart it
+    would be advice he cannot act on, delivered every travel morning --
+    and an alert that is routinely wrong is one you learn to ignore.
+    (helm/exit_alert.py makes the same argument about paper positions.)
+    """
+    for host, port in (hosts or CHECK_HOSTS):
+        try:
+            sock = socket.create_connection((host, port), timeout)
+            sock.close()
+            return True
+        except Exception:
+            continue
+    return False
+
+
 def in_session(now, calendar=True):
     """True only during RTH on a trading day. Holidays included, via HELM-159."""
     if now.hour < RTH_OPEN[0] or (now.hour == RTH_OPEN[0] and now.minute < RTH_OPEN[1]):
@@ -97,7 +134,7 @@ def in_session(now, calendar=True):
         return (now.weekday() < 5), "calendar unavailable (%r) - weekday only" % (exc,)
 
 
-def decide(runs, now, state, sampler_age_min=None):
+def decide(runs, now, state, sampler_age_min=None, online=True):
     """Pure. Returns {action, message, state} - action in NONE/OUTAGE/RECOVERED/SAMPLER_STALE.
 
     sampler_age_min: how long since the sampler last WROTE, measured from the
@@ -127,6 +164,14 @@ def decide(runs, now, state, sampler_age_min=None):
     recent = runs[-CONSECUTIVE:]
     all_down = len(recent) == CONSECUTIVE and not any(ok for _ts, ok in recent)
 
+    # No internet: the gateway CANNOT be up, so its being down is not news.
+    # Stay silent (Russ, 2026-08-28) and remember that we did, so the
+    # eventual reconnection is not announced as a recovery from an outage
+    # nobody was ever told about.
+    if not online:
+        return {"action": "NONE", "state": OFFLINE,
+                "message": "this machine is offline - not collecting, nothing to report"}
+
     if all_down:
         if was == OUTAGE:
             return {"action": "NONE", "message": "outage already reported", "state": OUTAGE}
@@ -135,6 +180,10 @@ def decide(runs, now, state, sampler_age_min=None):
                 "message": ("IB Gateway has not answered since %s (%d consecutive samples). "
                             "Marks are not being journaled. Restart the gateway."
                             % (first, CONSECUTIVE))}
+
+    if newest_ok and was == OFFLINE:
+        return {"action": "NONE", "state": OK,
+                "message": "back online; no outage was reported, so none is cleared"}
 
     if newest_ok and was in (OUTAGE, STALE):
         return {"action": "RECOVERED", "state": OK,
@@ -195,7 +244,8 @@ def run(now=None, csv_path=CSV_PATH, state_path=STATE_PATH, do_notify=True, quie
 
     runs = read_runs(csv_path)
     state = load_state(state_path)
-    verdict = decide(runs, now, state, sampler_age_min=sampler_age(csv_path))
+    verdict = decide(runs, now, state, sampler_age_min=sampler_age(csv_path),
+                     online=has_internet())
     save_state(verdict["state"], verdict["action"], now, state_path)
 
     if verdict["action"] != "NONE":
