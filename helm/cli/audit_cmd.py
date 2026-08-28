@@ -26,8 +26,12 @@ DB = Path(os.environ.get("HELM_DB", ROOT / "data" / "helm.db"))
 LOGS = ROOT / "logs"
 SAMPLER_CSV = LOGS / "mktdata_samples.csv"
 
-# The roster, per the worklist. Exactly SEVEN since com.helm.audit.eod
-# was installed 2026-08-13 (s104); the comment read six until s107.
+# The roster, per the worklist. EIGHT since com.helm.gwwatch was added
+# 2026-08-27 (s109); seven since com.helm.audit.eod on 2026-08-13 (s104),
+# and the comment read six until s107. This list is why `audit eod` FAILED
+# on its own existence the first time it ran: a check that enumerates the
+# world must include itself, and it only does so if someone remembers.
+#
 EXPECTED_AGENTS = [
     "com.helm.audit.eod",
     "com.helm.ivr.refresh",
@@ -36,6 +40,15 @@ EXPECTED_AGENTS = [
     "com.helm.pg",
     "com.helm.server",
     "com.helm.snapshot.daily",
+]
+
+# Written and committed, but not yet loaded by launchctl. A pending agent is
+# neither a failure nor a surprise: missing, it WARNS rather than failing the
+# whole day for something that is not a data problem; present, it is accepted
+# rather than read as `unexpected`. Move it up to EXPECTED_AGENTS once it has
+# been loaded, and this list goes back to empty.
+PENDING_AGENTS = [
+    "com.helm.gwwatch",     # W156, plist in launchd/, awaiting two launchctl lines
 ]
 
 # Expected scheduled WRITES on a session day: (agent substring, nominal times, label)
@@ -177,11 +190,19 @@ class Audit:
             ln.split("\t")[-1] for ln in out.splitlines() if "com.helm" in ln
         })
         missing = [a for a in EXPECTED_AGENTS if a not in loaded]
-        extra = [a for a in loaded if a not in EXPECTED_AGENTS]
+        extra = [a for a in loaded if a not in EXPECTED_AGENTS + PENDING_AGENTS]
+        pending_missing = [a for a in PENDING_AGENTS if a not in loaded]
         note = "" if is_today else (
             " — NOTE: this reads the roster NOW, not as it was on the audited date"
         )
-        if not missing and not extra:
+        if not missing and not extra and pending_missing:
+            self.add(
+                WARN,
+                "agent roster",
+                f"{len(loaded)} expected agents loaded; still to install: "
+                f"{pending_missing}{note}",
+            )
+        elif not missing and not extra:
             self.add(PASS, "agent roster", f"exactly {len(loaded)} expected agents loaded{note}")
         else:
             self.add(

@@ -17,6 +17,7 @@ COMMANDS = {
     'analyze':   ('helm.cli.analyze',   'run',  'Analyze historical outcomes'),
     'import':    ('helm.cli.import_cmd', 'run',  'Import positions from a broker export'),
     'confirm-fills': ('helm.cli.confirmfills_cmd', 'run', 'Confirm real entry fills from a broker activity export'),
+    'gwwatch':   ('helm.cli.gwwatch_cmd', 'run',  'Is the IB gateway answering? (runs itself every 10 min)'),
     'ibkr':      ('helm.cli.ibkr_cmd',  'run',  'Manage IB Gateway connection'),
     'positions': ('helm.cli.positions_cmd', 'run', 'View open positions'),
     'check':     ('helm.cli.check_cmd',     'run', 'Health check on open positions'),

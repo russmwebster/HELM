@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- W156 - the gateway watchdog. Every 10 minutes, matching the sampler's
+     cadence. It stands down outside RTH and on non-session days by itself,
+     so the schedule stays dumb and the calendar logic lives in one place
+     (helm/market_calendar.py, HELM-159). -->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.helm.gwwatch</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>-m</string>
+        <string>helm.gateway_watch</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/russmacbookpro/Projects/helm</string>
+    <key>StartInterval</key>
+    <integer>600</integer>
+    <key>RunAtLoad</key>
+    <false/>
+    <key>StandardOutPath</key>
+    <string>/Users/russmacbookpro/Projects/helm/logs/gwwatch.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/russmacbookpro/Projects/helm/logs/gwwatch.log</string>
+</dict>
+</plist>
