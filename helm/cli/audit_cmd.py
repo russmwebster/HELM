@@ -34,6 +34,7 @@ SAMPLER_CSV = LOGS / "mktdata_samples.csv"
 #
 EXPECTED_AGENTS = [
     "com.helm.audit.eod",
+    "com.helm.gwwatch",
     "com.helm.ivr.refresh",
     "com.helm.mktsampler",
     "com.helm.paper.exits",
@@ -48,7 +49,8 @@ EXPECTED_AGENTS = [
 # rather than read as `unexpected`. Move it up to EXPECTED_AGENTS once it has
 # been loaded, and this list goes back to empty.
 PENDING_AGENTS = [
-    "com.helm.gwwatch",     # W156, plist in launchd/, awaiting two launchctl lines
+    # com.helm.gwwatch was loaded 2026-08-28 and promoted to EXPECTED_AGENTS
+    # above; its first runs are in logs/gwwatch.log. Empty is the normal state.
 ]
 
 # Expected scheduled WRITES on a session day: (agent substring, nominal times, label)
