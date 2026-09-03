@@ -325,6 +325,15 @@ def _premium_belief(pos, legs, entry_snap, cur_sig, latest_check):
             state = FLAT
         else:
             state = VINDICATED if favorable else DRIFT_AGAINST
+        # s111 (W162): at high delta this position barely has vega, so an
+        # IV-move grade overstates a force that hardly prices in. State is
+        # damped to FLAT and the ledger says why; the forces stay listed.
+        if strat in _LONGS and state in (VINDICATED, DRIFT_AGAINST):
+            _dnow = _f((latest_check or {}).get("delta"))
+            if _dnow is not None and abs(_dnow) >= 0.85:
+                forces.append("vega is small at %.2f delta -- IV moves barely "
+                              "reprice this position" % abs(_dnow))
+                state = FLAT
     fine = ("entry pricing affects P&L only — it can never trigger an exit. Scored "
             "for/against, not pass/fail: the price you were paid was fixed the day you traded")
     return _belief("premium", title, then, now, state, fine, {"forces": forces})
@@ -472,6 +481,235 @@ def _own_belief(pos, ownership):
         state, note = FRAYING, "a grade below B makes assignment a problem, not a plan"
     return _belief("own", title, "asserted at entry", now + " — " + note, state,
                    "the assignment backstop; grade moves quarterly, so the date matters")
+
+
+_LONG_ENTRY_BAND = {
+    # s113 (W164) -- the LC/LP entry gate's delta band, from
+    # helm/cli/open_cmd.py STRATEGY_CONFIG (delta_min/delta_max). Duplicated
+    # here for display, same as _recover_belief's "1.0x the expected move" --
+    # thesis.py stays DB/CLI-free by design (see module docstring).
+    "LONG_CALL": (0.65, 0.85),
+    "LONG_PUT": (0.30, 0.70),
+}
+
+
+def _char_belief(pos, legs, checks, entry_snap):
+    """s111 (W162; grading fixed s113 W164) -- position character for the
+    long families: the delta you bought vs the delta you hold. Stock-
+    replacement is the point of an ITM long-dated call; this grades whether
+    the position still IS one. Reads legs.entry_delta / entry_snapshots.delta
+    and the journaled check delta; computes nothing new. Display only -- it
+    closes nothing.
+
+    W164 (s112): grading the ABSOLUTE current delta let an entry that was
+    NEVER stock-replacement (delta below the strategy's entry band) render as
+    "eroded" -- false history. Grade the CHANGE from entry delta instead, and
+    when entry itself never met the band, say that plainly rather than
+    describing a change that never happened."""
+    title = "this is stock-like exposure, not a lottery ticket"
+    strat = (pos.get("strategy") or "").upper()
+    e_d = None
+    for l in legs or []:
+        if l.get("direction") == "LONG" and l.get("option_type") not in (None, "STOCK"):
+            e_d = _f(l.get("entry_delta"))
+            break
+    if e_d is None:
+        e_d = _f((entry_snap or {}).get("delta"))
+    c_d = None
+    for r in reversed(checks or []):
+        c_d = _f(r.get("delta"))
+        if c_d is not None:
+            break
+    then = ("bought %.2f of stock-like exposure" % abs(e_d)) if e_d is not None \
+        else "entry delta not captured"
+    if c_d is None:
+        return _belief("character", title, then,
+                       "no journaled delta yet -- ungraded, not guessed", UNKNOWN,
+                       "delta is journaled 3x/day; none on record for this position")
+    a = abs(c_d)
+    e_a = abs(e_d) if e_d is not None else None
+    band = _LONG_ENTRY_BAND.get(strat)
+    out_of_band_entry = (band is not None and e_a is not None and
+                          not (band[0] <= e_a <= band[1]))
+
+    if out_of_band_entry:
+        then = ("bought %.2f -- entered OUTSIDE the %.2f-%.2f stock-"
+                 "replacement band" % (e_a, band[0], band[1]))
+        now = "holding %.2f" % a
+        if a >= 0.90:
+            state = HOLDS
+            now += " -- mostly stock now despite the out-of-band entry"
+        elif a >= band[0]:
+            state = FRAYING
+            now += (" -- inside the %.2f-%.2f band today, but it didn't enter "
+                     "there; call it borrowed character, not held" % band)
+        else:
+            state = BROKEN
+            now += (" -- entered outside the stock-replacement band; this was "
+                     "never stock replacement, not something that eroded")
+        fine = ("entry delta itself never met the %.2f-%.2f stock-replacement "
+                 "band (a pinned entry the screen would have refused -- W97/"
+                 "W132) -- so a low current delta reads as an out-of-band "
+                 "entry, never as erosion; display only -- it closes nothing"
+                 % band)
+        return _belief("character", title, then, now, state, fine,
+                       {"entry_delta": e_d, "cur_delta": c_d})
+
+    now = "holding %.2f" % a
+    if a >= 0.90:
+        state = HOLDS
+        now += " -- mostly stock now: little convexity left, and the option is doing little the shares would not"
+    elif e_a is None:
+        if a >= 0.60:
+            state = HOLDS
+            now += " -- still the position you chose"
+        elif a >= 0.50:
+            state = FRAYING
+            now += " -- halfway to a coin-flip; entry delta wasn't captured, so this reads on level alone"
+        else:
+            state = BROKEN
+            now += " -- deep into coin-flip territory; entry delta wasn't captured, so this reads on level alone"
+    else:
+        change = round(a - e_a, 2)
+        if change <= -0.20:
+            state = BROKEN
+            now += (" -- down %.2f from the %.2f bought at entry: no longer "
+                     "stock replacement" % (-change, e_a))
+        elif change <= -0.10:
+            state = FRAYING
+            now += (" -- down %.2f from the %.2f bought at entry: the "
+                     "character you bought is eroding" % (-change, e_a))
+        elif change >= 0:
+            state = HOLDS
+            now += " -- up %.2f from the %.2f bought at entry" % (change, e_a)
+        else:
+            state = HOLDS
+            now += (" -- still close to the %.2f bought at entry (down %.2f)"
+                     % (e_a, -change))
+
+    if band is not None:
+        fine = ("current delta from the latest journaled check vs the CHANGE "
+                 "from the delta bought at entry (bands: -0.10 fraying, -0.20 "
+                 "broken); entry sat inside the %.2f-%.2f stock-replacement "
+                 "band, so a falling delta here is erosion, not a bad entry; "
+                 "display only -- it closes nothing" % band)
+    else:
+        fine = ("current delta from the latest journaled check vs the CHANGE "
+                 "from the delta bought at entry (bands: -0.10 fraying, -0.20 "
+                 "broken); display only -- it closes nothing")
+    return _belief("character", title, then, now, state, fine,
+                   {"entry_delta": e_d, "cur_delta": c_d})
+
+
+def _recover_belief(pos, legs, latest_check):
+    """s111 (W162) -- the entry gate (break-even within 1.0x the expected
+    move), recomputed live over the REMAINING clock: distance to break-even
+    in units of the one-sigma expected move at the latest check's IV. The
+    number that separates recoverable-underwater from dead-money-underwater.
+    Display only -- it closes nothing."""
+    import math as _m
+    strat = (pos.get("strategy") or "").upper()
+    title = "the clock left can still carry this past break-even"
+    bes = breakevens(legs)
+    be = bes[0] if bes else None
+    spot = _f((latest_check or {}).get("spot_price"))
+    iv = _f((latest_check or {}).get("iv_current"))
+    dte = _f((latest_check or {}).get("dte_now"))
+    then = "entry gate: break-even within 1.0x the expected move"
+    if be is None:
+        return _belief("recover", title, then,
+                       "cannot grade -- no break-even derivable from the legs "
+                       "(W132: the pin path writes none)", UNKNOWN,
+                       "shown as ungraded rather than estimated")
+    if spot is None or not iv or dte is None:
+        return _belief("recover", title, then,
+                       "cannot grade -- the latest check is missing spot, IV or DTE",
+                       UNKNOWN, "shown as ungraded rather than estimated")
+    sigma = spot * (iv / 100.0) * _m.sqrt(max(dte, 0.0) / 365.0)
+    if not sigma:
+        return _belief("recover", title, then,
+                       "cannot grade -- no time or volatility left to measure against",
+                       UNKNOWN, "shown as ungraded rather than estimated")
+    need = (spot - be) if strat == "LONG_PUT" else (be - spot)
+    r = need / sigma
+    pct = 100.0 * need / spot
+    fine = ("one-sigma expected move at the latest check's IV over the remaining "
+            "DTE -- the same test the entry gate applies, recomputed live; "
+            "display only -- it closes nothing")
+    if r <= 0:
+        return _belief("recover", title, then,
+                       "past break-even -- spot is %.1f%% beyond $%.2f" % (abs(pct), be),
+                       HOLDS, fine, {"sigma_mult": round(r, 2)})
+    body = ("break-even $%.2f is %.1f%% away -- %.2fx the expected move over the "
+            "%d days left" % (be, pct, r, int(dte)))
+    if r < 0.75:
+        state, tail = HOLDS, "; time is real here"
+    elif r <= 1.25:
+        state, tail = FRAYING, "; recovery needs an above-average run"
+    else:
+        state, tail = BROKEN, "; 'time to recover' is a story at this distance"
+    return _belief("recover", title, then, body + tail, state, fine,
+                   {"sigma_mult": round(r, 2)})
+
+
+def exit_track_long(pos, checks, closed):
+    """s111 (W162) -- exit_track's twin for the long families: what the market
+    has offered since the DIRECTION break was confirmed (the strike version
+    cannot see a long). Same dict shape as exit_track, so the renderer needs
+    nothing new. Built only from journaled GOOD checks; returns None rather
+    than guessing."""
+    if closed or not checks:
+        return None
+    seen = {}
+    for r in checks:
+        js = r.get("lc_arms_json")
+        d = (r.get("checked_at") or "")[:10]
+        if not js or not d:
+            continue
+        try:
+            th = (json.loads(js) or {}).get("thesis") or {}
+        except (ValueError, TypeError):
+            continue
+        if "broken_today" in th:
+            seen[d] = bool(th.get("broken_today"))
+    if not seen:
+        return None
+    days = sorted(seen)
+    run = []
+    for d in reversed(days):
+        if seen[d]:
+            run.append(d)
+        else:
+            break
+    try:
+        confirm_n = int(getattr(_le, "CONFIRM_DAYS", 2) or 2)
+    except Exception:
+        confirm_n = 2
+    if len(run) < confirm_n:
+        return None
+    run.reverse()
+    confirm = run[1] if len(run) >= 2 else run[0]
+    byday = {}
+    for r in checks:
+        d = (r.get("checked_at") or "")[:10]
+        p = _f(r.get("pnl_unrealized"))
+        if not d or p is None or d < confirm:
+            continue
+        if d not in byday or p > byday[d]:
+            byday[d] = p
+    if not byday:
+        return None
+    ds = sorted(byday)
+    best_date = min(ds, key=lambda d: (-byday[d], d))
+    return {
+        "confirm_date": confirm,
+        "best": byday[best_date], "best_date": best_date,
+        "today": byday[ds[-1]], "today_date": ds[-1],
+        "prev": byday[ds[-2]] if len(ds) >= 2 else None,
+        "prev_date": ds[-2] if len(ds) >= 2 else None,
+        "n_days": len(ds),
+        "kind": "direction",
+    }
 
 
 def _term_belief(pos):
@@ -1107,6 +1345,8 @@ def evaluate(pos, legs, checks, entry_snap=None, entry_thesis_row=None,
         beliefs.append(_direction_belief(pos, entry_thesis_row, checks, cur_sig,
                                          want_up=strat in ("LONG_CALL", "BULL_CALL_SPREAD")))
         if strat in _LONGS:
+            beliefs.append(_char_belief(pos, legs, checks, entry_snap))
+            beliefs.append(_recover_belief(pos, legs, latest))
             beliefs.append(_premium_belief(pos, legs, entry_snap, cur_sig, latest))
     elif strat in _DIAG:
         beliefs.append(_direction_belief(pos, entry_thesis_row, checks, cur_sig, want_up=True))
@@ -1141,6 +1381,8 @@ def evaluate(pos, legs, checks, entry_snap=None, entry_thesis_row=None,
     if not closed and latest:
         ladder, conv = expiry_ladder(pos, legs, latest.get("spot_price"), mark, _f(dte))
     xt = exit_track(legs, checks, closed)
+    if xt is None and strat in _LONGS:
+        xt = exit_track_long(pos, checks, closed)
     # The cost-to-close track. exit_track answers a different question — the BEST
     # exit offered since a confirmed break — and stays as it is; this one runs on
     # every position with a premium and traces the LAST check of each day. Both
@@ -1190,12 +1432,36 @@ def evaluate(pos, legs, checks, entry_snap=None, entry_thesis_row=None,
                for b in beliefs):
             cue = "on the graded beliefs alone, nothing is signalling — but the belief that would signal one was never " \
                   "armed; any exit here is yours by hand"
+        elif strat in _LONGS and mark is not None and mark > 0:
+            # s111 (W162): the two branches below both assume a losing mark, and
+            # keyed on the PREMIUM sign -- so a profitable long call was told it
+            # had "a losing mark with beliefs intact". The mark decides now.
+            cue = "on the graded beliefs alone, nothing is signalling — the position is ahead of its entry; " \
+                  "sitting still is a decision"
         elif (_f(pos.get("net_premium")) or 0) < 0:
             cue = "on the graded beliefs alone, nothing is signalling — a losing mark with beliefs intact is drawdown " \
                   "inside the plan; sitting still is a decision"
         else:
             cue = "on the graded beliefs alone, nothing is signalling — a losing mark with beliefs intact is noise you " \
                   "are being paid to tolerate; sitting still is a decision"
+    # s111 (W162): the long families separate recoverable-underwater from
+    # dead-money-underwater -- the generic broken cue cannot.
+    if not closed and strat in _LONGS and n_bad:
+        _byk = {b.get("key"): b for b in beliefs}
+        _dst = (_byk.get("direction") or {}).get("state")
+        _cst = (_byk.get("character") or {}).get("state")
+        _rst = (_byk.get("recover") or {}).get("state")
+        if _dst in (BROKEN, BROKEN_LOUD):
+            if (_cst in (FRAYING, BROKEN, BROKEN_LOUD)
+                    or _rst in (FRAYING, BROKEN, BROKEN_LOUD)):
+                cue = ("the direction is confirmed-broken and the position's character "
+                       "or recovery odds are degrading with it -- the configuration this "
+                       "book's worst losses shared; deciding it today beats watching it")
+            elif _cst == HOLDS and _rst == HOLDS:
+                cue = ("the direction is confirmed-broken, but delta is holding and the "
+                       "break-even sits inside the remaining expected move -- recoverable "
+                       "if you still believe the name; decide it deliberately rather than "
+                       "let it drift")
     if bits:
         _lead = " ; ".join(bits) + ". "
     elif n_unknown:
@@ -1205,9 +1471,32 @@ def evaluate(pos, legs, checks, entry_snap=None, entry_thesis_row=None,
                  "less than it appears to. " % (_ung, "is" if n_unknown == 1 else "are"))
     else:
         _lead = "Every graded belief holds. "
-    read = _lead + cue
+    _lead2 = ""
+    if not closed and strat in _LONGS and latest is not None:
+        # s111 (W162): leverage honesty -- the option's %% is not the stock's.
+        _es0 = _f((entry_snap or {}).get("spot_price"))
+        _ns0 = _f(latest.get("spot_price"))
+        _prem0 = abs(_f(pos.get("net_premium")) or 0.0)
+        if _es0 and _ns0 and mark is not None and _prem0:
+            _sm = 100.0 * (_ns0 - _es0) / _es0
+            _om = 100.0 * mark / _prem0
+            if abs(_om) >= 10.0 and abs(_sm) < abs(_om):
+                _lead2 = ("The mark's %+.0f%% is leverage on a stock move of "
+                          "%+.1f%% since entry -- read the stock, not the option, "
+                          "for how far this has actually moved. " % (_om, _sm))
+    read = _lead + _lead2 + cue
     if conv:
         read += ". " + conv
+    if not closed and strat in _LONGS:
+        # s111 (W162): a checkpoint scaled to the entry clock, not the credit
+        # book's 21/7 -- display only.
+        _ed0 = _f(pos.get("entry_dte"))
+        _dn0 = _f(dte)
+        if _ed0 and _dn0 is not None and _dn0 <= 0.5 * _ed0 and (mark or 0.0) <= 0.0:
+            read += (". Halfway checkpoint: %d of the %d entry days are spent and "
+                     "the thesis has delivered nothing yet -- from here the clock "
+                     "stops being the cheap part of the trade"
+                     % (int(round(_ed0 - _dn0)), int(round(_ed0))))
 
     _exps = sorted({(l.get("expiration") or "")[:10] for l in legs or []
                     if l.get("option_type") not in (None, "STOCK") and l.get("expiration")})
