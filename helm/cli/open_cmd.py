@@ -3305,7 +3305,11 @@ def run():
     if is_diagonal:
         try:
             from helm.cli.diagonal import evaluate_diagonal, display_diagonal
-            spot_d, diagonals = evaluate_diagonal(ticker)
+            # W163 (s113): a full pin names its own pair from the chain, so an
+            # empty screen must not end the command before the pin is read.
+            _diag_pinned = (pin_strike is not None and pin_expiry is not None
+                            and "--long-strike" in args and "--long-expiry" in args)
+            spot_d, diagonals = evaluate_diagonal(ticker, allow_empty=_diag_pinned)
         except Exception as e:
             console.print(f"[red]Error:[/red] {e}")
             return
