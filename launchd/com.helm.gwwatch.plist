@@ -10,7 +10,11 @@
     <string>com.helm.gwwatch</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/usr/bin/python3</string>
+        <!-- s113: the anaconda env, not /usr/bin/python3: the system python has no
+             exchange_calendars, so the calendar failed OPEN and the watchdog ran on
+             non-session days (logs/gwwatch.log, 08-28/29). Same interpreter as the
+             other seven agents. -->
+        <string>/opt/anaconda3/envs/helm/bin/python3</string>
         <string>-m</string>
         <string>helm.gateway_watch</string>
     </array>
