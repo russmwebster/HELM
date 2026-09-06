@@ -34,6 +34,7 @@ COMMANDS = {
     'assign':    ('helm.cli.assign_cmd',     'run', 'Record a short put assignment and the shares it hands you'),
     'settle':    ('helm.cli.settle_cmd',     'run', 'Ask what the broker did with positions that reached expiry'),
     'stock':     ('helm.cli.stock_cmd',     'run', 'Manage stock positions for covered call sizing'),
+    'pending':   ('helm.cli.pending_cmd',   'run', 'Exit flags awaiting a decision — act, or log why you are holding'),
     'status':    ('helm.cli.status_cmd',    'run', 'Portfolio dashboard — positions, P&L, activity'),
     'paper':     ('helm.cli.paper_cmd',   'run',  'Paper book — generate picks from the latest scan'),
     'audit':     ('helm.cli.audit_cmd',   'run', 'End-of-day collection audit -- did the day collect as designed?'),

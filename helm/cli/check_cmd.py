@@ -2873,6 +2873,23 @@ def cmd_snapshot(args):
     except Exception:
         pass
 
+    # W158: record exit flags that fired on what the snapshot just journaled,
+    # and settle any whose position has since closed. Writes only exit_flags;
+    # decides nothing and closes nothing (HELM-193). A failure here must never
+    # cost the snapshot either.
+    try:
+        import sqlite3 as _s3
+        from helm import exit_flags as _xf
+        from helm.config import DB_PATH as _dbp
+        _c = _s3.connect(str(_dbp))
+        try:
+            _xf.settle_closed(_c)
+            _xf.scan(_c)
+        finally:
+            _c.close()
+    except Exception:
+        pass
+
     if "--silent" not in args:
         _msg = (f"snapshot: {attempted} attempted, {journaled} journaled")
         if VERDICT_FAILURES:

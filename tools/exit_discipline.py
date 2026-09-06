@@ -296,6 +296,7 @@ def load(db, book, as_of):
         args.append(as_of)
     pos = [dict(r) for r in c.execute(
         "SELECT id,strategy,exit_reason,realized_pnl,opened_at,closed_at FROM positions WHERE " + where, args)]
+    disp = dispositions(c)
     out = []
     for p in pos:
         chk = [dict(r) for r in c.execute(
@@ -303,8 +304,26 @@ def load(db, book, as_of):
             "WHERE position_id=? AND data_quality='GOOD' AND pnl_unrealized IS NOT NULL "
             "ORDER BY checked_at", (p["id"],))]
         p["checks"] = chk
+        p["disp"] = disp.get(p["id"], {})
         out.append(p)
     c.close()
+    return out
+
+
+def dispositions(c):
+    """W158's exit_flags log, when it exists. {position_id: {kind: 'ACTED'|'KEEP'|None}}.
+
+    Absent table -> {} -> every flag reads 'silent', which is what this tool
+    printed before W158 shipped. A cohort that closed before the log existed
+    stays silent for ever, correctly: nothing surfaced those flags at the time.
+    """
+    out = {}
+    try:
+        for pid, kind, d in c.execute(
+                "SELECT position_id, kind, disposition FROM exit_flags"):
+            out.setdefault(pid, {})[kind] = d
+    except Exception:
+        pass
     return out
 
 
@@ -319,7 +338,7 @@ def evaluate(p, tdays):
     r = {"id": p["id"], "strategy": s, "month": p["closed_at"][:7], "pnl": pnl,
          "held": (closed - opened).days,
          "labelled": bool(p["exit_reason"]) and p["exit_reason"] != "manual",
-         "journal": len(chk) >= 2}
+         "journal": len(chk) >= 2, "disp": p.get("disp") or {}}
     # peak (M5)
     peaks = [c["u"] for c in chk]
     r["peak"] = max(peaks) if peaks else None
@@ -426,8 +445,17 @@ def summarize(label, g):
     # M5
     gg = [r for r in g if r["peak"] and r["peak"] > 0]
     d["m5.pct"] = round(100.0 * sum(r["pnl"] for r in gg) / sum(r["peak"] for r in gg), 1) if gg else None
-    # M6 - no source until W158
-    d["m6"] = {"yes": 0, "no": 0, "silent": sum(1 for r in g if r["sig_kind"] == "thesis")}
+    # M6 - W158's exit_flags log is the source. The DENOMINATOR is unchanged:
+    # the thesis flags M1 already detects, so this column keeps meaning the
+    # same thing it did before the log existed. (The log itself records all
+    # three kinds; M6 stays thesis-only until the spec says otherwise.)
+    m6 = {"yes": 0, "no": 0, "silent": 0}
+    for r in g:
+        if r["sig_kind"] != "thesis":
+            continue
+        dd = (r.get("disp") or {}).get("thesis")
+        m6["yes" if dd == "ACTED" else "no" if dd == "KEEP" else "silent"] += 1
+    d["m6"] = m6
     return d
 
 
@@ -447,7 +475,9 @@ def fmt_money(x):
 def print_table(res):
     print("EXIT DISCIPLINE SCORECARD v0.2 — book %s — as of %s — calendar %s — %d closed positions"
           % (res["book"], res["as_of"] or "latest", res["calendar"], res["positions"]))
-    print("M6 (flag dispositions) has no data source until W158 ships: every flag reads 'silent'.")
+    if not any(d["m6"]["yes"] or d["m6"]["no"] for d in res["cohorts"]):
+        print("M6 (flag dispositions): no flag on this book has been dispositioned yet — "
+              "W158's log starts empty, so every flag still reads 'silent'.")
     print()
     hdr = "%-14s %4s | %10s %8s %6s %5s %10s | %-9s %-9s %-9s %4s | %5s | %5s | %9s | %7s | %s" % (
         "cohort", "n", "M7 alpha", "median", "beat", "held", "drop-top5",
