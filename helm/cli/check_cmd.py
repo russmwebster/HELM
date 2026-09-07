@@ -34,6 +34,8 @@ from helm.decision import evaluate as _core_evaluate, evaluate_shadow_debit_stop
 from helm.models.settings import StrategySettings
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
+from helm import legview as _legview   # s117, W168
 logging.getLogger("ib_insync").setLevel(logging.CRITICAL)
 logging.getLogger("asyncio").setLevel(logging.CRITICAL)
 logging.getLogger("yfinance").setLevel(logging.CRITICAL)
@@ -553,6 +555,7 @@ def assess_position(pos: dict, legs: list, underlying_price: Optional[float],
 
     # Find primary option leg
     opt_legs = [l for l in legs if l["option_type"] not in (None, "STOCK")]
+    opt_legs = _legview.order_option_legs(opt_legs)   # s117, W168
     stock_legs = [l for l in legs if l["option_type"] == "STOCK"]
     primary = opt_legs[0] if opt_legs else None
     is_multileg = len(opt_legs) > 1
@@ -724,6 +727,10 @@ def check_one(pos: dict, legs: list, deep: bool = False, persist: bool = False) 
     ticker = pos["ticker"]
     strategy = pos["strategy"]
     opt_legs = [l for l in legs if l.get("option_type") not in (None, "STOCK")]
+    # s117 (W168): order multi-expiry legs FRONT FIRST before anything picks a
+    # primary. No-op when the legs share an expiration, so nothing outside the
+    # diagonal/calendar family moves. See helm/legview.py.
+    opt_legs = _legview.order_option_legs(opt_legs)
     # s116: the primary leg must be one that still QUOTES. The primary sets
     # opt_source, and save_check persists only when "live" is in it -- so a
     # position whose primary leg has EXPIRED is not journaled at all, which is

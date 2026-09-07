@@ -583,6 +583,41 @@ class Audit:
             named,
         )
 
+    def check_exposure_groups(self):
+        """W143: `exposure_group` has no writer, so a new watchlist row arrives NULL.
+
+        Asserted here rather than fixed at the add path DELIBERATELY: an assertion
+        also catches a group being dropped or a rename orphaning rows, which an
+        add-path fix cannot. It has already recurred twice by hand in one day
+        (the 22 tranche-1 names, then ROST hours later).
+
+        Reads CURRENT watchlist state -- the table keeps no history -- so on a
+        back-dated audit this assertion describes today, not the audited day.
+        Said here rather than left to be discovered.
+        """
+        rows = self.q(
+            "select ticker from watchlist "
+            "where active = 1 and (exposure_group is null or trim(exposure_group) = '') "
+            "order by ticker"
+        )
+        total = self.q("select count(*) as c from watchlist where active = 1")[0]["c"]
+        if not total:
+            self.add(SKIP, "exposure groups", "no active watchlist names")
+            return
+        if not rows:
+            self.add(PASS, "exposure groups",
+                     "every active watchlist name carries an exposure group",
+                     "%d active names checked (current state)" % total)
+            return
+        CAP = 12  # W119: a capped list must SAY it is capped.
+        named = ", ".join(r["ticker"] for r in rows[:CAP])
+        if len(rows) > CAP:
+            named += "; and %d more" % (len(rows) - CAP)
+        self.add(FAIL, "exposure groups",
+                 "%d of %d active watchlist names carry no exposure group"
+                 % (len(rows), total),
+                 named)
+
     def check_closes(self):
         rows = self.q(
             "select ticker, book, exit_reason from positions where date(closed_at) = ?",
@@ -1148,9 +1183,15 @@ class Audit:
         self.check_marks()
         self.check_fields()
         self.check_pnl_arithmetic()
+        self.check_exposure_groups()
         self.check_closes()
         self.check_origins()
         self.check_previous_audit()
+        self.blind_spot(
+            "The exposure-group check reads the watchlist as it stands NOW. "
+            "It cannot tell you whether a name was ungrouped on the audited "
+            "day, only whether anything is ungrouped today."
+        )
         self.blind_spot(
             "The 'previous audit' check only looks BACKWARD one session. If "
             "this audit stops running for good, no later run exists to notice "

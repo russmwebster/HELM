@@ -132,7 +132,9 @@ def run():
     pv  = acct.get("portfolio_value") or 0
     bp  = acct.get("buying_power") or 0
     pnl_color = "green" if total_realized >= 0 else "red"
-    pnl_sign  = "+" if total_realized >= 0 else ""
+    # W152: three states, three renderings. A loss must not depend on colour --
+    # it does not survive a screenshot, a copy-paste, or a colour-blind reader.
+    pnl_sign  = "+" if total_realized > 0 else ("-" if total_realized < 0 else "")
 
     console.print("  [bold]Portfolio[/bold]")
     console.print(f"  Value:          [bold]${pv:>12,.0f}[/bold]    Buying Power:  [bold]${bp:>12,.0f}[/bold]")

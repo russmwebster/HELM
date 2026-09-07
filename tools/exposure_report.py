@@ -46,33 +46,12 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_DB = os.path.join(HERE, os.pardir, 'data', 'helm.db')
 
 
-def committed(legs):
-    by = defaultdict(list)
-    for L in legs:
-        by[(L['option_type'] or '').upper()].append(L)
-    spreads, other, kinds = [], 0.0, set()
-    for typ, ls in by.items():
-        sh = [x for x in ls if (x['direction'] or '').upper() == 'SHORT']
-        lo = [x for x in ls if (x['direction'] or '').upper() == 'LONG']
-        if sh and lo:
-            w = max(abs((s['strike'] or 0) - (l['strike'] or 0)) for s in sh for l in lo)
-            q = max(abs(s['contracts'] or 0) for s in sh)
-            spreads.append(w * 100 * q)
-            kinds.add('vertical')
-        elif sh:
-            for s in sh:
-                if typ == 'PUT':
-                    other += (s['strike'] or 0) * 100 * abs(s['contracts'] or 0)
-                    kinds.add('cash-secured put')
-                else:
-                    kinds.add('covered call')
-        elif lo:
-            for l in lo:
-                other += ((l['open_price'] or 0) * (l['multiplier'] or 100)
-                          * abs(l['contracts'] or 0))
-            kinds.add('debit')
-    req = (max(spreads) if len(spreads) > 1 else sum(spreads)) + other
-    return req, '+'.join(sorted(kinds)) or 'unknown'
+# W135 (s117): the single definition of committed capital now lives in
+# helm/exposure.py, so the CLI and this tool cannot drift apart. This file's
+# docstring above still describes the rule; the code is one import away.
+import sys as _sys, os as _os
+_sys.path.insert(0, _os.path.join(HERE, _os.pardir))
+from helm.exposure import committed  # noqa: E402
 
 
 def build(db, book, cash_only=False):
