@@ -228,9 +228,17 @@ def keep(conn, position_id, kind, reason, note=None, now=None):
 
 
 # -------------------------------------------------------------------- reads
-def pending(conn, as_of=None):
-    """Every open decision point, with what has happened since it fired."""
-    conn.executescript(DDL)
+def pending(conn, as_of=None, ensure=True):
+    """Every open decision point, with what has happened since it fired.
+
+    ensure=False skips the DDL so a READ-ONLY connection can call this.
+    PG needs that: W34 says the board reads live and writes nothing, and a
+    CREATE TABLE IF NOT EXISTS is still a write. The table not existing then
+    surfaces as an error to the caller rather than being papered over, which
+    is the honest failure for a reader. (s117)
+    """
+    if ensure:
+        conn.executescript(DDL)
     out = []
     for r in conn.execute(
             "SELECT f.id, f.position_id, f.kind, f.flag_date, f.mark_at_flag, "
