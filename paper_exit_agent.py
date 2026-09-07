@@ -68,9 +68,11 @@ def leg_mid(tk, leg):
         from helm.dates import dte as _dte
         _d = _dte(_exp)
         if _d is not None and _d < 0:
-            from helm.expiry import settlement_intrinsic
-            return settlement_intrinsic(
-                getattr(tk, "ticker", None), leg.option_type, leg.strike, _exp)
+            from helm.expiry import settled_mark
+            # s116: the book's settled close_price first, intrinsic as the
+            # fallback -- an acting close must not price a leg differently
+            # from the way `helm settle` recorded it.
+            return settled_mark(leg, getattr(tk, "ticker", None))
     except Exception:
         pass
     try:

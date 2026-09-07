@@ -108,13 +108,40 @@ def _persist_real_leg_marks(conn, check_id, position_id, leg_marks_by_id):
     from datetime import datetime
     if not leg_marks_by_id:
         return
-    for _m in leg_marks_by_id:
-        if (not _m.get("leg_id") or _m.get("current_price") is None
-                or not _m.get("is_live")):
-            return
+    # s116 (W144's stated fix shape): write the legs that HAVE a mark and label
+    # the set, instead of returning bare. The all-or-nothing live gate was
+    # written for a partly-unquotable position, where a consumer could compute
+    # a confidently wrong net delta from three legs of four. It also fires on a
+    # state that is not a fault at all -- a settled leg is never "live" -- so
+    # BX-DIAGONAL-20260729-7A1722 has had ZERO leg_checks rows since its front
+    # leg expired on 2026-08-28, silently, while every other open diagonal
+    # carried 17-18 over the same six days. Both REAL diagonals reach that
+    # state on 2026-10-16.
+    #
+    # A set is GOOD only when every leg is priced AND live -- unchanged, so
+    # every reader that trusts GOOD sees exactly what it saw before. Anything
+    # else is written PARTIAL: the truth is kept, and nobody can mistake it for
+    # a whole one. A leg with no mark at all is still not written (HELM-095),
+    # and the skip now SAYS so -- the gate used to discard its own evidence,
+    # which is why characterising one position took an hour of queries.
+    _priced = [_m for _m in leg_marks_by_id
+               if _m.get("leg_id") and _m.get("current_price") is not None]
+    if not _priced:
+        return
+    _unpriced = [_m.get("leg_id") for _m in leg_marks_by_id
+                 if _m.get("leg_id") and _m.get("current_price") is None]
+    _not_live = [_m.get("leg_id") for _m in _priced if not _m.get("is_live")]
+    _dq = "GOOD" if (not _unpriced and not _not_live) else "PARTIAL"
+    if _dq != "GOOD":
+        # to the log, never stdout: this runs inside the snapshot agent and
+        # inside `helm check`, and a stray line on stdout is a rendered claim
+        # nobody asked for.
+        logging.getLogger("helm.check").info(
+            "leg_checks PARTIAL for %s: %d priced, unpriced=%s, not-live=%s",
+            position_id, len(_priced), _unpriced or "none", _not_live or "none")
     _now = datetime.now().isoformat()
     _seen = set()
-    for _m in leg_marks_by_id:
+    for _m in _priced:
         _lid = _m["leg_id"]
         if _lid in _seen:
             continue
@@ -123,9 +150,9 @@ def _persist_real_leg_marks(conn, check_id, position_id, leg_marks_by_id):
             "INSERT INTO leg_checks "
             "(id, check_id, position_id, leg_id, checked_at, "
             "current_bid, current_ask, current_price, delta, gamma, theta, vega, iv_current, greeks_source, data_quality, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'GOOD', ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             ("LCHK-" + _uuid.uuid4().hex[:8].upper(),
-             check_id, position_id, _lid, _now, _m.get("bid"), _m.get("ask"), _m["current_price"], _m.get("delta"), _m.get("gamma"), _m.get("theta"), _m.get("vega"), _m.get("iv"), ("ibkr-live" if _m.get("delta") is not None else None), _now),
+             check_id, position_id, _lid, _now, _m.get("bid"), _m.get("ask"), _m["current_price"], _m.get("delta"), _m.get("gamma"), _m.get("theta"), _m.get("vega"), _m.get("iv"), ("ibkr-live" if _m.get("delta") is not None else None), _dq, _now),
         )
 
 
@@ -697,7 +724,21 @@ def check_one(pos: dict, legs: list, deep: bool = False, persist: bool = False) 
     ticker = pos["ticker"]
     strategy = pos["strategy"]
     opt_legs = [l for l in legs if l.get("option_type") not in (None, "STOCK")]
-    primary = opt_legs[0] if opt_legs else None
+    # s116: the primary leg must be one that still QUOTES. The primary sets
+    # opt_source, and save_check persists only when "live" is in it -- so a
+    # position whose primary leg has EXPIRED is not journaled at all, which is
+    # a diagonal's normal lifecycle rather than an anomaly. Nothing chose the
+    # primary before this: "SELECT * FROM legs" has no ORDER BY, so it was the
+    # insertion order. The PAPER diagonals happen to be written long-leg-first
+    # and kept marking through their front-leg expiry; the two REAL ones are
+    # written short-leg-first and would have gone silent on 2026-10-16.
+    # Live-leg order is otherwise untouched -- this only moves the primary when
+    # the leg that would have been chosen is dead.
+    _dead = lambda l: (l.get("expiration") is not None
+                       and (dte(l["expiration"]) is not None)
+                       and dte(l["expiration"]) < 0)
+    _quoting = [l for l in opt_legs if not _dead(l)]
+    primary = (_quoting or opt_legs)[0] if opt_legs else None
 
     # Fetch underlying price (IBKR first, yfinance fallback)
     underlying_price = None
@@ -779,10 +820,11 @@ def check_one(pos: dict, legs: list, deep: bool = False, persist: bool = False) 
             # invent a value).
             _lg_dte = dte(_lg["expiration"]) if _lg.get("expiration") else None
             if _lg_dte is not None and _lg_dte < 0:
-                from helm.expiry import settlement_intrinsic
+                from helm.expiry import settled_mark
                 _q = {}
-                _mid = settlement_intrinsic(ticker, _lg["option_type"],
-                                            _lg["strike"], _lg["expiration"])
+                # s116: the settled close_price the book recorded, when it has
+                # one; intrinsic only as the fallback. See expiry.settled_mark.
+                _mid = settled_mark(_lg, ticker)
                 _leg_live = False
             else:
                 _q = fetch_ibkr_option(ticker, _lg["expiration"], _lg["strike"], _lg["option_type"])

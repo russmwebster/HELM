@@ -71,3 +71,36 @@ def settlement_intrinsic(ticker: str, option_type: str, strike,
     if ot == "PUT":
         return round(max(0.0, float(strike) - px), 2)
     return None
+
+
+# ── s116: the book's own settled price ──────────────────────────────────────
+
+def _leg_get(leg, key):
+    """Read a field off a leg row (dict) or a Leg model. Both callers exist."""
+    if isinstance(leg, dict):
+        return leg.get(key)
+    return getattr(leg, key, None)
+
+
+def settled_mark(leg, ticker=None):
+    """Standing mark for an EXPIRED leg: the price the book settled it at.
+
+    Two paths valued a dead leg and they disagreed. `helm settle` (W131)
+    writes legs.close_price from the last GOOD expiry-day MARK; this module's
+    settlement_intrinsic() recomputes it from yfinance's official CLOSE. On
+    BX-DIAGONAL-20260729-7A1722 that is 8.28 against 7.39 -- both constants,
+    so the gap never closes: every check since the settle reported the
+    position $89 better than its own book. The settled record wins.
+
+    Intrinsic stays the fallback for a leg nothing has settled yet, and None
+    still means unmarkable (HELM-095: never invent a value).
+    """
+    cp = _leg_get(leg, "close_price")
+    if cp is not None:
+        try:
+            return round(float(cp), 4)
+        except (TypeError, ValueError):
+            pass
+    return settlement_intrinsic(ticker, _leg_get(leg, "option_type"),
+                                _leg_get(leg, "strike"),
+                                _leg_get(leg, "expiration"))
