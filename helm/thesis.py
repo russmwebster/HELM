@@ -1113,7 +1113,42 @@ def _nice_step(span):
     return base * 10
 
 
-def close_svg(track, width=760, height=230):
+def trail_series(pos, track):
+    """The v3 give-back trail, in the SAME units as the close track, per point.
+
+    The trail is a RATCHET, not a level: it sits GIVE_BACK_BAND points below the
+    running high-water mark and never falls, capped by the fixed stop. Drawn over
+    time it steps up as the peak rises, and the day the ink line crosses under it
+    is the day the rule fires -- which is the whole reason to draw it rather than
+    describe it.
+
+    LONG families only. v3 is the long doctrine; a credit structure has a profit
+    target and a calendar, not a trail, and drawing one there would be a rendered
+    claim about a rule that does not exist (s97's shape).
+
+    Returns a list parallel to track["points"], or None. Display only.
+    """
+    from helm import long_exit as _le
+    strat = (pos.get("strategy") or "").upper()
+    if strat not in _LONGS or not track or not track.get("points"):
+        return None
+    paid = track.get("premium")
+    if not paid:
+        return None
+    out, hwm = [], None
+    for p in track["points"]:
+        v = _f(p.get("value"))
+        if v is None:
+            out.append(None)
+            continue
+        pct = (v - paid) / paid
+        hwm = pct if hwm is None else max(hwm, pct)
+        floor = _le.trail_floor(hwm)
+        out.append(None if floor is None else paid * (1.0 + floor))
+    return out if any(x is not None for x in out) else None
+
+
+def close_svg(track, width=760, height=230, trail=None):
     """Inline SVG for the cost-to-close track. No chart library, no external
     asset, no script — it renders from the markup alone.
 
@@ -1129,8 +1164,12 @@ def close_svg(track, width=760, height=230):
     n = len(pts)
     ml, mr, mt, mb = 66, 84, 20, 28
     pw, ph = width - ml - mr, height - mt - mb
-    lo = min([p["lo"] for p in pts] + [paid])
-    hi = max([p["hi"] for p in pts] + [paid])
+    _tv = [v for v in (trail or []) if v is not None]
+    # The trail is included in the domain deliberately: a rule line that
+    # silently falls off the bottom of the chart is worse than no line,
+    # because its absence reads as "not firing".
+    lo = min([p["lo"] for p in pts] + [paid] + _tv)
+    hi = max([p["hi"] for p in pts] + [paid] + _tv)
     pad = (hi - lo) * 0.12 or max(abs(hi) * 0.1, 50.0)
     y0, y1 = lo - pad, hi + pad
 
@@ -1174,6 +1213,27 @@ def close_svg(track, width=760, height=230):
              % (ml, ml + pw, yp, yp))
     e.append('<text x="%.1f" y="%.1f" font-size="10.5" fill="var(--viz-ink2,#52514e)">%s %s</text>'
              % (ml + pw + 8, yp + 3.5, "took in" if track["credit"] else "paid", _amt(paid)))
+    if _tv:
+        # A ratchet is a STEP, not a slope: hold each level to the next point,
+        # then rise. Drawing it as a straight segment between points would show
+        # the floor moving on days it did not move.
+        seg, prev = [], None
+        for i, tv in enumerate(trail):
+            if tv is None:
+                prev = None
+                continue
+            if prev is None:
+                seg.append("M%.1f %.1f" % (X(i), Y(tv)))
+            else:
+                seg.append("L%.1f %.1f L%.1f %.1f" % (X(i), Y(prev), X(i), Y(tv)))
+            prev = tv
+        if seg:
+            e.append('<path d="%s" fill="none" stroke="var(--viz-warn,#d29922)" '
+                     'stroke-width="1.5" stroke-dasharray="3 3" stroke-opacity="0.9"/>'
+                     % " ".join(seg))
+            _lasttv = [v for v in trail if v is not None][-1]
+            e.append('<text x="%.1f" y="%.1f" font-size="10.5" fill="var(--viz-warn,#d29922)">'
+                     'trail %s</text>' % (ml + pw + 8, Y(_lasttv) + 3.5, _amt(_lasttv)))
     e.append('<path d="%s" fill="none" stroke="var(--viz-ink,#0b0b0b)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>' % line)
     for i, p in enumerate(pts[:-1]):
         e.append('<circle cx="%.1f" cy="%.1f" r="2.4" fill="var(--viz-ink,#0b0b0b)"/>' % (X(i), Y(p["value"])))
@@ -1402,7 +1462,8 @@ def evaluate(pos, legs, checks, entry_snap=None, entry_thesis_row=None,
                               "fill will likely cost nearer the higher number"
                               % (_amt(_xcost), _amt(ct["now"])))
     ct_head = close_headline(ct, closed)
-    ct_svg = close_svg(ct)
+    ct_trail = trail_series(pos, ct)
+    ct_svg = close_svg(ct, trail=ct_trail)
 
     # The Read — synthesis, ending with the action cue (the HELM-134 job, per position)
     bits = []
