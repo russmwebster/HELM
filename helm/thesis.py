@@ -348,7 +348,11 @@ def _premium_belief(pos, legs, entry_snap, cur_sig, latest_check):
 
 _RULE_LABEL = {
     "STOP_LOSS": "the stop",
-    "GIVE_BACK": "giving back the gain",
+    # s118: the label says "the high", not "the gain". The trail fires on
+    # positions whose high-water mark was never above water -- ABBV peaked at
+    # +0.9% -- and calling that a gain is a rendered claim that is true of the
+    # arithmetic and false about the world (s97's shape). Honest either way.
+    "GIVE_BACK": "falling from the high",
     "DTE_7": "the hard close",
     "DTE_21": "the calendar",
 }
@@ -1328,15 +1332,15 @@ def exit_rules(pos, checks, latest, entry_thesis_row):
                              % ("down " if cur < 0 else "up ", abs(cur) * 100, stop)})
 
     if hwm is None or trail is None:
-        rows.append({"key": "give_back", "label": "giving back the gain",
+        rows.append({"key": "give_back", "label": "falling from the high",
                      "state": "UNKNOWN", "text": "no journaled marks yet"})
     elif cur is not None and cur <= trail:
-        rows.append({"key": "give_back", "label": "giving back the gain",
+        rows.append({"key": "give_back", "label": "falling from the high",
                      "state": "FIRES",
                      "text": ("back to the %+.1f%% floor -- best was %+.1f%%, now %+.1f%%"
                               % (trail * 100, hwm * 100, cur * 100)) + cov})
     else:
-        rows.append({"key": "give_back", "label": "giving back the gain",
+        rows.append({"key": "give_back", "label": "falling from the high",
                      "state": "CLEAR",
                      "text": ("floor at %+.1f%% -- best was %+.1f%%, now %+.1f%%; "
                               "a fall of %.0f points from the best closes it"

@@ -37,7 +37,7 @@ LABEL = {
     "PROFIT_TARGET": "target reached",
     "DTE_MANAGE": "calendar — inside the management window",
     "EXPIRY": "at expiry",
-    "GIVE_BACK": "give-back off the peak",
+    "GIVE_BACK": "falling from the high",
     "STOP_LOSS": "stop",
     "DTE_21": "calendar — 21 DTE and not positive",
     "DTE_7": "calendar — 7 DTE hard close",
@@ -100,7 +100,7 @@ def explain(reason, strategy, pnl_pct=None, dte_now=None, arms=None,
         # holding -- say what would have to happen, for the long families where
         # the arms record makes that cheap
         if fam == D.LONG_DEBIT_FAMILY and gb:
-            lines.append("Holding. Peak %s, mark %s; the give-back line sits at %s "
+            lines.append("Holding. Peak %s, mark %s; the trail sits at %s "
                          "and the stop at %s."
                          % (_pct(gb.get("hwm")), _pct(pnl_pct), _pct(gb.get("floor")),
                             _pct(v3.get("stop", L.STOP_LOSS_PCT))))

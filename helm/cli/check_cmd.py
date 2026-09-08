@@ -2534,7 +2534,7 @@ def cmd_check_deep(pos: dict, legs: list, assessment: dict, snap: dict):
 _GUIDANCE = {
     "PROFIT_TARGET": "Profit target hit — consider closing to bank the gain.",
     "THESIS_BREAK": "Entry thesis broken (bias gone or below the 50-day), confirmed over consecutive checks.",
-    "PROFIT_FLOOR": "Ratcheted profit floor hit — the run gave back a step from its high-water mark.",
+    "PROFIT_FLOOR": "Ratcheted profit floor hit — fell a step from the high-water mark. RETIRED in v3 (HELM-150); not emitted since 2026-07-31.",
     "DTE_GATE": "30 DTE — forced decision point for a long option; close or re-qualify as a new trade.",
     "CATASTROPHE_STOP": "-50% of debit — gap backstop, not the primary loser rule.",
     "STOP":          "Stop breached — close or roll to cap the loss.",
