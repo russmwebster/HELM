@@ -1254,9 +1254,27 @@ def close_svg(track, width=760, height=230, trail=None):
         # HELM-147: the day-over-day delta at the last point, coloured by
         # better/worse -- the same side-aware flip the area fill uses.
         _tc = "var(--viz-good,#2a78d6)" if tr["better"] else "var(--viz-bad,#e34948)"
-        e.append('<text x="%.1f" y="%.1f" font-size="10.5" font-weight="600" fill="%s">%s %s</text>'
+        # The glyph states the MONEY direction; the word states what that means
+        # for this structure. A bare triangle cannot -- a falling buy-back cost
+        # is a down arrow and a good day, and colour alone must never carry it
+        # (the card's own icon-plus-words rule).
+        if track["credit"]:
+            _tw = "cheaper" if tr["d1"] < 0 else "dearer"
+        else:
+            _tw = "fetching less" if tr["d1"] < 0 else "fetching more"
+        e.append('<text x="%.1f" y="%.1f" font-size="10.5" font-weight="600" fill="%s">%s %s %s</text>'
                  % (X(n - 1) + 9, Y(last["value"]) + 17, _tc,
-                    "▼" if tr["d1"] < 0 else "▲", _amt(abs(tr["d1"]))))
+                    "▼" if tr["d1"] < 0 else "▲", _amt(abs(tr["d1"])), _tw))
+
+    # Which way is better, in words, in the top margin. The area fill already
+    # says it in colour at 0.15 opacity; a 2px ink line descending says the
+    # opposite louder. HELM-146 settled that the NET number leads on the
+    # headline -- this is the same settlement applied to the picture.
+    _cap = ("↓ better — costs less to buy back than you took in"
+            if track["credit"] else
+            "↑ better — sells back for more than you paid")
+    e.append('<text x="%.1f" y="%.1f" font-size="10.5" fill="var(--viz-muted,#898781)">%s</text>'
+             % (ml, mt - 8, _cap))
 
     every = max(1, -(-n // 6))
     gap = -(-every * 7 // 10)
@@ -1266,9 +1284,12 @@ def close_svg(track, width=760, height=230, trail=None):
                      % (X(i), mt + ph + 16, p["date"][5:]))
     e.append('<line x1="%.1f" x2="%.1f" y1="%.1f" y2="%.1f" stroke="var(--viz-axis,#c3c2b7)" stroke-width="1"/>'
              % (ml, ml + pw, mt + ph, mt + ph))
-    return ('<svg viewBox="0 0 %d %d" role="img" aria-label="What it would cost to close, on each check day" '
+    _aria = ("What it would cost to close, on each check day -- lower is better"
+             if track["credit"] else
+             "What closing would pay, on each check day -- higher is better")
+    return ('<svg viewBox="0 0 %d %d" role="img" aria-label="%s" '
             'style="display:block;width:100%%;height:auto;overflow:visible">%s</svg>'
-            % (width, height, "".join(e)))
+            % (width, height, _aria, "".join(e)))
 
 
 def exit_rules(pos, checks, latest, entry_thesis_row):
