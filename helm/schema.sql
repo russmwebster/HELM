@@ -1034,3 +1034,72 @@ CREATE TABLE IF NOT EXISTS exit_alerts (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_exit_alerts_pos_day
     ON exit_alerts(position_id, alert_date);
+
+-- ---------------------------------------------------------------------------
+-- s120 (2026-09-13): two runtime-created tables this file did not have.
+-- exit_flags -- W158's exit-flag decision log (s115), created by
+--   helm/exit_flags.py::ensure(). It has been live since 2026-09-06 and this
+--   file did not know -- W4's "faithfully builds live" claim broke again the
+--   day a new table shipped without a schema.sql line. DUAL DEFINITION: the
+--   module's DDL is authoritative; change one, change the other.
+-- exit_considered -- W173's paper-exit consideration log, created by
+--   helm/exit_considered.py::ensure_table(). Same dual-definition rule.
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS exit_flags (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    position_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    flag_date TEXT NOT NULL,
+    fired_at TEXT NOT NULL,
+    mark_at_flag REAL,
+    pct_at_flag REAL,
+    dte_at_flag INTEGER,
+    seeded INTEGER NOT NULL DEFAULT 0,
+    disposition TEXT,
+    decided_at TEXT,
+    decided_date TEXT,
+    decided_by TEXT,
+    reason TEXT,
+    note TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_exit_flags_pos ON exit_flags(position_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_exit_flags_pos_kind_date
+    ON exit_flags(position_id, kind, flag_date);
+
+CREATE TABLE IF NOT EXISTS exit_considered (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_started_at TEXT NOT NULL,
+    position_id TEXT NOT NULL,
+    ticker TEXT,
+    strategy TEXT,
+    book TEXT,
+    family TEXT,
+    verdict TEXT,
+    acted INTEGER NOT NULL DEFAULT 0,
+    outcome TEXT,
+    pnl_pct REAL,
+    dte_min INTEGER,
+    dte_cal INTEGER,
+    target_pct REAL,
+    dte_exit INTEGER,
+    hwm_pct REAL,
+    trail_floor REAL,
+    stop_pct REAL,
+    dte_soft INTEGER,
+    dte_hard INTEGER,
+    gap_target REAL,
+    gap_calendar INTEGER,
+    gap_trail REAL,
+    gap_stop REAL,
+    gap_hard INTEGER,
+    nearest_rule TEXT,
+    nearest_gap REAL,
+    near_miss INTEGER NOT NULL DEFAULT 0,
+    note TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_exit_considered_run ON exit_considered(run_started_at);
+CREATE INDEX IF NOT EXISTS idx_exit_considered_pos ON exit_considered(position_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_exit_considered_run_pos
+    ON exit_considered(run_started_at, position_id);

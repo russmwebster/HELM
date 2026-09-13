@@ -28,6 +28,11 @@ Doctrine guards:
     writes NOTHING. First run after the 7/3 gap must be dry — the backlog
     decision (replay-close vs forward-only) is Russ's.
 
+  - W173 (s120): every position CONSIDERED leaves a row in `exit_considered`
+    -- the verdict, the rule lines it was measured against, and how far it
+    sat from each -- so a held position is as visible as a closed one. Read
+    with helm/exit_considered.py. DRY runs print near-misses and write nothing.
+
 Usage:  paper_exit_agent.py [--dry-run]
 Log:    launchd redirects to ~/Projects/helm/logs/paper_exit_agent.log
 """
@@ -115,6 +120,7 @@ def main():
     from helm.cli.close_cmd import _finalize_close
     from helm.models.position import Position
     from helm.models.leg import Leg
+    from helm import exit_considered as EC
     import yfinance as yf
 
     conn = get_conn()
@@ -127,6 +133,14 @@ def main():
         return
 
     would = closed = held = skipped = 0
+    considered = []   # W173: one row per position, whatever happened to it
+
+    def _note(a, pos, outcome):
+        try:
+            considered.append(EC.consider(a, pos, _started, outcome))
+        except Exception as e:      # the log must never stop a close
+            print(f"  {pos['ticker']}: consider failed — {e}")
+
     for pos in rows:
         conn = get_conn()
         legs = [dict(r) for r in conn.execute(
@@ -136,16 +150,19 @@ def main():
             a = check_one(pos, legs, persist=False)   # READ-ONLY verdict
         except Exception as e:
             print(f"  {pos['ticker']} {pos['strategy']}: check failed — {e}")
+            _note({}, pos, "failed")
             skipped += 1
             continue
         reason = (a or {}).get("core_reason")
         if reason not in ACT_REASONS:
+            _note(a, pos, "held")
             held += 1
             continue
 
         kept = (a or {}).get("kept_pct")
         pnl = (a or {}).get("pnl_mtm")
         if DRY:
+            _note(a, pos, "dry")
             would += 1
             print(f"  WOULD CLOSE {pos['ticker']:6} {pos['strategy']:18} "
                   f"[{reason}]  pnl~{pnl if pnl is not None else '?'}"
@@ -167,16 +184,34 @@ def main():
                 break
             prices[lg.id] = m
         if not ok:
+            _note(a, pos, "deferred")
             skipped += 1
             continue
         res = _finalize_close(pobj, lobjs, prices, reason)
         if res.get("ok"):
             closed += 1
+            _note(a, pos, "closed")
             print(f"  CLOSED {pos['ticker']} {pos['strategy']} [{reason}] "
                   f"realized {res['realized_pnl']:+.0f}")
         else:
+            _note(a, pos, "failed")
             skipped += 1
             print(f"  {pos['ticker']}: close write failed")
+
+    # W173: the consideration log. Near-misses are printed on every run so the
+    # log file says what nearly happened; the table is written only when acting.
+    near = [r for r in considered if r.get("near_miss")]
+    for r in near:
+        print(f"  near-miss {r['ticker']:6} {r['strategy']:18} {r['nearest_rule']:14} "
+              f"gap {r['nearest_gap']}  pnl {r['pnl_pct']}  dte {r['dte_min']}  [{r['outcome']}]")
+    if not DRY:
+        try:
+            _c = get_conn()
+            n = EC.record(_c, considered)
+            _c.close()
+            print(f"  considered: {n} rows written ({len(near)} near-miss)")
+        except Exception as _e:
+            print('  consideration log write failed: %s' % _e)
 
     # s100: record the run in the ledger. Until now this agent left only a
     # log file, so a night it never fired looked identical to a quiet one.

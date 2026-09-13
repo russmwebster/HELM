@@ -2904,8 +2904,11 @@ def cmd_snapshot(args):
         if _ft:
             _bits.append("verdict-failed: " + "; ".join(_ft))
         if _dropped:
+            # W119 (s120): name ALL of them. The cap at 12 meant a slot that
+            # lost 13 could never be fully attributed -- `audit eod`'s W172
+            # severity needs every lost id to say which BOOK lost it.
             _bits.append("not-journaled (%d): %s" % (
-                len(_dropped), "; ".join(_dropped[:12])))
+                len(_dropped), "; ".join(_dropped)))
         _ar.record_run(
             conn, _ar.AGENT_SNAPSHOT, _started, _finished,
             attempted, journaled, len(_failed),

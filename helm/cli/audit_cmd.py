@@ -7,8 +7,12 @@
 # READ-ONLY. Opens the database with mode=ro and writes nothing to it.
 # The only file written is the dated report under logs/.
 #
-# Usage:  helm audit eod [--date YYYY-MM-DD] [--json] [--no-report]
+# Usage:  helm audit eod [--date YYYY-MM-DD] [--json] [--no-report] [--no-notify]
 # Exit:   0 = no FAIL   1 = at least one FAIL
+# Verdict (W172, s120): PASS / DEGRADED / LOST / INCONCLUSIVE. The FAIL count
+#   is unchanged; the verdict says how MUCH was lost, which the word FAIL
+#   could not (W128: one paper reading and 147 read the same). Only LOST
+#   sends a notification, and only when auditing today.
 
 import argparse
 import csv
@@ -68,6 +72,14 @@ SLOT_TOLERANCE_MIN = 20
 # 123-126 samples/day in RTH every day except the 07-29 reboot, which read 12.
 MIN_SAMPLES_PER_HOUR = 3
 
+# W172: a day is DEGRADED rather than LOST only if every lost reading belongs
+# to a PAPER position and no single slot lost more than this share of what
+# it attempted. 2026-09-08 lost 73 of 76 at 15:15 (LOST); 09-11 lost 13 of
+# 77 at 10:00, all paper (DEGRADED). A REAL position losing ANY reading is
+# LOST -- the real book is the one nobody can re-collect.
+DEGRADED_MAX_SLOT_LOSS = 0.25
+SEV_PASS, SEV_DEGRADED, SEV_LOST, SEV_INCONCLUSIVE = "PASS", "DEGRADED", "LOST", "INCONCLUSIVE"
+
 # Legacy / meaningless exit reasons — a close carrying one is not labelled.
 UNLABELLED_REASONS = {None, "", "manual"}
 
@@ -117,6 +129,73 @@ class Audit:
     @property
     def failed(self):
         return any(r["status"] == FAIL for r in self.results)
+
+    # W172 (s120): the verdict's magnitude. Pure over what run() already found.
+    # DEGRADED is a NARROW gate -- any FAIL outside `reading coverage` /
+    # `book coverage`, any REAL position among the losses, any slot losing more
+    # than DEGRADED_MAX_SLOT_LOSS of what it attempted, or a loss the run note
+    # cannot NAME (W119's cap) is LOST. Unknown is not "probably paper".
+    SOFT_FAILS = ("reading coverage", "book coverage")
+
+    def severity(self):
+        """Return (level, why). Levels: PASS / DEGRADED / LOST / INCONCLUSIVE."""
+        if self.machine_offline_day:
+            return SEV_INCONCLUSIVE, "the machine was off or asleep for the session"
+        fails = [r for r in self.results if r["status"] == FAIL]
+        if not fails:
+            return SEV_PASS, "the day collected as designed"
+        hard = [r for r in fails if r["name"] not in self.SOFT_FAILS]
+        if hard:
+            return SEV_LOST, "; ".join(f"{r['name']}: {r['detail']}" for r in hard)[:300]
+        lost_total = 0
+        real_hits = []
+        for r in self.runs:
+            if "snapshot" not in (r["agent"] or "").lower():
+                continue
+            att, jn = (r["attempted"] or 0), (r["journaled"] or 0)
+            if jn >= att:
+                continue
+            lost = att - jn
+            lost_total += lost
+            hhmm = (r["started_at"] or "")[11:16]
+            if att and lost > DEGRADED_MAX_SLOT_LOSS * att:
+                return SEV_LOST, (f"the {hhmm} slot lost {lost} of {att} readings "
+                                  f"(more than {int(DEGRADED_MAX_SLOT_LOSS * 100)}%)")
+            # Who lost the reading? Derive it from the journal itself: every
+            # position open when the run started that has no check row inside
+            # the run's window. The run note is the cross-check (it was capped
+            # at 12 names until s120 -- W119 -- so history has notes that name
+            # fewer than they claim).
+            derived = self.q(
+                "select p.id, p.ticker, p.book from positions p "
+                "where p.opened_at < ? and (p.closed_at is null or p.closed_at > ?) "
+                "and not exists (select 1 from checks c where c.position_id = p.id "
+                "and c.checked_at >= ? and c.checked_at <= ?)",
+                (r["started_at"], r["started_at"], r["started_at"],
+                 r["finished_at"] or (r["started_at"][:11] + "23:59:59")))
+            if len(derived) == lost:
+                books = derived
+            else:
+                names, _kind = self._parse_notes(r["notes"])
+                if len(names) < lost:
+                    return SEV_LOST, (f"the {hhmm} slot lost {lost} readings; the journal "
+                                      f"accounts for {len(derived)} and the run note names "
+                                      f"{len(names)} — the rest cannot be attributed")
+                qs = ",".join("?" * len(names))
+                books = self.q(f"select id, ticker, book from positions where id in ({qs})", names)
+                if len(books) < len(names):
+                    return SEV_LOST, (f"the {hhmm} slot lost readings on ids not in `positions` — "
+                                      f"cannot attribute them to a book")
+            real_hits += [f"{b['ticker']} at {hhmm}" for b in books if (b["book"] or "") == "REAL"]
+        for u in (getattr(self, "unmarked", None) or []):
+            if (u["book"] or "") == "REAL":
+                real_hits.append(f"{u['ticker']} (no reading all day)")
+        if real_hits:
+            return SEV_LOST, "a REAL position lost a reading: " + ", ".join(real_hits[:8])
+        unmarked_n = len(getattr(self, "unmarked", None) or [])
+        return SEV_DEGRADED, (f"{lost_total} reading(s) lost, all PAPER, no slot missing"
+                              + (f"; {unmarked_n} paper position(s) unmarked all day" if unmarked_n else "")
+                              + " — the real book is complete and the two books remain comparable")
 
     # ---------- A1: is this a session day? ----------
 
@@ -223,10 +302,10 @@ class Audit:
 
     def load_runs(self):
         self.runs = self.q(
-            "select agent, slot, status, attempted, journaled, failed, started_at "
+            "select agent, slot, status, attempted, journaled, failed, started_at, finished_at, notes "
             "from agent_runs where date(started_at) = ? order by started_at",
             (self.date,),
-        )
+        )   # notes: W171's retry marker and W172's lost-position names read it
         # An agent that RAN in an hour proves the machine was up in that hour,
         # whatever the sampler says. This outranks the sampler as evidence.
         self.run_hours = {
@@ -343,10 +422,18 @@ class Audit:
                         "An agent that dies before record_run leaves silence that reads "
                         "identically to never being scheduled — check its log directly.",
                     )
+            # W171 (s120): `helm ivr refresh` may run a SECOND pass when the
+            # 09:35 one came back short. Its ledger note starts "retry of HH:MM"
+            # and it is expected, not a catch-up -- report it, never fail on it.
+            retries = [r for r in got if str(r["notes"] or "").startswith("retry of ")]
+            for r in retries:
+                self.add(PASS, f"retry: {label}",
+                         f"ran at {(r['started_at'] or '')[11:16]} — {r['notes']}")
             # Runs that fired nowhere near a nominal time = launchd catch-up.
             stray = [
                 r for r in got
-                if not any(_within((r["started_at"] or "")[11:16], t) for t in times)
+                if r not in retries
+                and not any(_within((r["started_at"] or "")[11:16], t) for t in times)
             ]
             if stray:
                 self.add(
@@ -476,6 +563,7 @@ class Audit:
             "and date(c.checked_at) = ?)",
             (self.date, self.date),
         )
+        self.unmarked = unmarked
         if not unmarked:
             self.add(PASS, "book coverage", "every position open before the date was marked")
         else:
@@ -1233,11 +1321,14 @@ def render(a, clock):
     L.append("")
     L.append("-" * 72)
     L.append("  ".join(f"{k}: {v}" for k, v in counts.items()))
-    if a.machine_offline_day:
+    level, why = a.severity()
+    if level == SEV_INCONCLUSIVE:
         verdict = ("INCONCLUSIVE — the machine was off or asleep for the session. "
                    "The data is missing, but nothing in HELM is broken.")
-    elif a.failed:
-        verdict = "FAIL — the day did not collect as designed"
+    elif level == SEV_LOST:
+        verdict = "LOST — " + why + ". The day did not collect as designed."
+    elif level == SEV_DEGRADED:
+        verdict = "DEGRADED — " + why + "."
     else:
         verdict = "PASS — the day collected as designed"
     L.append("VERDICT: " + verdict)
@@ -1256,6 +1347,8 @@ def run():
     ap.add_argument("--date", help="YYYY-MM-DD (default: today)")
     ap.add_argument("--json", action="store_true", help="emit JSON instead of text")
     ap.add_argument("--no-report", action="store_true", help="do not write the dated report file")
+    ap.add_argument("--no-notify", action="store_true",
+                    help="never send the LOST notification (replays, tests)")
     args = ap.parse_args()
 
     now = datetime.now()
@@ -1291,6 +1384,7 @@ def run():
         a.sampler = a.build_sampler()
         print(_json.dumps(
             {"date": date_str, "run_at": clock, "failed": a.failed,
+             "severity": a.severity()[0], "severity_why": a.severity()[1],
              "agents": a.agents,
              "sampler": a.sampler,
              "results": a.results, "blind_spots": a.blind}, indent=2))
@@ -1305,6 +1399,16 @@ def run():
                 print(f"report written: {out}")
             except Exception as e:
                 print(f"(could not write report: {e})", file=sys.stderr)
+
+    # W172: only LOST speaks, and only about TODAY -- a replayed --date is a
+    # study, not an event. macOS notification, best effort, never raises.
+    level, why = a.severity()
+    if level == SEV_LOST and is_today and not args.no_notify:
+        try:
+            from helm.exit_alert import _notify
+            _notify("HELM audit: LOST", f"{date_str} — {why}"[:230])
+        except Exception:
+            pass
 
     sys.exit(1 if a.failed else 0)
 
