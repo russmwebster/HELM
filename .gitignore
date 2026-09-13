@@ -95,3 +95,6 @@ data/helm.db*mode=ro
 /vol_context_prototype.py
 /_s[0-9][0-9]_smoke.py
 /_to_delete/
+
+# s120 cleanup: ghosts the device VM leaves when a file is deleted under an open handle
+data/.fuse_hidden*
