@@ -13,6 +13,13 @@ session where the issue was worked.
 - On resolution: move the line to the **Resolved log** with a one-line outcome + date.
 
 ## Status — where HELM is
+> **FROZEN 2026-09-20.** No new HELM-numbers are issued after HELM-218; existing
+> ids stay because code cites them. Live status is `claude/HELM-live.md` in the
+> project; settled decisions and lessons are `claude/HELM-standing-rules.md`;
+> per-session records are the archive files there. The Status block and counts
+> below describe the register as of the s114 checkpoint (2026-09-06) and are not
+> maintained. Nothing in `helm/` reads this file.
+
 _Snapshot; refreshed each `helm checkpoint`, read via `helm status`._
 
 - **Phase:** scaffolding complete (live · paper · edge). `schema.sql` faithfully builds live incl. constraints/defaults/FKs (HELM-002); hot `positions` table indexed live (HELM-021). Decision core (HELM-027) reaches every open family — one verdict engine reading `strategy_settings`, `/health` wired for CSP · LONG_CALL (single-leg) and iron condor / bear put spread (multi-leg) via `_core_band_ml` off `leg_checks`. Earnings now surfaced at the entry decision on both surfaces — `helm open` banner and `helm scan` column, unified on `classify_earnings` (HELM-044). Learning loop (HELM-023) is the frontier — entry+exit capture complete (`iv_rank`/`days_to_earnings`/`signal_id` wired); Track A (exit-lever scorecard) held on corpus maturity. Structural map lives in `ORIENTATION.md`.
