@@ -782,6 +782,57 @@ class Audit:
                  "%s ran and reported — %s" % (prev, verdict or "(no verdict line)"),
                  path.name)
 
+    def check_market_context(self):
+        """W175: did the tape get recorded for the previous session day?
+
+        A WARN, never a FAIL, and the choice is deliberate. W172's DEGRADED
+        gate is narrow -- only `reading coverage` / `book coverage` FAILs
+        qualify, everything else goes to LOST -- so filing a missing records
+        row as a FAIL would mark an otherwise perfect day LOST over a
+        bookkeeping gap. A missing row is worth noticing, not worth calling
+        the day lost.
+
+        The row for day D is written on the morning of D+1 by
+        `com.helm.ivr.refresh`, so this looks back ONE session, exactly as
+        `previous audit` (W120) does.
+
+        BLIND SPOT: this asserts the row EXISTS and names a source. It does
+        not re-derive the numbers -- nothing reads this table, so a wrong
+        value here cannot reach a decision.
+        """
+        prev = self._prev_session_day()
+        if not prev:
+            self.add(WARN, "market context",
+                     "could not derive the previous session day")
+            return
+        try:
+            row = self.db.execute(
+                "SELECT data_source, vix, breadth FROM market_context "
+                "WHERE as_of_date = ?", (prev,)).fetchone()
+        except Exception as e:
+            self.add(WARN, "market context",
+                     f"could not read market_context ({type(e).__name__})")
+            return
+        if row is None:
+            self.add(WARN, "market context",
+                     f"no row for {prev} - the 09:35 run did not record it")
+            return
+        src = row[0] or ""
+        if not src:
+            self.add(WARN, "market context", f"row for {prev} names no source")
+            return
+        nulls = [n for n, v in (("vix", row[1]), ("breadth", row[2]))
+                 if v is None]
+        if "FAILED[" in src:
+            detail = f"row for {prev} recorded a source failure"
+            if nulls:
+                detail += " (" + ", ".join(nulls) + " NULL)"
+            self.add(WARN, "market context", detail, evidence=src[:160])
+        else:
+            self.add(PASS, "market context",
+                     f"row for {prev}, source named"
+                     + (" (" + ", ".join(nulls) + " NULL)" if nulls else ""))
+
     def check_origins(self):
         rows = self.q(
             "select ticker, book, origin_screen from positions where date(opened_at) = ?",
@@ -1275,6 +1326,7 @@ class Audit:
         self.check_closes()
         self.check_origins()
         self.check_previous_audit()
+        self.check_market_context()
         self.blind_spot(
             "The exposure-group check reads the watchlist as it stands NOW. "
             "It cannot tell you whether a name was ungrouped on the audited "

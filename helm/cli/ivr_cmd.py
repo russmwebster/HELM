@@ -215,6 +215,31 @@ def _record_ivr_run(started, attempted, ok, failed, notes):
         console.print('  [yellow]ledger write failed:[/yellow] %s' % _e)
 
 
+_MC_STATUS = []
+
+
+def _record_market_context():
+    """W175.  RECORDS ONLY -- nothing reads `market_context`, and nothing is
+    to be wired to it (HELM-193: on the real book HELM informs, it does not
+    act).  Spec: claude/HELM-W175-market-context-spec.md.
+
+    Wrapped whole: a bad fetch, a missing column or an import error must
+    never take down the 09:35 IV refresh.  The worst case is no row and a
+    note -- and the audit reports a missing row the next evening.
+    """
+    try:
+        from helm import market_context as _mc
+        _c = get_conn()
+        status = _mc.record_for_previous_session(_c)
+        _c.close()
+        console.print("  [dim]%s[/dim]" % status)
+        return status
+    except Exception as _e:                 # reported, never swallowed
+        msg = "market_context: FAILED (%s: %s)" % (type(_e).__name__, _e)
+        console.print("  [yellow]%s[/yellow]" % msg)
+        return msg
+
+
 def _seconds_until(hhmm, now=None):
     """Seconds from `now` to today's hh:mm; negative if it has passed."""
     now = now or datetime.now()
@@ -240,6 +265,12 @@ def cmd_refresh(args: list) -> None:
     from helm.earnings import _refresh_earnings as _refresh_position_earnings
     from helm.db import get_conn as _earnings_conn
     _refresh_position_earnings(_earnings_conn())
+
+    # W175: record the tape for the PREVIOUS session day, from official
+    # closes.  Deliberately HERE -- ahead of the two early returns below and
+    # of W171's retry branch, so it runs on every session day whatever the IV
+    # pass decides to do.  It can never raise into this command.
+    _MC_STATUS.append(_record_market_context())
 
     # Determine which tickers to refresh
     if args:
@@ -285,6 +316,14 @@ def cmd_refresh(args: list) -> None:
     # the documented risk. s120: the could-not-connect branch records too.
     note = ("could not connect to IBKR" if not connected
             else ("; ".join(failures[:12]) or None))
+    # W175: the context write's outcome rides on the FIRST ledger row only.
+    # It is NOT folded into `failed`, which counts tickers -- one counter
+    # meaning two things is W102's defect, and this change will not add a
+    # second instance of it.
+    if _MC_STATUS:
+        _mc_note = _MC_STATUS.pop(0)
+        if "FAILED" in _mc_note or "failure" in _mc_note:
+            note = (note + " | " if note else "") + _mc_note
     _record_ivr_run(_ivr_started, len(tickers), results['ok'], results['fail'], note)
     console.print()
     console.print(f"  [green]✓[/green]  {results['ok']} tickers updated")

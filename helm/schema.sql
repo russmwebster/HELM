@@ -698,7 +698,11 @@ CREATE TABLE market_context (
     breadth REAL,
     notes TEXT,
     data_source TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    -- W175: the cross-section, the half of this table that is ours and
+    -- cannot be reconstructed after the fact.
+    iv_rank_median REAL,
+    iv_rank_ge50 INTEGER
  );
 
 
