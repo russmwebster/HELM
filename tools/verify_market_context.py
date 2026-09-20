@@ -308,8 +308,19 @@ def case_idempotent_and_backfill():
     check("backfill/no BACKFILL prefix on the survivor",
           src[0].startswith("BACKFILL:"), False)
 
-    # but it DOES write a day that has none, and marks itself
+    # but it DOES write a day that has none, and marks itself.
+    #
+    # The case CLEARS the date first.  It used to assume 2026-09-17 was a gap
+    # on the live book; the 2026-09-20 backfill filled it, and the assertion
+    # flipped to FAIL while the code was behaving exactly as designed --
+    # INSERT OR IGNORE declining to overwrite a row that now exists.  A
+    # fixture that depends on live state breaks when the DATA moves rather
+    # than when the CODE does, which is the one thing a regression test must
+    # never do.  (The refusal itself is covered by `backfill/ignored` above.)
     d2 = datetime.date(2026, 9, 17)
+    c.execute("delete from market_context where as_of_date = ?",
+              (d2.isoformat(),))
+    c.commit()
     rb2, _ = mc.build_row(c, d2, series=series(), backfill=True)
     check("backfill/writes a gap", mc.write_row(c, rb2, replace=False), 1)
     got = c.execute("select data_source from market_context where as_of_date=?",
