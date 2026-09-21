@@ -39,6 +39,7 @@ from datetime import date, datetime
 from rich.console import Console
 
 from helm.db import get_conn
+from helm.expiry import expiry_close
 
 console = Console()
 
@@ -99,25 +100,43 @@ def _expiry_day_spot(conn, position_id, expiry):
 
 
 def _paper_proposal(conn, pos, leg):
-    """What the recorded spot says this dead PAPER leg settled at, or why it
-    cannot say ('settle' is None when the leg is flagged instead)."""
+    """What this dead PAPER leg settled at, or why nothing can say.
+
+    The recorded expiry-day mark is preferred and is the only source that
+    needs no network. Where the mark cannot answer -- it was never taken, or
+    it sits inside the near-strike band -- the OFFICIAL expiry-day close
+    settles the leg instead (W177, Russ 2026-09-20). 'settle' is None only
+    when neither source can answer.
+    """
     expiry = str(leg["expiration"])[:10]
     spot, at = _expiry_day_spot(conn, pos["id"], expiry)
     strike = float(leg["strike"])
+    source = "mark"
+    why_mark = None
+
     if spot is None:
-        return {"leg": leg, "settle": None,
-                "why": "no GOOD mark on the expiry day %s" % expiry}
-    dist = (spot - strike) / strike
-    if abs(dist) < NEAR_STRIKE_PCT:
-        return {"leg": leg, "settle": None, "spot": spot,
-                "why": "spot %.2f finished within %.0f%% of the %.2f strike "
-                       "-- too close to infer from a mark that may predate "
-                       "the close" % (spot, NEAR_STRIKE_PCT * 100, strike)}
+        why_mark = "no GOOD mark on the expiry day %s" % expiry
+    else:
+        dist = (spot - strike) / strike
+        if abs(dist) < NEAR_STRIKE_PCT:
+            why_mark = ("the %.2f mark is within %.0f%% of the %.2f strike"
+                        % (spot, NEAR_STRIKE_PCT * 100, strike))
+
+    if why_mark is not None:
+        close = expiry_close(pos["ticker"], expiry)
+        if close is None:
+            return {"leg": leg, "settle": None, "spot": spot,
+                    "why": why_mark + " -- and no official close for "
+                                      "%s on %s either" % (pos["ticker"],
+                                                           expiry)}
+        spot, at, source = float(close), None, "official"
+
     is_call = (leg["option_type"] or "").upper() == "CALL"
     itm = spot > strike if is_call else spot < strike
     intrinsic = (spot - strike) if is_call else (strike - spot)
     price = round(intrinsic, 2) if itm else 0.0
-    return {"leg": leg, "settle": price, "spot": spot, "at": at, "itm": itm}
+    return {"leg": leg, "settle": price, "spot": spot, "at": at, "itm": itm,
+            "source": source, "why_mark": why_mark}
 
 
 def _apply_paper(conn, todo):
@@ -131,11 +150,19 @@ def _apply_paper(conn, todo):
                 continue
             leg = pr["leg"]
             expiry = str(leg["expiration"])[:10]
-            note = ("settled by helm settle, PAPER inference (W131): spot "
-                    "%.2f on %s -> %s at %.2f"
-                    % (pr["spot"], expiry,
-                       "ITM intrinsic" if pr["itm"] else "expired OTM",
-                       pr["settle"]))
+            if pr.get("source") == "official":
+                note = ("settled by helm settle, PAPER official close (W177; "
+                        "%s): close %.2f on %s -> %s at %.2f"
+                        % (pr.get("why_mark") or "no usable mark",
+                           pr["spot"], expiry,
+                           "ITM intrinsic" if pr["itm"] else "expired OTM",
+                           pr["settle"]))
+            else:
+                note = ("settled by helm settle, PAPER inference (W131): spot "
+                        "%.2f on %s -> %s at %.2f"
+                        % (pr["spot"], expiry,
+                           "ITM intrinsic" if pr["itm"] else "expired OTM",
+                           pr["settle"]))
             conn.execute(
                 "UPDATE legs SET status = 'CLOSED', close_price = ?, "
                 "close_date = ?, notes = COALESCE(notes || ' | ', '') || ? "
@@ -205,10 +232,17 @@ def run():
                 else:
                     side = ("ITM -> close at intrinsic" if pr["itm"]
                             else "OTM -> expired worthless")
-                    console.print("    %s -- spot %.2f on expiry day: %s "
-                                  "[bold]%.2f[/bold]"
-                                  % (_leg_name(leg), pr["spot"], side,
-                                     pr["settle"]))
+                    if pr.get("source") == "official":
+                        console.print("    %s -- [yellow]%s[/yellow]; "
+                                      "official close %.2f on expiry day: %s "
+                                      "[bold]%.2f[/bold]"
+                                      % (_leg_name(leg), pr["why_mark"],
+                                         pr["spot"], side, pr["settle"]))
+                    else:
+                        console.print("    %s -- spot %.2f on expiry day: %s "
+                                      "[bold]%.2f[/bold]"
+                                      % (_leg_name(leg), pr["spot"], side,
+                                         pr["settle"]))
                     n_proposed += 1
             for l in live:
                 console.print("    [dim]%s is live -- the position stays "
