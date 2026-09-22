@@ -423,7 +423,21 @@ def fetch_ibkr_option(ticker: str, expiration: str, strike: float,
             if valid(t.bid):  result["bid"] = round(t.bid, 2)
             if valid(t.ask):  result["ask"] = round(t.ask, 2)
             if valid(t.last): result["last"] = round(t.last, 2)
-            if result["bid"] and result["ask"]:
+            # W179 (2026-09-21, Russ): IBKR reports "no bid" as -1, which
+            # valid() rightly refuses as a price. But a one-sided market is
+            # still a market: a contract quoted 0.00 x 0.90 has a midpoint,
+            # and a short call that has decayed to no bid is the diagonal's
+            # SUCCESS case, not a fault. Leaving mid None here sent the whole
+            # position through HELM-095 -> HELM-138 -> HELM-037 and out of the
+            # journal -- ABT and VALE, unmarked from 09-15 / 09-17 while
+            # every other weekly-short diagonal marked fine. So: no bid with a
+            # live ask reads as bid 0.00, the row SAYS so (bid stored 0.00,
+            # not NULL), and the mark is the midpoint of the market that was
+            # actually quoted. No bid AND no ask still yields no mark.
+            if result["bid"] is None and result["ask"] is not None \
+                    and t.bid is not None and not math.isnan(t.bid) and t.bid == -1:
+                result["bid"] = 0.0
+            if result["bid"] is not None and result["ask"]:
                 result["mid"] = round((result["bid"] + result["ask"]) / 2, 2)
 
             if t.modelGreeks:
