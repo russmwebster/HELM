@@ -755,9 +755,14 @@ def check_one(pos: dict, legs: list, deep: bool = False, persist: bool = False) 
     # written short-leg-first and would have gone silent on 2026-10-16.
     # Live-leg order is otherwise untouched -- this only moves the primary when
     # the leg that would have been chosen is dead.
-    _dead = lambda l: (l.get("expiration") is not None
-                       and (dte(l["expiration"]) is not None)
-                       and dte(l["expiration"]) < 0)
+    # W180 step 3 (2026-09-22): a leg is also dead when the book has CLOSED it
+    # -- a short bought back with time left. Nothing filtered legs by status
+    # here: "SELECT * FROM legs" returns closed legs too, and a closed leg
+    # with DTE > 0 would have been chosen as primary and quoted live.
+    _dead = lambda l: (str(l.get("status") or "").upper() == "CLOSED"
+                       or (l.get("expiration") is not None
+                           and (dte(l["expiration"]) is not None)
+                           and dte(l["expiration"]) < 0))
     _quoting = [l for l in opt_legs if not _dead(l)]
     primary = (_quoting or opt_legs)[0] if opt_legs else None
 
@@ -840,11 +845,17 @@ def check_one(pos: dict, legs: list, deep: bool = False, persist: bool = False) 
             # expiry. None from settlement stays unmarked (HELM-095: never
             # invent a value).
             _lg_dte = dte(_lg["expiration"]) if _lg.get("expiration") else None
-            if _lg_dte is not None and _lg_dte < 0:
+            _lg_closed = str(_lg.get("status") or "").upper() == "CLOSED"
+            if _lg_closed or (_lg_dte is not None and _lg_dte < 0):
                 from helm.expiry import settled_mark
                 _q = {}
                 # s116: the settled close_price the book recorded, when it has
                 # one; intrinsic only as the fallback. See expiry.settled_mark.
+                # W180 step 3: a CLOSED leg is the same case whether it expired
+                # or was bought back -- its mark is the price the book closed it
+                # at, realized, never quoted. A bought-back leg always carries
+                # close_price, so the intrinsic fallback is only ever reached by
+                # an expired leg nothing has settled yet (unchanged).
                 _mid = settled_mark(_lg, ticker)
                 _leg_live = False
             else:
