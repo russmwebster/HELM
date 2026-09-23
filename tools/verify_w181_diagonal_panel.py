@@ -6,6 +6,16 @@ Usage:
       (control: expect the DIAGONAL cases to FAIL -- it maps to OTHER)
 
 Checks, in order:
+  0  the import  -- helm_engine imports in a CLEAN interpreter, engine present
+                    AND absent. This case is here because its absence cost the
+                    board: W181's first cut hoisted `from helm import posview`
+                    to module level in helm_engine.py, where every other helm
+                    import is deliberately lazy (helm reaches sys.path only via
+                    _ensure_path, and PG is built to run with no engine at all).
+                    helm_engine then failed to import and EVERY PG PAGE WENT
+                    BLANK, 2026-09-23. The first harness passed 32 cases
+                    because it imported helm_engine with the path already set
+                    -- it never once started the way PG starts.
   A  the shared map -- posview is ONE object, imported by both surfaces
   B  the taxonomy   -- DIAGONAL / DIAGONAL_PUT / PMCC group together, others unmoved
   C  completeness   -- every family in FAMILY_ORDER has a CLI renderer AND a PG column set
@@ -48,6 +58,26 @@ if os.path.isdir(PG):
         print("helm_engine:", os.path.abspath(E.__file__))
     except Exception as e:
         print("helm_engine: NOT IMPORTABLE --", e)
+
+# ---- 0. the import, the way PG actually starts ---------------------------
+# A subprocess, because this interpreter already has HELM_ROOT on sys.path --
+# which is exactly how the first harness fooled itself.
+import subprocess, textwrap
+if os.path.isdir(PG):
+    probe = textwrap.dedent("""
+        import sys; sys.path.insert(0, %r)
+        import helm_engine as E
+        print("OK", E.engine_available())
+    """) % PG
+    for label, env_extra in (("engine present", {"HELM_ROOT": ROOT}),
+                             ("engine ABSENT", {"HELM_ROOT": os.path.join(ROOT, "__nonexistent__")})):
+        env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+        env.update(env_extra)
+        r = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True,
+                           env=env, cwd=PG)
+        chk(f"0  helm_engine imports in a clean interpreter -- {label}",
+            r.returncode == 0 and r.stdout.startswith("OK"),
+            (r.stderr.strip().splitlines() or [""])[-1])
 
 # ---- A. one map, not two -------------------------------------------------
 chk("A1 CLI uses posview's order (same object)", cc._FAMILY_ORDER is P.FAMILY_ORDER)
