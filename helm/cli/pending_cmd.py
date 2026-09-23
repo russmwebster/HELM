@@ -54,7 +54,7 @@ def _keep():
     note = _arg("--note")
     if not who or not reason:
         print("usage: helm pending keep TICKER --reason \"why you are holding\" "
-              "[--kind thesis|target|dte] [--note ...]")
+              "[--kind KIND] [--note ...]")
         sys.exit(2)
     conn = _conn()
     try:
@@ -143,12 +143,19 @@ def _render(rows):
         colour = "green" if (dr or 0) >= 0 else "red"
         t.add_row(
             d["ticker"], _SHORT.get(d["strategy"], d["strategy"]),
-            d["kind"], d["flag_date"][5:],
+            d.get("label") or d["kind"], d["flag_date"][5:],
             "%dtd" % d["age_td"],
             _money(d["mark_at_flag"]), _money(d["mark_now"]),
             "[%s]%s[/%s]" % (colour, _money(dr), colour),
             "firing" if d["still_firing"] else "cleared")
     con.print(t)
+    # W180 step 5: a diagonal's flag carries the reading its rule read (the
+    # short's capture, or the long's own move) -- the p&l columns above are
+    # the POSITION's and do not show it.
+    for d in rows:
+        if d.get("note") and d.get("kind") not in ("thesis", "target", "dte"):
+            con.print("  [dim]%s %s (--kind %s): %s[/dim]"
+                      % (d["ticker"], d.get("label") or d["kind"], d["kind"], d["note"]))
     up = sum(1 for d in rows if (d.get("drift") or 0) > 0)
     con.print("  [dim]Since their flags these positions have moved "
               "%s in total; %d of %d are BETTER than when they fired.[/dim]"
