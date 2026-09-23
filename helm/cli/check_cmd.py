@@ -993,32 +993,33 @@ def check_one(pos: dict, legs: list, deep: bool = False, persist: bool = False) 
 from rich.columns import Columns
 
 # ---- group taxonomy --------------------------------------------------------
-_FAMILY_ORDER = ["CSP", "CREDIT_SPREAD", "IC", "LONG_CALL", "OTHER"]
-_FAMILY_META = {
-    "CSP":           ("Cash-secured puts", "CSP"),
-    "CREDIT_SPREAD": ("Credit spreads",    "BCS"),   # suffix refined per members
-    "IC":            ("Iron condors",      "IC"),
-    "LONG_CALL":     ("Long calls",        "LC"),
-    "OTHER":         ("Other",             "--"),
-}
+# W181: this map lived HERE and, byte-identically, in helm-pg/helm_engine.py.
+# Neither referenced the other and neither had a DIAGONAL branch, so the
+# largest strategy on both books rendered as "Other" on both surfaces. It is
+# now one module, imported by both. See helm/posview.py for the full account.
+from helm import posview as _posview   # W181
 
-def _family(strat):
-    s = (strat or "").upper()
-    if s in ("CSP", "CASH_SECURED_PUT"):
-        return "CSP"
-    if s in ("BEAR_CALL_SPREAD", "BULL_PUT_SPREAD"):
-        return "CREDIT_SPREAD"
-    if s == "IRON_CONDOR":
-        return "IC"
-    if s == "LONG_CALL":
-        return "LONG_CALL"
-    return "OTHER"
+_FAMILY_ORDER = _posview.FAMILY_ORDER
+_FAMILY_META = _posview.FAMILY_META
+_family = _posview.family
 
 
 # ---- small format helpers --------------------------------------------------
 def _pct_s(v, dec=1):
     """Signed percent, plain (no color). None -> em dash."""
     return f"{v:+.{dec}f}%" if v is not None else "—"
+
+def _capture_pct(a, legs):
+    """W181: percent of the live short's premium captured, from marks check_one
+    already fetched. None in LONG ONLY, or when the short has no mark."""
+    sl = _posview.open_short_leg(legs)
+    if sl is None:
+        return None
+    mk = ((a.get("leg_greeks") or {}).get(sl["id"]) or {}).get("current_price")
+    if mk is None and (a.get("primary_leg") or {}).get("id") == sl["id"]:
+        mk = (a.get("opt_data") or {}).get("mid")
+    return _posview.captured_pct(sl, mk)
+
 
 def _dte_cell(days):
     """DTE with the 21-day gamma dot; color bands mirror the legacy renderer."""
@@ -1781,6 +1782,70 @@ def _render_longcall(rows):
         )
     console.print(t)
 
+def _render_diagonal(rows):
+    """W181. A diagonal is a long call with a sequence of shorts sold against it
+    (Russ, 2026-09-21; W180 4a), so the panel answers, in order: what STATE is
+    this in, how much of the short's premium is CAPTURED -- the number the
+    harvest rule acts on -- how far is spot from the short strike, and what has
+    the long cost net of the rent collected so far.
+
+    Both legs' DTE, never one (standing rule, s117 / W168): a single number on a
+    diagonal is a claim about which leg matters. LONG ONLY rows show the long's
+    alone and say so, because there is no second leg to report.
+    """
+    t = _tbl([("ticker", dict(style="bold cyan", no_wrap=True)), ("state", dict(no_wrap=True)),
+              ("dte s/l", _R), ("earnings", _R), ("spot", _R),
+              ("short K", _R), ("buf%", _R), ("capt%", _R), ("short mk", _R),
+              ("long K", _R), ("p&l", _R), ("debit", _R), ("eff basis", _R)])
+    # Most-captured first: the rows nearest a harvest decision sort to the top.
+    rows.sort(key=lambda r: (r.get("_capt") is None, -(r.get("_capt") or 0)))
+    for r in rows:
+        a, pos, legs = r["a"], r["pos"], r["legs"]
+        state = _posview.diagonal_state(legs)
+        sl = _posview.open_short_leg(legs)
+        ll = _posview.open_long_leg(legs)
+        spot = a.get("underlying_price")
+        capt = r.get("_capt")
+        # buffer: spot -> short strike, the room the short still has. Only
+        # meaningful while a short is on.
+        if sl is not None and spot:
+            bufp = (sl["strike"] - spot) / spot * 100.0
+            buf = f"[{'red' if bufp < 0 else 'yellow' if bufp < 3 else 'green'}]{bufp:+.1f}%[/]"
+        else:
+            buf = "—"
+        # capture colours mirror W180's flag points: 50% and 25%.
+        if capt is None:
+            capt_cell = "—"
+        elif capt < 0:
+            capt_cell = f"[red]{capt:.0f}%[/red]"
+        elif capt >= 50:
+            capt_cell = f"[bold green]{capt:.0f}%[/bold green]"
+        elif capt >= 25:
+            capt_cell = f"[green]{capt:.0f}%[/green]"
+        else:
+            capt_cell = f"{capt:.0f}%"
+        _lg = a.get("leg_greeks") or {}
+        smk = (_lg.get(sl["id"]) or {}).get("current_price") if sl is not None else None
+        eb = _posview.effective_basis(legs)
+        rent = _posview.rent_collected(legs)
+        eb_cell = "—" if eb is None else (
+            f"[bold green]FREE[/bold green]" if eb <= 0 else
+            (f"${eb:,.0f}\n[dim]rent ${rent:,.0f}[/dim]" if rent else f"${eb:,.0f}"))
+        t.add_row(
+            r["ticker"],
+            ("[dim]long only[/dim]" if state == "LONG ONLY" else state.lower()),
+            _legview.dte_label([l for l in legs
+                                if str(l.get("status") or "").upper() == "OPEN"
+                                and l.get("option_type") not in (None, "STOCK")], dte) or "—",
+            _earn_cell(pos, legs), _spot_cell(spot),
+            _spot_cell(sl["strike"]) if sl is not None else "—", buf, capt_cell,
+            f"{smk:.2f}" if smk is not None else "—",
+            _spot_cell(ll["strike"]) if ll is not None else "—",
+            _money(a.get("pnl_mtm")),
+            f"${abs(pos.get('net_premium') or 0):,.0f}", eb_cell)
+    console.print(t)
+
+
 def _render_other(rows):
     t = _tbl([("ticker", dict(style="bold cyan", no_wrap=True)), ("strategy", dict(no_wrap=True)),
               ("dte", _R), ("earnings", _R), ("spot", _R), ("kept%", _R), ("p&l", _R), ("credit/debit", _R)])
@@ -1795,6 +1860,7 @@ def _render_other(rows):
 
 _GROUP_RENDER = {
     "CSP": _render_csp, "CREDIT_SPREAD": _render_credit, "IC": _render_ic,
+    "DIAGONAL": _render_diagonal,   # W181
     "LONG_CALL": _render_longcall, "OTHER": _render_other,
 }
 
@@ -1839,6 +1905,7 @@ def cmd_check_all(args):
             "ticker": pos["ticker"], "pos": pos, "legs": legs, "a": a,
             "family": _family(pos.get("strategy")),
             "pnl": a.get("pnl_mtm"),
+            "_capt": _capture_pct(a, legs),   # W181
             "_dte": dte(prim["expiration"]) if prim.get("expiration") else None,
             "_delta": (a.get("opt_data") or {}).get("delta"),
             "ivr": _ivr.get(pos["ticker"]), "beta": _betas.get(pos["ticker"]),
@@ -2655,6 +2722,7 @@ def cmd_check_one(ticker: str, deep: bool = False):
     row = {
         "ticker": pos["ticker"], "pos": pos, "legs": legs, "a": a,
         "family": _family(pos.get("strategy")),
+        "_capt": _capture_pct(a, legs),   # W181
         "pnl": a.get("pnl_mtm"),
         "_dte": dte(prim["expiration"]) if prim.get("expiration") else None,
         "_delta": (a.get("opt_data") or {}).get("delta"),
