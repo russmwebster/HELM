@@ -207,7 +207,16 @@ def chain_contract(ticker: str, strike, exp, role: str, spot: float = None,
     if rows.empty:
         raise RuntimeError(f"Pin refused: no ${want:g} {side} at {exp} on {ticker}'s chain "
                            f"({role} leg). Nothing was booked.")
-    r = rows.iloc[0]
+    return spot, _row_contract(rows.iloc[0], spot, want, exp, dte, side)
+
+
+def _row_contract(r, spot, want, exp, dte, side="CALL") -> dict:
+    """One chain row -> the leg dict chain_contract returns. Shared with
+    chain_candidates so a candidate and the contract later booked from it are
+    read by the same code (NaN defence, lastPrice fallback, BS delta)."""
+    import math
+    from scipy.stats import norm
+    from helm.chainval import oi_int
     bid, ask, last = _chain_num(r.get("bid")), _chain_num(r.get("ask")), _chain_num(r.get("lastPrice"))
     two_sided = bid > 0 and ask > 0
     mid = round((bid + ask) / 2, 2) if two_sided else round(last, 2)
@@ -221,9 +230,74 @@ def chain_contract(ticker: str, strike, exp, role: str, spot: float = None,
             delta = round(float(norm.cdf(d1)) - (1.0 if side == "PUT" else 0.0), 3)
     except Exception:
         delta = None
-    return spot, {"expiration": exp, "dte": dte, "strike": want, "mid": mid, "delta": delta,
-                  "iv": iv, "oi": oi_int(r.get("openInterest")),
-                  "mid_source": "bid/ask" if two_sided else "last"}
+    return {"expiration": exp, "dte": dte, "strike": want, "mid": mid, "delta": delta,
+            "iv": iv, "oi": oi_int(r.get("openInterest")),
+            "mid_source": "bid/ask" if two_sided else "last"}
+
+
+def chain_candidates(ticker: str, long_strike, long_exp, option_type: str = "CALL",
+                     spot: float = None, min_dte: int = 14, long_dte_soft: int = 21,
+                     _tk=None, today=None) -> tuple:
+    """W180 step 7a -- the shorts that could be sold against a held long.
+    Returns (spot, [leg dicts], stats). DISPLAY ONLY: this ranks nothing
+    and gates nothing; resell_cmd labels and orders.
+
+    The universe, and the one rule Russ chose (2026-09-24):
+      * NEVER INSIDE THE LONG'S STRIKE -- a call at or above the long's
+        strike, a put at or below it. Below it (for a call), assignment can
+        cost more than the long pays. On an underwater long this leaves only
+        low-delta, low-premium strikes, and that is the honest answer.
+      * expiring on or before the long's 21-DTE date, so the short is gone
+        before the long's own calendar rule (W180 §4.6)
+      * at least min_dte out (a 1-week short is a different trade)
+      * mid above $0.05 -- below it is W180 4.2's worthless floor already
+    stats counts what each rule removed, so an empty list says WHY."""
+    from datetime import date, datetime, timedelta
+    import yfinance as yf
+    tk = _tk or yf.Ticker(ticker)
+    if not spot:
+        spot = getattr(tk.fast_info, "last_price", None)
+        if not spot:
+            h = tk.history(period="5d")
+            spot = float(h["Close"].iloc[-1]) if not h.empty else None
+    if not spot:
+        raise RuntimeError(f"Could not determine spot for {ticker}.")
+    today = today or date.today()
+    side = str(option_type or "CALL").upper()
+    lk = float(long_strike)
+    cut = datetime.strptime(str(long_exp)[:10], "%Y-%m-%d").date() - timedelta(days=long_dte_soft)
+    stats = {"expiries_in_window": 0, "inside_long_strike": 0, "worthless": 0, "kept": 0,
+             "last_expiry_allowed": cut.isoformat()}
+    out = []
+    for exp in list(tk.options or []):
+        try:
+            e = datetime.strptime(exp, "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        dte = (e - today).days
+        if dte < min_dte or e > cut:
+            continue
+        stats["expiries_in_window"] += 1
+        try:
+            ch = tk.option_chain(exp)
+            df = ch.puts if side == "PUT" else ch.calls
+        except Exception:
+            continue
+        for _, r in df.iterrows():
+            k = _chain_num(r.get("strike"))
+            if not k:
+                continue
+            if (side == "CALL" and k < lk - 1e-9) or (side == "PUT" and k > lk + 1e-9):
+                stats["inside_long_strike"] += 1
+                continue
+            leg = _row_contract(r, spot, k, exp, dte, side)
+            leg["bid"], leg["ask"] = _chain_num(r.get("bid")), _chain_num(r.get("ask"))
+            if leg["mid"] is None or leg["mid"] <= 0.05:
+                stats["worthless"] += 1
+                continue
+            out.append(leg)
+    stats["kept"] = len(out)
+    return spot, out, stats
 
 
 def pin_diagonal_from_chain(ticker: str, short_strike, short_exp, long_strike,

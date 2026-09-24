@@ -3,6 +3,7 @@
     helm resell TICKER --strike K --expiry YYYY-MM-DD --price P
                 [--position-id ID] [--contracts N] [--yes]
     helm resell TICKER --strike K --expiry YYYY-MM-DD --dry-run
+    helm resell TICKER --candidates [--top N] [--json] [--position-id ID]
 
 A diagonal is a long call with a SEQUENCE of shorts sold against it (Russ,
 2026-09-21). Step 3 closes a short and keeps the position (`helm close --leg`);
@@ -220,6 +221,106 @@ def record(pos, legs, strike, expiry, contracts, price, quote, frag, spot=None):
     return lid, n
 
 
+def rank_candidates(cands, cfg, contracts):
+    """Order and label chain_candidates' output. Pure. DISPLAY ONLY.
+
+    Order: inside BOTH of the screen's short-leg bands (DTE and delta) first,
+    then inside the delta band, then inside the DTE band, then the rest; within
+    each, rent per day (mid x 100 x contracts / DTE) highest first. Rent per
+    day, not rent, so a 45-DTE short does not outrank a 21-DTE one by being
+    longer. The bands are STRATEGY_CONFIG's -- the screen's single home (W147)."""
+    dmin, dmax = cfg["short_dte_min"], cfg["short_dte_max"]
+    kmin, kmax = cfg["short_delta_min"], cfg["short_delta_max"]
+    out = []
+    for c in cands:
+        d = c.get("delta")
+        in_d = d is not None and kmin <= abs(d) <= kmax
+        in_t = dmin <= c["dte"] <= dmax
+        rent = round(c["mid"] * 100 * contracts, 2)
+        out.append(dict(c, in_delta=in_d, in_dte=in_t, rent=rent,
+                        rent_per_day=round(rent / c["dte"], 2) if c["dte"] else None))
+    out.sort(key=lambda c: (not (c["in_delta"] and c["in_dte"]), not c["in_delta"],
+                            not c["in_dte"], -(c["rent_per_day"] or 0)))
+    return out
+
+
+def candidates(ticker, pid=None, top=8, as_json=False):
+    """`helm resell TICKER --candidates` -- what could be sold against the
+    long, never below its strike (Russ, 2026-09-24). Writes nothing."""
+    import json as _json
+    from helm.models.leg import Leg
+    from helm import posview as PV
+    from helm.cli.open_cmd import STRATEGY_CONFIG
+    from helm.cli import diagonal as DG
+    pos, err = resolve(ticker, pid)
+    if err:
+        print(_json.dumps({"ok": False, "error": err})) if as_json else \
+            console.print(f"\n[red]{err}[/red]\n")
+        return
+    legs = Leg.for_position(pos.id)
+    ld = _legdicts(legs)
+    lg = PV.open_long_leg(ld)
+    if lg is None:
+        msg = "no open long leg"
+        print(_json.dumps({"ok": False, "error": msg})) if as_json else console.print(f"[red]{msg}[/red]")
+        return
+    cfg = STRATEGY_CONFIG.get((pos.strategy or "").upper(), STRATEGY_CONFIG["DIAGONAL"])
+    contracts = int(lg.get("contracts") or 1)
+    side = (lg.get("option_type") or "CALL").upper()
+    try:
+        spot, cands, stats = DG.chain_candidates(ticker, lg["strike"], lg["expiration"],
+                                                 option_type=side, long_dte_soft=LONG_DTE_SOFT)
+    except Exception as e:
+        msg = f"chain unavailable: {e}"
+        print(_json.dumps({"ok": False, "error": msg})) if as_json else console.print(f"\n[red]{msg}[/red]\n")
+        return
+    ranked = rank_candidates(cands, cfg, contracts)
+    state = PV.diagonal_state(ld)
+    best_d = max((abs(c["delta"]) for c in ranked if c.get("delta") is not None), default=None)
+    note = None
+    if ranked and (best_d is None or best_d < cfg["short_delta_min"]):
+        note = (f"No strike {'at or above' if side == 'CALL' else 'at or below'} the long's "
+                f"${lg['strike']:g} reaches the screen's {cfg['short_delta_min']:.2f} delta -- "
+                f"the highest here is {best_d:.2f}. That is the cost of never selling inside "
+                "the long's strike on a long that is out of the money.") if best_d is not None else None
+    if as_json:
+        print(_json.dumps({"ok": True, "ticker": ticker, "position_id": pos.id, "state": state,
+                           "spot": spot, "long": {"strike": lg["strike"], "expiration": str(lg["expiration"])[:10],
+                                                  "contracts": contracts},
+                           "bands": {"dte": [cfg["short_dte_min"], cfg["short_dte_max"]],
+                                     "delta": [cfg["short_delta_min"], cfg["short_delta_max"]]},
+                           "stats": stats, "note": note, "candidates": ranked[:top]}, default=str))
+        return
+    console.print()
+    console.print(f"[bold]{ticker}[/bold] re-sell candidates · {pos.id} · {state} · spot {spot:.2f}")
+    console.print(f"  long ${lg['strike']:g} {str(lg['expiration'])[:10]} x{contracts} · "
+                  f"strikes {'>=' if side == 'CALL' else '<='} ${lg['strike']:g} only · "
+                  f"expiring by {stats['last_expiry_allowed']} (the long's 21-DTE date) · "
+                  "[dim]shown, never enforced[/dim]")
+    if state == "SHORT ON":
+        console.print("  [yellow]A short is already on -- these are for AFTER it is bought back.[/yellow]")
+    if not ranked:
+        console.print(f"  [yellow]No candidates.[/yellow] [dim]{stats['expiries_in_window']} expiries in "
+                      f"window; {stats['inside_long_strike']} strikes inside the long's; "
+                      f"{stats['worthless']} at or under $0.05.[/dim]\n")
+        return
+    console.print(f"  {'#':>2}  {'expiry':<10} {'DTE':>4} {'strike':>8} {'bid':>6} {'ask':>6} "
+                  f"{'mid':>6} {'delta':>6} {'IV':>6} {'OI':>6} {'rent':>8} {'/day':>7}  bands")
+    for i, c in enumerate(ranked[:top], 1):
+        bands = ("DTE+delta" if c["in_dte"] and c["in_delta"] else
+                 "delta" if c["in_delta"] else "DTE" if c["in_dte"] else "outside")
+        dl = "—" if c.get("delta") is None else f"{abs(c['delta']):.2f}"
+        console.print(f"  {i:>2}  {c['expiration']:<10} {c['dte']:>4} {c['strike']:>8g} "
+                      f"{c['bid']:>6.2f} {c['ask']:>6.2f} {c['mid']:>6.2f} {dl:>6} "
+                      f"{c['iv']:>5.1f}% {c.get('oi') or 0:>6} ${c['rent']:>7,.0f} "
+                      f"${(c['rent_per_day'] or 0):>6,.2f}  [dim]{bands}[/dim]")
+    if note:
+        console.print(f"  [dim]{note}[/dim]")
+    c0 = ranked[0]
+    console.print(f"\n  [dim]Next: helm resell {ticker} --strike {c0['strike']:g} --expiry "
+                  f"{c0['expiration']} --dry-run   (then --price <your fill>)[/dim]\n")
+
+
 def run():
     args = sys.argv[1:]
     if not args or args[0] in ("-h", "--help"):
@@ -228,6 +329,13 @@ def run():
     ticker = args[0].upper() if not args[0].startswith("-") else None
     if not ticker:
         console.print("[red]Specify a ticker first: helm resell AA --strike 50 --expiry 2026-11-20 --price 0.85[/red]")
+        return
+    if "--candidates" in args:
+        try:
+            top = int(_arg(args, "--top") or 8)
+        except ValueError:
+            top = 8
+        candidates(ticker, _arg(args, "--position-id"), top=top, as_json="--json" in args)
         return
     strike, expiry = _arg(args, "--strike"), _arg(args, "--expiry")
     pid = _arg(args, "--position-id")
