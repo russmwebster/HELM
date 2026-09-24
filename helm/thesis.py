@@ -77,8 +77,16 @@ def buffer_pct(legs, spot):
     if not spot:
         return None
     walls = []
+    _any_open_short = any(
+        l.get("direction") == "SHORT" and l.get("option_type") not in (None, "STOCK")
+        and str(l.get("status") or "OPEN").upper() != "CLOSED" for l in legs or [])
     for l in legs or []:
         if l.get("direction") != "SHORT" or l.get("option_type") in (None, "STOCK"):
+            continue
+        # W180 step 6: a bought-back or settled short is not a wall -- while
+        # another short is still on. With none on (a closed position's card,
+        # read from history) every short counts, exactly as before.
+        if _any_open_short and str(l.get("status") or "OPEN").upper() == "CLOSED":
             continue
         k = _f(l.get("strike"))
         if k is None or not l.get("option_type"):

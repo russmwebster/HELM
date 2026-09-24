@@ -163,23 +163,22 @@ def _chain_num(x):
         return 0.0
 
 
-def pin_diagonal_from_chain(ticker: str, short_strike, short_exp, long_strike,
-                            long_exp, spot: float = None) -> tuple:
-    """W163 (s113) -- W97's bypass for two legs: fetch the two NAMED call
-    contracts straight from the chain, so a real fill the screen would never
-    have proposed can still be RECORDED. Returns (spot, candidate) in the
-    nested shape _confirm_diagonal consumes, flagged pinned_out_of_band.
-    Refuses (RuntimeError, nothing booked) when an expiry or strike is not on
-    the chain -- it names the contract, never substitutes (W7). Delta is the
-    same BS-from-IV the screen uses (chains carry no greeks); mid falls back
-    to lastPrice when there is no two-sided quote (pre-market, illiquid) and
-    says so -- it is only the prompt default; the trader types the fill."""
+def chain_contract(ticker: str, strike, exp, role: str, spot: float = None,
+                   option_type: str = "CALL", _tk=None) -> tuple:
+    """ONE named contract straight from the chain -- W163's per-leg fetch,
+    lifted out of pin_diagonal_from_chain so W180 step 6's re-sell reads the
+    same contract the same way (a rule written twice drifts). Returns
+    (spot, leg dict). Refuses (RuntimeError, nothing booked) when the expiry
+    or strike is not on the chain -- it names the contract, never substitutes
+    (W7). Delta is BS-from-IV, as the screen computes it (chains carry no
+    greeks); mid falls back to lastPrice with no two-sided quote and says so --
+    it is only the prompt default; the trader types the fill."""
     import math
     from datetime import date, datetime
     import yfinance as yf
     from scipy.stats import norm
     from helm.chainval import oi_int
-    tk = yf.Ticker(ticker)
+    tk = _tk or yf.Ticker(ticker)
     if not spot:
         spot = getattr(tk.fast_info, "last_price", None)
         if not spot:
@@ -189,45 +188,57 @@ def pin_diagonal_from_chain(ticker: str, short_strike, short_exp, long_strike,
         raise RuntimeError(f"Pin refused: could not determine spot for {ticker}. Nothing was booked.")
     today = date.today()
     expiries = list(tk.options or [])
-
-    def leg(strike, exp, role):
-        exp = str(exp)[:10]
-        try:
-            dte = (datetime.strptime(exp, "%Y-%m-%d").date() - today).days
-        except ValueError:
-            raise RuntimeError(f"Pin refused: {role} expiry {exp!r} is not YYYY-MM-DD. Nothing was booked.")
-        if exp not in expiries:
-            raise RuntimeError(f"Pin refused: {ticker} has no {exp} expiry on the chain "
-                               f"({role} leg). Nothing was booked.")
-        try:
-            df = tk.option_chain(exp).calls
-        except Exception as e:
-            raise RuntimeError(f"Pin refused: chain fetch failed for {ticker} {exp}: {e}. Nothing was booked.")
-        want = float(strike)
-        rows = df[(df["strike"] - want).abs() < 0.01]
-        if rows.empty:
-            raise RuntimeError(f"Pin refused: no ${want:g} CALL at {exp} on {ticker}'s chain "
-                               f"({role} leg). Nothing was booked.")
-        r = rows.iloc[0]
-        bid, ask, last = _chain_num(r.get("bid")), _chain_num(r.get("ask")), _chain_num(r.get("lastPrice"))
-        two_sided = bid > 0 and ask > 0
-        mid = round((bid + ask) / 2, 2) if two_sided else round(last, 2)
-        iv = round(_chain_num(r.get("impliedVolatility")) * 100, 1)
+    exp = str(exp)[:10]
+    side = str(option_type or "CALL").upper()
+    try:
+        dte = (datetime.strptime(exp, "%Y-%m-%d").date() - today).days
+    except ValueError:
+        raise RuntimeError(f"Pin refused: {role} expiry {exp!r} is not YYYY-MM-DD. Nothing was booked.")
+    if exp not in expiries:
+        raise RuntimeError(f"Pin refused: {ticker} has no {exp} expiry on the chain "
+                           f"({role} leg). Nothing was booked.")
+    try:
+        ch = tk.option_chain(exp)
+        df = ch.puts if side == "PUT" else ch.calls
+    except Exception as e:
+        raise RuntimeError(f"Pin refused: chain fetch failed for {ticker} {exp}: {e}. Nothing was booked.")
+    want = float(strike)
+    rows = df[(df["strike"] - want).abs() < 0.01]
+    if rows.empty:
+        raise RuntimeError(f"Pin refused: no ${want:g} {side} at {exp} on {ticker}'s chain "
+                           f"({role} leg). Nothing was booked.")
+    r = rows.iloc[0]
+    bid, ask, last = _chain_num(r.get("bid")), _chain_num(r.get("ask")), _chain_num(r.get("lastPrice"))
+    two_sided = bid > 0 and ask > 0
+    mid = round((bid + ask) / 2, 2) if two_sided else round(last, 2)
+    iv = round(_chain_num(r.get("impliedVolatility")) * 100, 1)
+    delta = None
+    try:
+        v = iv / 100.0
+        if v > 0 and dte > 0 and want > 0:
+            T = dte / 365.0
+            d1 = (math.log(spot / want) + (0.045 + 0.5 * v * v) * T) / (v * math.sqrt(T))
+            delta = round(float(norm.cdf(d1)) - (1.0 if side == "PUT" else 0.0), 3)
+    except Exception:
         delta = None
-        try:
-            v = iv / 100.0
-            if v > 0 and dte > 0 and want > 0:
-                T = dte / 365.0
-                d1 = (math.log(spot / want) + (0.045 + 0.5 * v * v) * T) / (v * math.sqrt(T))
-                delta = round(float(norm.cdf(d1)), 3)
-        except Exception:
-            delta = None
-        return {"expiration": exp, "dte": dte, "strike": want, "mid": mid, "delta": delta,
-                "iv": iv, "oi": oi_int(r.get("openInterest")),
-                "mid_source": "bid/ask" if two_sided else "last"}
+    return spot, {"expiration": exp, "dte": dte, "strike": want, "mid": mid, "delta": delta,
+                  "iv": iv, "oi": oi_int(r.get("openInterest")),
+                  "mid_source": "bid/ask" if two_sided else "last"}
 
-    s = leg(short_strike, short_exp, "short")
-    l = leg(long_strike, long_exp, "long")
+
+def pin_diagonal_from_chain(ticker: str, short_strike, short_exp, long_strike,
+                            long_exp, spot: float = None) -> tuple:
+    """W163 (s113) -- W97's bypass for two legs: fetch the two NAMED call
+    contracts straight from the chain, so a real fill the screen would never
+    have proposed can still be RECORDED. Returns (spot, candidate) in the
+    nested shape _confirm_diagonal consumes, flagged pinned_out_of_band.
+    Each leg is chain_contract() -- the refusals, the NaN defence, the
+    lastPrice fallback and the BS delta all live there (W180 step 6 lifted
+    them out, unchanged, so the re-sell reads a contract the same way)."""
+    import yfinance as yf
+    tk = yf.Ticker(ticker)
+    spot, s = chain_contract(ticker, short_strike, short_exp, "short", spot=spot, _tk=tk)
+    spot, l = chain_contract(ticker, long_strike, long_exp, "long", spot=spot, _tk=tk)
     net_debit = round(l["mid"] - s["mid"], 2)
     return spot, {
         "short": s, "long": l,

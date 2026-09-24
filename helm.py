@@ -35,6 +35,7 @@ COMMANDS = {
     'settle':    ('helm.cli.settle_cmd',     'run', 'Ask what the broker did with positions that reached expiry'),
     'stock':     ('helm.cli.stock_cmd',     'run', 'Manage stock positions for covered call sizing'),
     'exposure':  ('helm.cli.exposure_cmd',  'run', 'What a candidate would be joining — committed capital by exposure group'),
+    'resell':    ('helm.cli.resell_cmd',    'run', 'Sell the next short against a diagonal\'s long (W180 step 6)'),
     'pending':   ('helm.cli.pending_cmd',   'run', 'Exit flags awaiting a decision — act, or log why you are holding'),
     'status':    ('helm.cli.status_cmd',    'run', 'Portfolio dashboard — positions, P&L, activity'),
     'paper':     ('helm.cli.paper_cmd',   'run',  'Paper book — generate picks from the latest scan'),

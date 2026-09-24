@@ -535,9 +535,9 @@ def core_verdict(pos, legs, opt_legs, primary, opt_data, leg_marks):
     for lg in opt_legs:
         if lg["id"] in marks:
             continue
-        key = (lg.get("option_type"), lg.get("strike"))
-        if key in leg_marks and leg_marks[key] is not None:
-            marks[lg["id"]] = leg_marks[key]  # HELM-095: skip None-valued marks
+        # W82 (W180 step 6): keyed by LEG ID, not (type, strike).
+        if leg_marks.get(lg["id"]) is not None:
+            marks[lg["id"]] = leg_marks[lg["id"]]  # HELM-095: skip None-valued marks
     # HELM-095: a present-but-None mark (intermittent illiquid multi-leg quote)
     # must count as INCOMPLETE, not crash evaluate() on `open_price - None`.
     # The is-not-None guard above drops it from `marks`, so this check catches it
@@ -571,7 +571,11 @@ def assess_position(pos: dict, legs: list, underlying_price: Optional[float],
     opt_legs = [l for l in legs if l["option_type"] not in (None, "STOCK")]
     opt_legs = _legview.order_option_legs(opt_legs)   # s117, W168
     stock_legs = [l for l in legs if l["option_type"] == "STOCK"]
-    primary = opt_legs[0] if opt_legs else None
+    # W180 step 6: the same primary check_one chose -- front-most leg still on
+    # the book. opt_legs[0] was a bought-back short on every harvested
+    # diagonal, so days_left (the "Manage: N DTE" reason) read a dead leg.
+    _live_ol = [l for l in opt_legs if not _leg_dead(l)]
+    primary = (_live_ol or opt_legs)[0] if opt_legs else None
     is_multileg = len(opt_legs) > 1
 
     pnl_mtm = None
@@ -605,7 +609,7 @@ def assess_position(pos: dict, legs: list, underlying_price: Optional[float],
             _total = 0.0
             _marked_all = True
             for _l in opt_legs:
-                _m = marks.get((_l["option_type"], _l["strike"]))
+                _m = marks.get(_l["id"])   # W82: by leg id (W180 step 6)
                 if _m is None:
                     _marked_all = False
                     break
@@ -642,7 +646,11 @@ def assess_position(pos: dict, legs: list, underlying_price: Optional[float],
         # band_for reads this only on its single-leg branch (verdict.py); the
         # multileg band comes from proximity_pct as before -- asserted in
         # tools/verify_s95_w89.py.
-        _short_opt_legs = [_l for _l in opt_legs if _l.get("direction") == "SHORT"]
+        # W180 step 6: a wall is a short that is still ON. A bought-back or
+        # settled short is not a wall -- with a re-sold short above it, the dead
+        # lower strike was the "nearer wall" and the buffer measured to nothing.
+        _short_opt_legs = [_l for _l in opt_legs if _l.get("direction") == "SHORT"
+                           and not _leg_dead(_l)]
         if underlying_price and _short_opt_legs:
             _cands = []
             for _sl in _short_opt_legs:
@@ -734,6 +742,16 @@ def _weakest_leg_confidence(mark_confidence, leg_marks_by_id):
     ):
         return "stale"
     return mark_confidence
+
+
+def _leg_dead(l) -> bool:
+    """A leg no longer on the book: CLOSED (bought back, settled) or past its
+    expiration. check_one's primary rule (s116, W180 step 3), shared so
+    assess_position and the buffer read the same legs (W180 step 6)."""
+    if str(l.get("status") or "").upper() == "CLOSED":
+        return True
+    _d = dte(l["expiration"]) if l.get("expiration") is not None else None
+    return _d is not None and _d < 0
 
 
 def check_one(pos: dict, legs: list, deep: bool = False, persist: bool = False) -> dict:
@@ -833,9 +851,14 @@ def check_one(pos: dict, legs: list, deep: bool = False, persist: bool = False) 
         })
     if len(opt_legs) > 1:
         if primary is not None and opt_data.get("mid") is not None:
-            leg_marks[(primary["option_type"], primary["strike"])] = opt_data.get("mid")
+            leg_marks[primary["id"]] = opt_data.get("mid")
         for _lg in opt_legs:
-            _key = (_lg["option_type"], _lg["strike"])
+            # W82, closed by W180 step 6: this dict was keyed (type, strike),
+            # with no expiration. A re-sold short at the SAME strike as the
+            # one bought back (AA 55C, say) took the new short's live mid for
+            # the closed leg -- or the closed leg's price for the new one --
+            # and the position's P&L netted the wrong number. Keyed by leg id.
+            _key = _lg["id"]
             if _key in leg_marks:
                 continue
             # HELM-138 (W74): an expired contract quotes nothing, ever, so
