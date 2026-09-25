@@ -221,14 +221,46 @@ def record(pos, legs, strike, expiry, contracts, price, quote, frag, spot=None):
     return lid, n
 
 
+# Liquidity marks -- LABELS, never a cut (2026-09-25, below). Both numbers are
+# the ones HELM already uses elsewhere, named here so the table can say which.
+SPREAD_CUT_PCT = 25.0     # open_cmd's IBKR fetcher: spread_threshold default 0.25
+DIAG_SHORT_MIN_OI = 100   # open_cmd.evaluate_diagonals: a short under 100 OI is dropped
+
+
+def spread_pct(bid, ask):
+    """(ask - bid) / mid, in percent -- open_cmd's definition. None without a
+    two-sided quote."""
+    try:
+        b, a = float(bid), float(ask)
+    except (TypeError, ValueError):
+        return None
+    if b <= 0 or a <= 0:
+        return None
+    m = (a + b) / 2
+    return round((a - b) / m * 100, 1) if m > 0 else None
+
+
 def rank_candidates(cands, cfg, contracts):
     """Order and label chain_candidates' output. Pure. DISPLAY ONLY.
 
     Order: inside BOTH of the screen's short-leg bands (DTE and delta) first,
     then inside the delta band, then inside the DTE band, then the rest; within
-    each, rent per day (mid x 100 x contracts / DTE) highest first. Rent per
-    day, not rent, so a 45-DTE short does not outrank a 21-DTE one by being
-    longer. The bands are STRATEGY_CONFIG's -- the screen's single home (W147)."""
+    each, RENT AT THE BID per day (bid x 100 x contracts / DTE), highest first.
+
+    WHY THE BID (Russ, 2026-09-25). Ranked on the mid, this was the one place in
+    HELM where the spread did not count: on AA a 64%-wide candidate ranked
+    seventh on mid and falls below third on bid. The bid is what a seller is
+    sure of; the mid is what a patient limit order might get. Both are shown.
+
+    WHY NO 25% CUT. Measured on every diagonal short HELM has journaled: median
+    spread 7.8% above a $2 mid, 24% at $0.25-0.50, 50% under $0.25 -- the dollar
+    width barely moves, the percentage balloons as the option gets cheap. A
+    re-sell against an UNDERWATER long is cheap by construction (never inside the
+    long's strike), so a 25% cut would empty the table on exactly the positions
+    that need it. It is also not the diagonal screen's rule: evaluate_diagonals
+    scores spread, it does not cut it. So: shown, coloured, labelled past 25%
+    and under the screen's 100-OI floor -- and paid for in the rank, via the bid.
+    Rent per day, not rent, so a longer short does not win by being longer."""
     dmin, dmax = cfg["short_dte_min"], cfg["short_dte_max"]
     kmin, kmax = cfg["short_delta_min"], cfg["short_delta_max"]
     out = []
@@ -237,10 +269,20 @@ def rank_candidates(cands, cfg, contracts):
         in_d = d is not None and kmin <= abs(d) <= kmax
         in_t = dmin <= c["dte"] <= dmax
         rent = round(c["mid"] * 100 * contracts, 2)
+        bid = float(c.get("bid") or 0)
+        rent_bid = round(bid * 100 * contracts, 2)
+        sp = spread_pct(c.get("bid"), c.get("ask"))
+        oi = int(c.get("oi") or 0)
         out.append(dict(c, in_delta=in_d, in_dte=in_t, rent=rent,
-                        rent_per_day=round(rent / c["dte"], 2) if c["dte"] else None))
+                        rent_per_day=round(rent / c["dte"], 2) if c["dte"] else None,
+                        rent_bid=rent_bid,
+                        rent_bid_per_day=round(rent_bid / c["dte"], 2) if c["dte"] else None,
+                        spread_pct=sp,
+                        width=round(float(c.get("ask") or 0) - bid, 2),
+                        wide=(sp is None or sp > SPREAD_CUT_PCT),
+                        thin_oi=oi < DIAG_SHORT_MIN_OI))
     out.sort(key=lambda c: (not (c["in_delta"] and c["in_dte"]), not c["in_delta"],
-                            not c["in_dte"], -(c["rent_per_day"] or 0)))
+                            not c["in_dte"], -(c["rent_bid_per_day"] or 0)))
     return out
 
 
@@ -289,6 +331,8 @@ def candidates(ticker, pid=None, top=8, as_json=False):
                                                   "contracts": contracts},
                            "bands": {"dte": [cfg["short_dte_min"], cfg["short_dte_max"]],
                                      "delta": [cfg["short_delta_min"], cfg["short_delta_max"]]},
+                           "marks": {"spread_cut_pct": SPREAD_CUT_PCT,
+                                     "min_oi": DIAG_SHORT_MIN_OI},
                            "stats": stats, "note": note, "candidates": ranked[:top]}, default=str))
         return
     console.print()
@@ -304,16 +348,29 @@ def candidates(ticker, pid=None, top=8, as_json=False):
                       f"window; {stats['inside_long_strike']} strikes inside the long's; "
                       f"{stats['worthless']} at or under $0.05.[/dim]\n")
         return
-    console.print(f"  {'#':>2}  {'expiry':<10} {'DTE':>4} {'strike':>8} {'bid':>6} {'ask':>6} "
-                  f"{'mid':>6} {'delta':>6} {'IV':>6} {'OI':>6} {'rent':>8} {'/day':>7}  bands")
+    console.print(f"  {'#':>2}  {'expiry':<10} {'DTE':>4} {'strike':>7} {'bid':>5} {'ask':>5} "
+                  f"{'spread':>7} {'delta':>5} {'IV':>6} {'OI':>5} {'@bid':>7} {'/day':>6} "
+                  f"{'@mid':>7} {'/day':>6}  bands")
     for i, c in enumerate(ranked[:top], 1):
         bands = ("DTE+delta" if c["in_dte"] and c["in_delta"] else
                  "delta" if c["in_delta"] else "DTE" if c["in_dte"] else "outside")
         dl = "—" if c.get("delta") is None else f"{abs(c['delta']):.2f}"
-        console.print(f"  {i:>2}  {c['expiration']:<10} {c['dte']:>4} {c['strike']:>8g} "
-                      f"{c['bid']:>6.2f} {c['ask']:>6.2f} {c['mid']:>6.2f} {dl:>6} "
-                      f"{c['iv']:>5.1f}% {c.get('oi') or 0:>6} ${c['rent']:>7,.0f} "
-                      f"${(c['rent_per_day'] or 0):>6,.2f}  [dim]{bands}[/dim]")
+        sp = c.get("spread_pct")
+        spc = ("dim" if sp is None else "green" if sp <= 10 else "yellow" if sp <= 15 else "red")
+        sps = "—" if sp is None else f"{sp:.0f}%"
+        tags = " ".join(t for t, on in ((f">{SPREAD_CUT_PCT:.0f}%", c["wide"]),
+                                        (f"OI<{DIAG_SHORT_MIN_OI}", c["thin_oi"])) if on)
+        console.print(f"  {i:>2}  {c['expiration']:<10} {c['dte']:>4} {c['strike']:>7g} "
+                      f"{c['bid']:>5.2f} {c['ask']:>5.2f} [{spc}]{sps:>7}[/{spc}] {dl:>5} "
+                      f"{c['iv']:>5.1f}% {c.get('oi') or 0:>5} ${c['rent_bid']:>6,.0f} "
+                      f"${(c['rent_bid_per_day'] or 0):>5,.2f} ${c['rent']:>6,.0f} "
+                      f"${(c['rent_per_day'] or 0):>5,.2f}  [dim]{bands}[/dim]"
+                      + (f" [yellow]{tags}[/yellow]" if tags else ""))
+    console.print(f"  [dim]Ranked on rent at the BID (what a seller is sure of); mid shown for a "
+                  f"patient limit. Spread coloured as HELM colours it everywhere (<=10 green, "
+                  f"<=15 yellow); >{SPREAD_CUT_PCT:.0f}% = past the open side's cut, OI<"
+                  f"{DIAG_SHORT_MIN_OI} = under the diagonal screen's floor. Marked, not "
+                  f"hidden.[/dim]")
     if note:
         console.print(f"  [dim]{note}[/dim]")
     c0 = ranked[0]

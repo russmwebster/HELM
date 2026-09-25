@@ -85,6 +85,27 @@ case("bands_first", first_band == sorted(first_band, reverse=True), True)
 case("rent_math", rk[0]["rent"] == round(rk[0]["mid"] * 500, 2), True)
 case("per_day", all(c["rent_per_day"] == round(c["rent"] / c["dte"], 2) for c in rk), True)
 
+# ---- 2026-09-25: the bid, the spread, and the marks (never a cut) --------------
+case("spread_def", R.spread_pct(0.60, 0.70), round(0.10 / 0.65 * 100, 1))
+case("spread_nobid", R.spread_pct(0, 0.70), None)
+case("rent_at_bid", all(c["rent_bid"] == round(c["bid"] * 500, 2) for c in rk), True)
+case("bid_per_day", all(c["rent_bid_per_day"] == round(c["rent_bid"] / c["dte"], 2) for c in rk), True)
+case("ranked_on_bid", all(
+    rk[i]["rent_bid_per_day"] >= rk[i + 1]["rent_bid_per_day"]
+    for i in range(len(rk) - 1)
+    if (rk[i]["in_dte"], rk[i]["in_delta"]) == (rk[i + 1]["in_dte"], rk[i + 1]["in_delta"])), True)
+case("wide_marked_not_cut", any(c["wide"] for c in rk) and len(rk) == len(cands), True)
+case("thin_oi_marked", {c["strike"]: c["thin_oi"] for c in rk}, {47.0: False, 50.0: False})
+# The AA case that prompted it: a 64%-wide contract with the best mid must not
+# out-rank a tight one on the bid.
+_w = [dict(strike=48.0, expiration="2026-10-30", dte=36, mid=0.70, bid=0.40, ask=1.00,
+           delta=0.33, oi=5, iv=50.0),
+      dict(strike=49.0, expiration="2026-10-30", dte=36, mid=0.60, bid=0.55, ask=0.65,
+           delta=0.32, oi=300, iv=50.0)]
+_r = R.rank_candidates(_w, cfg, 5)
+case("wide_mid_loses_on_bid", [c["strike"] for c in _r], [49.0, 48.0])
+case("wide_tags", (_r[1]["wide"], _r[1]["thin_oi"], _r[0]["wide"]), (True, True, False))
+
 # ---- the command, on the copy -------------------------------------------------
 sys.argv = ["helm", "AA", "--candidates", "--json"]
 buf = io.StringIO()
