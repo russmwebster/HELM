@@ -65,7 +65,34 @@ def vol_level(vol):
 
 # ── Quick evaluation ─────────────────────────────────────────────────────────
 
-def quick_eval(ticker, include_options=True):
+def oi_measurable(now=None):
+    """W188: is Yahoo's open interest worth reading right now?
+
+    Measured 2026-09-25 06:28 ET, first four expiries: KO 11, MSFT 144, ECL 526,
+    where the real figures run to hundreds of thousands and millions. The same
+    call during the session read MOD at 27,351. Pre-market, Yahoo's OI is junk
+    for every name, and quick_eval used to turn that junk into a FLAG ("very
+    illiquid") that writes is_optionable = 0 -- which hides the name from
+    `helm scan` (ECL, 09-25). Conservative by design: only the regular session
+    counts, 09:30-16:00 ET on an exchange day. After the close is unmeasured,
+    not assumed good."""
+    from datetime import datetime, time as _t
+    try:
+        from zoneinfo import ZoneInfo
+        now = now or datetime.now(ZoneInfo("America/New_York"))
+    except Exception:
+        now = now or datetime.now()
+    try:
+        from helm.market_context import is_session_day
+        if not is_session_day(now.date()):
+            return False
+    except Exception:
+        if now.weekday() >= 5:
+            return False
+    return _t(9, 30) <= now.time() < _t(16, 0)
+
+
+def quick_eval(ticker, include_options=True, now=None):
     """
     Evaluate a ticker for watchlist candidacy.
     include_options=True: fetch nearest expiry OI + volume (one chain call)
@@ -96,6 +123,7 @@ def quick_eval(ticker, include_options=True):
         "verdict_style": "dim",
         "verdict_reason": None,
         "error": None,
+        "oi_note": None,
     }
 
     try:
@@ -140,7 +168,16 @@ def quick_eval(ticker, include_options=True):
         # OI: sum across ALL expiries (DTE >= 1) -- total market interest picture
         # Volume: today only, shown as informational, NOT a pass/fail gate
         # (BarChart 2-week avg volume needs paid API -- planned for IBKR integration)
-        if include_options and result["has_options"]:
+        # W188: outside the session Yahoo's OI is junk, so it is not read at all.
+        # Optionability is then decided by whether options EXIST (a fact), and the
+        # OI verdict waits for a session read. total_oi stays None, so the verdict
+        # below falls through to market cap -- it can never FLAG on OI.
+        if include_options and result["has_options"] and not oi_measurable(now):
+            result["oi_level"] = "not measured"
+            result["oi_style"] = "dim"
+            result["oi_note"] = ("Yahoo open interest is unreliable outside 09:30-16:00 ET; "
+                                 "re-run during the session for an OI verdict")
+        elif include_options and result["has_options"]:
             try:
                 from datetime import date, datetime
                 today = date.today()
@@ -197,6 +234,9 @@ def quick_eval(ticker, include_options=True):
             result["verdict"] = "MARGINAL"
             result["verdict_style"] = "yellow"
             result["verdict_reason"] = "Small cap — full screen recommended"
+        if result["oi_note"] and result["has_options"]:
+            result["verdict_reason"] = ((result["verdict_reason"] or "") +
+                                        " | OI not measured off-hours").lstrip(" |")
 
         return result
 
@@ -277,6 +317,10 @@ def print_eval_table(results, title="Evaluation Results"):
     console.print(t)
     console.print("[dim]  OI Benchmarks:  Mega liquid >500k  |  Very liquid >100k  |  Liquid >50k  |  Moderate >5k  |  Thin >1k  |  Illiquid <1k[/dim]")
     console.print("[dim]  Vol Benchmarks: Very active >10k   |  Active >1k         |  Moderate >500               |  Thin <500[/dim]")
+    if any(r.get("oi_note") for r in results):
+        console.print("[yellow]  OI not measured:[/yellow] [dim]Yahoo's open interest is unreliable "
+                      "outside 09:30-16:00 ET (W188). Verdicts above rest on market cap and on "
+                      "whether options exist; re-run during the session for OI.[/dim]")
     console.print()
 
 
