@@ -76,7 +76,7 @@ DEFAULTS = {
         entry_delta_min=0.20, entry_delta_max=0.30,
         entry_dte_min=30, entry_dte_max=45,
         profit_target_pct=0.50, stop_loss_multiplier=2.0,
-        dte_exit_threshold=7, dte_review_threshold=21,
+        dte_exit_threshold=21, dte_review_threshold=21,  # W192: 7 -> 21
         delta_drift_warning=0.15, delta_danger=0.50,
         iv_increase_warning=0.05,
     ),
@@ -86,7 +86,7 @@ DEFAULTS = {
         entry_delta_min=0.15, entry_delta_max=0.25,
         entry_dte_min=30, entry_dte_max=45,
         profit_target_pct=0.50, stop_loss_multiplier=2.0,
-        dte_exit_threshold=7, dte_review_threshold=21,
+        dte_exit_threshold=21, dte_review_threshold=21,  # W192: 7 -> 21
         delta_drift_warning=0.15, delta_danger=0.45,
         iv_increase_warning=0.05,
     ),
