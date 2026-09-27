@@ -33,8 +33,23 @@ Doctrine guards:
     sat from each -- so a held position is as visible as a closed one. Read
     with helm/exit_considered.py. DRY runs print near-misses and write nothing.
 
+  - W198 (s122 decision; built 2026-09-27): the agent ALSO runs after every
+    snapshot, in the snapshot's own process (run_after_snapshot, called at
+    the end of `helm snapshot` when the snapshot covered the PAPER book).
+    Measured in s122: 8 of 55 paper CSPs touched 50% and were not taken, and
+    ~$1k was left on long calls, because the book was judged once a day.
+    Same code, same verdicts, same closes -- only WHEN changes. Its ledger
+    row carries notes "after snapshot HH:MM", which is how `audit eod` tells
+    it from the scheduled 15:35 run (it neither satisfies nor fails that slot).
+    Not after a snapshot that starts at or after POST_SNAPSHOT_CUTOFF (15:00):
+    the scheduled 15:35 run is the after-15:15 evaluation, and running both
+    inside twenty minutes only risks two processes on the IB client id (W103).
+    A lock file makes any overlap safe regardless: the second pass waits.
+    Off switch: HELM_W198_OFF=1 in ~/.helm/env.
+
 Usage:  paper_exit_agent.py [--dry-run]
-Log:    launchd redirects to ~/Projects/helm/logs/paper_exit_agent.log
+Log:    launchd redirects to ~/Projects/helm/logs/paper_exit_agent.log; a
+        post-snapshot pass prints into logs/snapshot_daily.log instead.
 """
 import os
 import sys
@@ -61,6 +76,52 @@ ACT_REASONS = {"PROFIT_TARGET", "DTE_MANAGE", "EXPIRY",
                "THESIS_BREAK", "PROFIT_FLOOR", "DTE_GATE", "CATASTROPHE_STOP",
                "GIVE_BACK", "STOP_LOSS", "DTE_21", "DTE_7"}
 DRY = ("--dry-run" in sys.argv) or os.environ.get("HELM_PAPER_DRY") == "1"
+
+# W198
+POST_SNAPSHOT_CUTOFF = "15:00"     # no post-snapshot pass from here on: 15:35 covers it
+# logs/ is gitignored. HELM_PAPER_EXITS_LOCK exists for test harnesses only.
+LOCK_PATH = Path(os.environ.get("HELM_PAPER_EXITS_LOCK") or (ROOT / "logs" / ".paper_exits.lock"))
+LOCK_WAIT_S = 600
+
+
+def _acquire_lock(wait_s=LOCK_WAIT_S):
+    """An exclusive flock, waited for up to wait_s. Returns the open file (keep
+    it open for the run) or None. Two passes must never close the same book at
+    once: each reads the OPEN list up front, so the second would close a
+    position the first already closed."""
+    import fcntl
+    import time
+    LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    fh = open(LOCK_PATH, "a+")
+    deadline = time.time() + wait_s
+    while True:
+        try:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return fh
+        except OSError:
+            if time.time() >= deadline:
+                fh.close()
+                return None
+            time.sleep(5)
+
+
+def run_after_snapshot(snapshot_started):
+    """W198: evaluate the paper book once more, right after a snapshot.
+
+    Called from helm.cli.check_cmd.cmd_snapshot, in-process (so the IB
+    connection the snapshot already holds is reused, not duplicated).
+    Returns a one-line reason when it declines to run, else None.
+    """
+    if os.environ.get("HELM_W198_OFF") == "1":
+        print("paper exits after snapshot: off (HELM_W198_OFF=1)")
+        return "off"
+    hhmm = str(snapshot_started or "")[11:16]
+    if not hhmm or hhmm >= POST_SNAPSHOT_CUTOFF:
+        print("paper exits after snapshot %s: not run -- the scheduled 15:35 "
+              "run is the late-day evaluation (cutoff %s)" % (hhmm, POST_SNAPSHOT_CUTOFF))
+        return "cutoff"
+    main(trigger="after snapshot %s" % hhmm)
+    return None
 
 
 def leg_mid(tk, leg):
@@ -98,11 +159,39 @@ def leg_mid(tk, leg):
         return None
 
 
-def main():
+def main(trigger=None):
+    """One pass over the PAPER book. `trigger` is None for the scheduled run,
+    or "after snapshot HH:MM" (W198) -- it leads the ledger note."""
     _started = datetime.now().isoformat()
     mode = "DRY RUN" if DRY else "ACTING"
     print(f"[{datetime.now().isoformat(timespec='seconds')}] paper_exit_agent "
-          f"start ({mode}, root {ROOT})")
+          f"start ({mode}, {trigger or 'scheduled'}, root {ROOT})")
+    _lock = _acquire_lock(LOCK_WAIT_S)
+    if _lock is None:
+        print("another paper-exit pass held the lock for %ds -- not run" % LOCK_WAIT_S)
+        if not DRY:
+            try:
+                from helm.db import get_conn as _gc
+                from helm import agent_runs as _ar
+                _c = _gc()
+                _ar.ensure_table(_c)
+                _ar.record_run(_c, _ar.AGENT_EXITS, _started, datetime.now().isoformat(),
+                               0, 0, 0, notes="; ".join(filter(None, [
+                                   trigger, "not run: lock busy %ds" % LOCK_WAIT_S])))
+                _c.close()
+            except Exception as _e:
+                print('  ledger write failed: %s' % _e)
+        return
+    try:
+        _main(_started, trigger)
+    finally:
+        try:
+            _lock.close()           # closing the file releases the flock
+        except Exception:
+            pass
+
+
+def _main(_started, trigger):
     # W110 (s102): weekday != trading day. This guard used to test only the
     # weekday, so it ran on 2026-07-03 and closed seven paper positions against
     # a shut exchange. Holidays and post-early-close afternoons now stand down,
@@ -225,7 +314,8 @@ def main():
             _ar.record_run(_c, _ar.AGENT_EXITS, _started,
                            datetime.now().isoformat(),
                            len(rows), closed, skipped,
-                           notes=("held %d" % held) if held else None)
+                           notes=("; ".join(filter(None, [
+                               trigger, ("held %d" % held) if held else None])) or None))
             _c.close()
         except Exception as _e:
             # not silent: this whole change exists to stop silent gaps

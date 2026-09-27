@@ -3058,6 +3058,25 @@ def cmd_snapshot(args):
     except Exception:
         pass
 
+    # W198 (s122 decision; built 2026-09-27): the paper exit agent evaluates
+    # after EVERY snapshot that covered the PAPER book, not only at its own
+    # 15:35 slot. In this process, after the marks and the exit flags, so it
+    # judges a book that has just been read and reuses the IB connection this
+    # snapshot already holds (a second process would collide on client id
+    # 11, W103). The policy -- the 15:00 cutoff, the off switch, the lock --
+    # lives in paper_exit_agent.run_after_snapshot. A failure here must never
+    # cost the snapshot; it is printed into snapshot_daily.log, not swallowed.
+    if "--all" in args or "--paper" in args:
+        try:
+            import importlib.util as _ilu
+            _pea_path = Path(__file__).resolve().parents[2] / "paper_exit_agent.py"
+            _spec = _ilu.spec_from_file_location("paper_exit_agent", str(_pea_path))
+            _pea = _ilu.module_from_spec(_spec)
+            _spec.loader.exec_module(_pea)
+            _pea.run_after_snapshot(_started)
+        except Exception as _e:
+            print("paper exits after snapshot FAILED: %s: %s" % (type(_e).__name__, _e))
+
     if "--silent" not in args:
         _msg = (f"snapshot: {attempted} attempted, {journaled} journaled")
         if VERDICT_FAILURES:

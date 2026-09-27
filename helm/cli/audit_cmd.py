@@ -388,8 +388,15 @@ class Audit:
         rows = self.runs
         for key, times, label in EXPECTED_RUNS:
             got = [r for r in rows if key in (r["agent"] or "").lower()]
+            # W198 (2026-09-27): paper exits also run inside each snapshot
+            # before 15:00, ledger note "after snapshot HH:MM". Those are
+            # extra passes: they must never stand in for the 15:35 slot (a
+            # 15:2x one would otherwise hide a missed 15:35) and are never
+            # launchd catch-ups.
+            post = [r for r in got if str(r["notes"] or "").startswith("after snapshot ")]
+            sched = [r for r in got if r not in post]
             for nominal in times:
-                near = [r for r in got if _within((r["started_at"] or "")[11:16], nominal)]
+                near = [r for r in sched if _within((r["started_at"] or "")[11:16], nominal)]
                 name = f"slot: {label} {nominal}"
                 if near:
                     self.add(PASS, name, f"ran at {(near[0]['started_at'] or '')[11:16]}")
@@ -429,10 +436,14 @@ class Audit:
             for r in retries:
                 self.add(PASS, f"retry: {label}",
                          f"ran at {(r['started_at'] or '')[11:16]} — {r['notes']}")
+            for r in post:
+                self.add(PASS, f"post-snapshot: {label}",
+                         f"ran at {(r['started_at'] or '')[11:16]} — {r['notes']} "
+                         f"(evaluated {r['attempted']}, closed {r['journaled']})")
             # Runs that fired nowhere near a nominal time = launchd catch-up.
             stray = [
                 r for r in got
-                if r not in retries
+                if r not in retries and r not in post
                 and not any(_within((r["started_at"] or "")[11:16], t) for t in times)
             ]
             if stray:
@@ -1113,8 +1124,13 @@ class Audit:
             mine = [r for r in rows if match in (r["agent"] or "")]
             for r in mine:
                 slot, drift = self._slot_for(r["started_at"], nominals)
+                # W198: a post-snapshot paper-exit pass belongs to no slot.
+                _post = str(r["notes"] or "").startswith("after snapshot ")
+                if _post:
+                    slot, drift = None, None
                 names, kind = self._parse_notes(r["notes"])
                 entry["runs"].append({
+                    "post_snapshot": _post,
                     "started_at": r["started_at"],
                     "slot": slot,
                     "drift_min": drift,
