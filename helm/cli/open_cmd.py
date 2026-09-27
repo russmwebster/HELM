@@ -42,6 +42,7 @@ from helm.config import get_active_account
 from helm.db import get_conn
 from helm.strategies import resolve_strategy
 from helm.chainval import oi_int
+from helm.risk_cap import RISK_CAP_PER_TRADE
 
 console = Console()
 
@@ -51,7 +52,8 @@ console = Console()
 LONG_SINGLE_FAMILY = ("LONG_CALL", "LONG_PUT")
 LONG_SPREAD_PCT_MAX = 5.0    # relative spread is the binding liquidity control
 LONG_BE_MOVE_MAX = 1.0       # breakeven may not exceed a 1-sigma move
-LONG_OPTION_TARGET = 5000.0  # notional cap per ticket
+LONG_OPTION_TARGET = RISK_CAP_PER_TRADE  # W160 (s122): one shared cap, not a
+                                          # second constant that can drift from it
 LONG_STOP_FRACTION = 0.5     # CATASTROPHE_STOP at -50% halves risk per ticket
 
 # ── Strategy configuration ────────────────────────────────────────────────────
@@ -560,14 +562,32 @@ def delta_flag(delta: Optional[float], delta_min: float, delta_max: float,
 # ── Position sizing ───────────────────────────────────────────────────────────
 
 def suggest_contracts(strategy: str, strike: float, mid: float,
-                      account_id: str, ticker: str = "") -> int:
+                      account_id: str, ticker: str = "",
+                      iv: float = None, dte: float = None,
+                      spot: float = None) -> tuple:
     """
-    Suggest number of contracts based on risk_pct_per_trade and buying power.
+    Suggest a contract count and say honestly why. Returns
+    (contracts, binding, note); `note` is the line to show the trader.
 
-    Returns 0 when the position cannot be sized at all -- today only
-    COVERED_CALL against a holding of fewer than 100 shares. Callers must treat
-    0 as a decline (HELM-110 s85), not as "one contract".
+    `mid` is the per-share price the risk is measured on: the option's own
+    mid for CSP / long call / long put, and the LONG LEG's mid for the
+    diagonal family (DIAGONAL, PMCC, DIAGONAL_PUT).
+
+    0 is a decline, not "one contract" (HELM-110 s85):
+      COVERED_CALL  -- fewer than 100 shares held
+      CSP           -- one contract over the $5,000 one-sigma cap or the 5%
+                       collateral ceiling (W160)
+      LONG_CALL, diagonal family -- ONE contract's debit (the long leg's, for
+                       a diagonal) already over $5,000 (W201)
+    Everything else still floors to 1 -- LONG_PUT (W201 did not decide it),
+    spreads, condors, straddles -- and the note says "floored", never
+    "sized by the cap". All wording comes from risk_cap.size_decision, so the
+    CLI, the board and the paper book cannot describe the same trade two ways.
+
+    `iv` (percent, e.g. 30.0) and `dte` are needed for the CSP one-sigma cap;
+    without them CSP falls back to the collateral limit alone and says so.
     """
+    from helm import risk_cap
     conn = None
     try:
         conn = get_conn()
@@ -580,13 +600,13 @@ def suggest_contracts(strategy: str, strike: float, mid: float,
         ).fetchone()
 
         if not settings or not account:
-            return 1
+            return 1, None, None
 
         risk_pct = settings["risk_pct_per_trade"] or 0.05
         portfolio_value = account["portfolio_value"] or account["buying_power"] or 0
 
         if portfolio_value <= 0:
-            return 1
+            return 1, None, None
 
         # Covered call: shares owned // 100 is a PHYSICAL cap, not a preference
         # -- you cannot cover a call you have no shares for. HELM-110 s85: this
@@ -595,39 +615,67 @@ def suggest_contracts(strategy: str, strike: float, mid: float,
         # the holding is unknowable here, which is also a decline.
         if strategy == "COVERED_CALL":
             if not ticker:
-                return 0
+                return 0, "covered_shares", None
             sp = conn.execute(
                 "SELECT shares FROM stock_positions WHERE ticker=? AND account_id=?",
                 (ticker.upper(), account_id)
             ).fetchone()
             shares = int(sp["shares"] or 0) if sp else 0
-            return shares // 100
+            return shares // 100, "covered_shares", None
 
-        if strategy in LONG_SINGLE_FAMILY:
-            # HELM-101 s84: size on stop-adjusted risk, not notional. The -50%
-            # CATASTROPHE_STOP halves true risk per ticket, so the debit is
-            # charged at LONG_STOP_FRACTION against the same risk budget every
-            # other strategy uses. LONG_OPTION_TARGET stays as a notional cap so
-            # one ticket cannot dominate the book.
-            if mid <= 0:
-                max_contracts = 1
+        if strategy in LONG_SINGLE_FAMILY or strategy in risk_cap.DIAGONAL_FAMILY:
+            # W160: a long's risk is its FULL debit (a diagonal's: the long
+            # leg's) against $5,000. The cash ceiling sits behind it: for a
+            # long call/put the HELM-101 stop-adjusted budget (debit x
+            # LONG_STOP_FRACTION against risk_pct of portfolio), for a
+            # diagonal the debit against the same budget. Two units, two
+            # separate counts, never one fed into the other (s123 fix).
+            if not mid or mid <= 0:
+                return 1, None, None
+            debit_1 = mid * 100
+            by_cap = int(RISK_CAP_PER_TRADE / debit_1)
+            per_budget = (debit_1 * LONG_STOP_FRACTION
+                          if strategy in LONG_SINGLE_FAMILY else debit_1)
+            by_cash = int((portfolio_value * risk_pct) / per_budget)
+            raw, binding = ((by_cap, "risk_cap") if by_cap <= by_cash
+                            else (by_cash, "cash_ceiling"))
+            if raw > 20:
+                raw, binding = 20, "ceiling"
+            return risk_cap.size_decision(strategy, raw, binding, debit_1)
+
+        if strategy == "CSP":
+            # W160: one-sigma $ per contract against $5,000; collateral
+            # (strike x 100) against risk_pct of portfolio behind it. The
+            # smaller wins; a 0 from either is "not taken as a CSP".
+            sigma_1 = risk_cap.csp_one_sigma_risk(spot, iv, dte, 1)
+            collateral_1 = (strike * 100) if strike else None
+            by_cash = (int((portfolio_value * risk_pct) / collateral_1)
+                       if collateral_1 else None)
+            if sigma_1:
+                by_cap = int(RISK_CAP_PER_TRADE / sigma_1)
+                if by_cash is None or by_cap <= by_cash:
+                    raw, binding, amount = by_cap, "risk_cap", sigma_1
+                else:
+                    raw, binding, amount = by_cash, "cash_ceiling", collateral_1
             else:
-                risk_per_contract = mid * 100 * LONG_STOP_FRACTION
-                by_risk = int((portfolio_value * risk_pct) / risk_per_contract)
-                by_notional = int(LONG_OPTION_TARGET / (mid * 100))
-                max_contracts = min(by_risk, by_notional)
-        elif strategy in ("CSP", "IRON_CONDOR"):
-            # CSP: max collateral = strike * 100 * contracts
-            max_risk = portfolio_value * risk_pct
-            max_contracts = int(max_risk / (strike * 100))
-        else:
-            # Defined risk: use risk_pct of portfolio
-            max_risk = portfolio_value * risk_pct
-            max_contracts = int(max_risk / (strike * 100))
+                # No iv/dte/spot -- the $5,000 check cannot run. Collateral
+                # alone, labelled; 0 is still a decline.
+                raw, binding, amount = (by_cash or 0), "cash_ceiling_only_no_iv", collateral_1
+            if raw > 20:
+                raw, binding = 20, "ceiling"
+            return risk_cap.size_decision(strategy, raw, binding, amount)
 
-        return max(1, min(max_contracts, 20))  # cap at 20 for sanity
+        # Anything else (IRON_CONDOR / spreads / straddles passed here with a
+        # strike as a collateral proxy): the pre-W160 cash rule, floored to 1
+        # as before -- and labelled as floored when it was.
+        collateral_1 = (strike * 100) if strike else None
+        raw = int((portfolio_value * risk_pct) / collateral_1) if collateral_1 else 0
+        binding = "cash_ceiling"
+        if raw > 20:
+            raw, binding = 20, "ceiling"
+        return risk_cap.size_decision(strategy, raw, binding, collateral_1 or 0)
     except Exception:
-        return 1
+        return 1, None, None
     finally:
         # HELM-110 s85: the connection outlives every early return above, so it
         # is closed here rather than mid-function. Closing it early is what made
@@ -1270,22 +1318,40 @@ def confirm_and_log(ticker: str, strategy: str, contracts: list, config: dict,
     # Get number of contracts. HELM-110 s85: pass the ticker. Without it the
     # COVERED_CALL shares cap was unreachable on the one path that actually
     # books a position -- the board showed the cap, the confirm flow ignored it.
+    # W160 (s122): CSP also gets iv/dte/spot, so its cap is the one-sigma
+    # risk figure, not the pre-W160 collateral proxy.
     account_for_sizing = get_active_account()
-    suggested = suggest_contracts(strategy, selected["strike"], fill_price,
-                                  account_for_sizing, ticker=ticker)
+    suggested, binding, size_note = suggest_contracts(
+        strategy, selected["strike"], fill_price, account_for_sizing,
+        ticker=ticker, iv=selected.get("iv"), dte=selected.get("dte"), spot=spot)
+    declined_over_cap = False
     if suggested <= 0:
         console.print()
-        console.print(
-            f"[red]Cannot size {strategy} on {ticker}.[/red] "
-            f"stock_positions holds no round lot for this name, so a call here "
-            f"would be naked, not covered."
-        )
-        console.print(
-            "[dim]Record the shares (helm stock) if you do own them, or choose "
-            "a strategy that does not require them.[/dim]"
-        )
-        console.print()
-        return
+        if strategy == "COVERED_CALL":
+            console.print(
+                f"[red]Cannot size {strategy} on {ticker}.[/red] "
+                f"stock_positions holds no round lot for this name, so a call here "
+                f"would be naked, not covered."
+            )
+            console.print(
+                "[dim]Record the shares (helm stock) if you do own them, or choose "
+                "a strategy that does not require them.[/dim]"
+            )
+            console.print()
+            return
+        # W160 (CSP) / W201 (long call): ONE contract already over the cap.
+        # The real book is Russ's (HELM-193): HELM says no and records nothing
+        # by default; a typed count is his override, and the override is
+        # written to the position's notes (Russ, 2026-09-27 -- CSPs now match).
+        declined_over_cap = True
+        console.print(f"[red]Declined:[/red] {size_note}.")
+        if strategy == "CSP":
+            console.print("[dim]A put spread takes this with the $5,000 as its max "
+                          "loss, or skip it.[/dim]")
+        console.print("[dim]Nothing is recorded unless you type a contract count "
+                      "to override.[/dim]")
+    elif size_note:
+        console.print(f"  [dim]{size_note[0].upper() + size_note[1:]}.[/dim]")
     contracts_str = Prompt.ask(
         f"  Number of contracts",
         default=str(suggested)
@@ -1305,10 +1371,18 @@ def confirm_and_log(ticker: str, strategy: str, contracts: list, config: dict,
                       "Nothing was recorded.[/dim]")
         console.print()
         return
+    from helm import risk_cap as _rc_ov
     if num_contracts <= 0:
-        console.print("[dim]Cancelled -- zero contracts.[/dim]")
+        console.print("[dim]Nothing was recorded"
+                      + (" -- declined (%s)." % _rc_ov.rule_for(strategy) if declined_over_cap
+                         else " -- zero contracts.") + "[/dim]")
         console.print()
         return
+    override_note = None
+    if declined_over_cap:
+        console.print(f"  [yellow]Override:[/yellow] "
+                      f"{_rc_ov.override_line(strategy, binding, num_contracts)}.")
+        override_note = _rc_ov.override_note(strategy, binding, num_contracts, size_note)
 
     # Final confirmation
     total_premium = round(fill_price * 100 * num_contracts, 2)
@@ -1353,6 +1427,7 @@ def confirm_and_log(ticker: str, strategy: str, contracts: list, config: dict,
                 if (pin_strike is not None and pin_expiry is not None)
                 else None
             ),
+            notes_extra=override_note,
         )
 
         net_premium = fill_price * 100 * num_contracts
@@ -1456,11 +1531,19 @@ def confirm_spread(ticker: str, strategy: str, spreads: list, config: dict,
     suggested_n = suggested or 1
     try:
         from helm.db import get_conn as _gcv
+        from helm import risk_cap as _rcv
         _cv = _gcv()
-        acctv = _cv.execute("SELECT portfolio_value FROM accounts WHERE id = ?", (get_active_account(),)).fetchone()
+        _acct_id_v = get_active_account()
+        acctv = _cv.execute("SELECT portfolio_value FROM accounts WHERE id = ?", (_acct_id_v,)).fetchone()
+        settingsv = _cv.execute(
+            "SELECT risk_pct_per_trade FROM strategy_settings WHERE account_id=? AND strategy=?",
+            (_acct_id_v, strategy)).fetchone()
         _cv.close()
         if acctv and acctv[0] and ml_con:
-            suggested_n = max(1, min(20, int((acctv[0] * 0.05) / (ml_con * 100))))
+            _risk_pct_v = (settingsv[0] if settingsv and settingsv[0] else 0.05)
+            _n_v, _b_v = _rcv.capped_contracts(ml_con * 100, portfolio_value=acctv[0],
+                                               risk_pct=_risk_pct_v, ceiling=20)
+            suggested_n = max(_n_v, 1)
     except Exception:
         pass
     contracts_str = Prompt.ask("  Number of contracts", default=str(suggested_n))
@@ -1562,10 +1645,12 @@ def display_spreads(ticker: str, strategy: str, config: dict, spreads: list,
         cw_color = "green" if s["credit_to_width_pct"] >= 25 else "yellow" if s["credit_to_width_pct"] >= 15 else "red"
         rr_color = "green" if s["rr_ratio"] >= 0.40 else "yellow" if s["rr_ratio"] >= 0.25 else "red"
 
-        # Sizing: max risk = max_loss * 100 * contracts
+        # Sizing (W160): max loss IS the spread's W160 risk figure --
+        # capped at $5,000/trade, the 5% cash ceiling behind it.
         suggested = 1
         try:
             from helm.db import get_conn as _gc
+            from helm import risk_cap as _rc
             _c = _gc()
             settings = _c.execute("SELECT risk_pct_per_trade FROM strategy_settings WHERE account_id=? AND strategy=?",
                                   (account_id, strategy)).fetchone()
@@ -1573,8 +1658,9 @@ def display_spreads(ticker: str, strategy: str, config: dict, spreads: list,
             _c.close()
             if settings and acct:
                 risk_pct = settings[0] or 0.05
-                max_risk = (acct[0] or 0) * risk_pct
-                suggested = max(1, min(20, int(max_risk / (s["max_loss"] * 100))))
+                _n, _b = _rc.capped_contracts(s["max_loss"] * 100, portfolio_value=(acct[0] or 0),
+                                              risk_pct=risk_pct, ceiling=20)
+                suggested = max(_n, 1)
         except Exception:
             pass
 
@@ -1605,20 +1691,29 @@ def display_spreads(ticker: str, strategy: str, config: dict, spreads: list,
     # Best spread summary
     best = spreads[0]
     suggested_best = 1
+    _best_binding = None
+    _best_note = None
     try:
         from helm.db import get_conn as _gc2
+        from helm import risk_cap as _rc2
         _c2 = _gc2()
         settings2 = _c2.execute("SELECT risk_pct_per_trade FROM strategy_settings WHERE account_id=? AND strategy=?",
                                 (account_id, strategy)).fetchone()
         acct2 = _c2.execute("SELECT portfolio_value FROM accounts WHERE id=?", (account_id,)).fetchone()
         _c2.close()
         if settings2 and acct2:
-            suggested_best = max(1, min(20, int((acct2[0]*settings2[0]) / (best["max_loss"]*100))))
+            _n, _best_binding = _rc2.capped_contracts(
+                best["max_loss"] * 100, portfolio_value=(acct2[0] or 0),
+                risk_pct=(settings2[0] or 0.05), ceiling=20)
+            # Still floors to 1 (W201 did not decide spreads) -- but says so.
+            suggested_best, _best_binding, _best_note = _rc2.size_decision(
+                strategy, _n, _best_binding, best["max_loss"] * 100)
     except Exception:
         pass
 
     total_credit = round(best["net_credit"] * 100 * suggested_best, 0)
     total_risk = round(best["max_loss"] * 100 * suggested_best, 0)
+    _cap_note = f" ({_best_note})" if _best_note else ""
 
     console.print(Panel(
         f"[bold green]Top pick:[/bold green] {ticker} {opt_type} "
@@ -1631,7 +1726,7 @@ def display_spreads(ticker: str, strategy: str, config: dict, spreads: list,
         f"Width: ${best['width']:.0f}\n"
         f"  Credit/width: {best['credit_to_width_pct']:.0f}%  |  "
         f"R/R: {best['rr_ratio']:.2f}  |  Delta: {best.get('delta', '--')}\n\n"
-        f"  Suggested: [bold]{suggested_best} spread(s)[/bold]  |  "
+        f"  Suggested: [bold]{suggested_best} spread(s)[/bold]{_cap_note}  |  "
         f"Collect: [green]${total_credit:.0f}[/green]  |  "
         f"Max risk: [red]${total_risk:.0f}[/red]\n\n"
         f"[dim]To open: [bold]helm open {ticker} {strategy} --confirm[/bold][/dim]",
@@ -1924,17 +2019,26 @@ def confirm_condor(ticker: str, strategy: str, condors: list, config: dict,
     ))
     console.print()
 
-    # Number of contracts (portfolio-sized via max_loss, mirroring display_condors).
+    # Number of contracts (W160: max_loss IS the condor's risk figure --
+    # capped at $5,000/trade, the 5% cash ceiling behind it).
     suggested = 1
     try:
         from helm.db import get_conn as _gc
+        from helm import risk_cap as _rc
         _c = _gc()
+        _acct_id = get_active_account()
         acct = _c.execute(
-            "SELECT portfolio_value FROM accounts WHERE id = ?", (get_active_account(),)
+            "SELECT portfolio_value FROM accounts WHERE id = ?", (_acct_id,)
         ).fetchone()
+        settings = _c.execute(
+            "SELECT risk_pct_per_trade FROM strategy_settings WHERE account_id=? AND strategy=?",
+            (_acct_id, strategy)).fetchone()
         _c.close()
         if acct and acct[0]:
-            suggested = max(1, min(20, int((acct[0] * 0.05) / (c["max_loss"] * 100))))
+            _risk_pct = (settings[0] if settings and settings[0] else 0.05)
+            _n, _b = _rc.capped_contracts(c["max_loss"] * 100, portfolio_value=acct[0],
+                                          risk_pct=_risk_pct, ceiling=20)
+            suggested = max(_n, 1)
     except Exception:
         pass
     contracts_str = Prompt.ask("  Number of contracts", default=str(suggested))
@@ -2088,13 +2192,19 @@ def display_condors(ticker: str, strategy: str, config: dict, condors: list,
         suggested = 1
         try:
             from helm.db import get_conn as _gc
+            from helm import risk_cap as _rc
             _c = _gc()
             acct = _c.execute("SELECT portfolio_value FROM accounts WHERE id=?",
                               (account_id,)).fetchone()
+            settings = _c.execute(
+                "SELECT risk_pct_per_trade FROM strategy_settings WHERE account_id=? AND strategy=?",
+                (account_id, strategy)).fetchone()
             _c.close()
             if acct and acct[0]:
-                max_risk = acct[0] * 0.05
-                suggested = max(1, min(20, int(max_risk / (c["max_loss"] * 100))))
+                _risk_pct = (settings[0] if settings and settings[0] else 0.05)
+                _n, _b = _rc.capped_contracts(c["max_loss"] * 100, portfolio_value=acct[0],
+                                              risk_pct=_risk_pct, ceiling=20)
+                suggested = max(_n, 1)
         except Exception:
             pass
 
@@ -2124,14 +2234,26 @@ def display_condors(ticker: str, strategy: str, config: dict, condors: list,
 
     best = condors[0]
     suggested_best = 1
+    _best_binding = None
+    _best_note = None
     try:
         from helm.db import get_conn as _gc2
+        from helm import risk_cap as _rc2
         _c2 = _gc2()
         acct2 = _c2.execute("SELECT portfolio_value FROM accounts WHERE id=?",
                             (account_id,)).fetchone()
+        settings2 = _c2.execute(
+            "SELECT risk_pct_per_trade FROM strategy_settings WHERE account_id=? AND strategy=?",
+            (account_id, strategy)).fetchone()
         _c2.close()
         if acct2 and acct2[0]:
-            suggested_best = max(1, min(20, int((acct2[0]*0.05) / (best["max_loss"]*100))))
+            _risk_pct2 = (settings2[0] if settings2 and settings2[0] else 0.05)
+            _n2, _best_binding = _rc2.capped_contracts(
+                best["max_loss"] * 100, portfolio_value=acct2[0],
+                risk_pct=_risk_pct2, ceiling=20)
+            # Still floors to 1 (W201 did not decide condors) -- but says so.
+            suggested_best, _best_binding, _best_note = _rc2.size_decision(
+                strategy, _n2, _best_binding, best["max_loss"] * 100)
     except Exception:
         pass
 
@@ -2140,6 +2262,7 @@ def display_condors(ticker: str, strategy: str, config: dict, condors: list,
     put_be = round(best["short_put"] - best["total_credit"], 2)
     call_be = round(best["short_call"] + best["total_credit"], 2)
 
+    _cap_note = f" ({_best_note})" if _best_note else ""
     console.print(Panel(
         f"[bold green]Top pick:[/bold green] {ticker} Iron Condor "
         f"{best['expiration']} ({best['dte']}d)\n\n"
@@ -2153,7 +2276,7 @@ def display_condors(ticker: str, strategy: str, config: dict, condors: list,
         f"Max loss: [red]${best['max_loss']:.2f}/contract[/red]\n"
         f"  Credit/width: {best['cw_pct']:.0f}%  |  R/R: {best['rr_ratio']:.2f}\n"
         f"  Break-evens: ${put_be:.2f} (put) / ${call_be:.2f} (call)\n\n"
-        f"  Suggested: [bold]{suggested_best} contract(s)[/bold]  |  "
+        f"  Suggested: [bold]{suggested_best} contract(s)[/bold]{_cap_note}  |  "
         f"Collect: [green]${total_credit:.0f}[/green]  |  "
         f"Max risk: [red]${total_risk:.0f}[/red]\n\n"
         f"[dim]To open: [bold]helm open {ticker} IRON_CONDOR --confirm[/bold][/dim]",
@@ -2761,7 +2884,11 @@ def display_straddles(ticker, strategy, config, straddles, spot, atr, account_id
     console.print(tbl)
     console.print()
     best = straddles[0]
-    contracts = suggest_contracts(strategy, best['strike'], best['total_debit'], account_id, ticker=ticker)
+    contracts, _binding, _note = suggest_contracts(
+        strategy, best['strike'], best['total_debit'], account_id, ticker=ticker)
+    # W160 has no decided risk formula for LONG_STRADDLE (two long legs,
+    # not enumerated in s122's decision) -- sized on the pre-W160 cash
+    # ceiling only, same as before this change.
     total_cost = round(best['total_debit'] * contracts * 100, 2)
     console.print(Panel(
         f'[bold green]Top pick:[/bold green] {ticker} Straddle ${best["strike"]:.1f} {best["exp"]} ({best["dte"]}d)\n'
@@ -3097,7 +3224,28 @@ def display_debit_spreads(ticker, strategy, config, spreads, spot, atr, account_
     console.print(tbl)
     console.print()
     best = spreads[0]
-    contracts = suggest_contracts(strategy, best['long_strike'], best['net_debit'], account_id, ticker=ticker)
+    from helm import risk_cap as _risk_cap
+    _risk_per_contract = best['net_debit'] * 100  # a debit spread's max loss IS its debit
+    _acct_row = None
+    try:
+        from helm.db import get_conn as _get_conn
+        _c = _get_conn()
+        _acct_row = _c.execute("SELECT * FROM accounts WHERE id=?", (account_id,)).fetchone()
+        _settings_row = _c.execute(
+            "SELECT risk_pct_per_trade FROM strategy_settings WHERE account_id=? AND strategy=?",
+            (account_id, strategy)).fetchone()
+        _c.close()
+    except Exception:
+        _settings_row = None
+    _portfolio_value = ((_acct_row["portfolio_value"] or _acct_row["buying_power"] or 0)
+                        if _acct_row else 0)
+    _risk_pct = (_settings_row[0] if _settings_row and _settings_row[0] else 0.05)
+    _raw, binding = _risk_cap.capped_contracts(
+        _risk_per_contract, portfolio_value=_portfolio_value, risk_pct=_risk_pct, ceiling=20)
+    # Still floors to 1 (the one-contract decline covers CSP, long calls and
+    # diagonals, not debit spreads) -- and the label says "floored" when it is.
+    contracts, binding, _size_note = _risk_cap.size_decision(
+        strategy, _raw, binding, _risk_per_contract)
     total_cost = round(best['net_debit'] * contracts * 100, 2)
     console.print(Panel(
         f'[bold green]Top pick:[/bold green] {ticker} {label} '
@@ -3107,7 +3255,8 @@ def display_debit_spreads(ticker, strategy, config, spreads, spot, atr, account_
         f'  Net debit: ${best["net_debit"]:.2f}/contract  |  '
         f'Max profit: ${best["max_profit"]:.2f}/contract  |  Width: ${best["width"]}\n'
         f'  Debit/width: {best["debit_to_width_pct"]:.0f}%  |  R/R: {best["rr"]}\n\n'
-        f'  Suggested: {contracts} contract(s)  |  Total cost: ${total_cost:,.0f}\n\n'
+        f'  Suggested: {contracts} contract(s) ({_size_note})  |  '
+        f'Total cost: ${total_cost:,.0f}\n\n'
         f'[dim]To open: [bold]helm open {ticker} {strategy} --confirm[/bold][/dim]',
         title='Recommendation', border_style='green'))
     console.print()
@@ -3501,7 +3650,9 @@ def run():
     from helm.entry_bands import effective_bands as _eff_bands
     for rank, c in enumerate(contracts, 1):
         # Suggest contracts
-        suggested = suggest_contracts(strategy, c["strike"], c["mid"], account_id, ticker=ticker)
+        suggested, _row_binding, _row_note = suggest_contracts(
+            strategy, c["strike"], c["mid"], account_id, ticker=ticker,
+            iv=c.get("iv"), dte=c.get("dte"), spot=spot)
 
         spread_str = spread_flag(c.get("spread_pct"))
         # HELM-135 (W71): flag against the band actually ENFORCED, not the
@@ -3595,24 +3746,36 @@ def run():
 
     # Best contract summary
     best = contracts[0]
-    suggested = suggest_contracts(strategy, best["strike"], best["mid"], account_id, ticker=ticker)
+    suggested, _best_binding, _best_note = suggest_contracts(
+        strategy, best["strike"], best["mid"], account_id, ticker=ticker,
+        iv=best.get("iv"), dte=best.get("dte"), spot=spot)
     total_premium = round(best["mid"] * 100 * suggested, 2)
+    # One wording source (risk_cap.size_decision): a floored 1 says "floored",
+    # never "sized by the cap".
+    _cap_note = f" ({_best_note})" if _best_note else ""
 
-    # HELM-110 s85: 0 means sizing DECLINED -- today only a covered call with no
-    # round lot behind it. Printing "0 contract(s) = $0 premium" would read as a
-    # rounding artefact rather than a refusal, so say what is actually wrong.
+    # HELM-110 s85: 0 means sizing DECLINED -- a covered call with no round
+    # lot, a CSP over its cap (W160), a long call whose one contract is over
+    # $5,000 (W201).
     if suggested <= 0:
-        _size_line = (f"  [red]Not sizeable:[/red] stock_positions holds no "
-                      f"round lot for {ticker}, so this call would be naked "
-                      f"rather than covered\n")
+        if strategy == "CSP":
+            _size_line = (f"  [red]Declined:[/red] {_best_note} -- a put spread, skip "
+                          f"it, or type a count at --confirm to override\n")
+        elif strategy != "COVERED_CALL":
+            _size_line = (f"  [red]Declined:[/red] {_best_note} -- nothing is recorded "
+                          f"unless you type a count\n")
+        else:
+            _size_line = (f"  [red]Not sizeable:[/red] stock_positions holds no "
+                          f"round lot for {ticker}, so this call would be naked "
+                          f"rather than covered\n")
     elif _is_long_single:
         _size_line = (f"  Suggested: [bold]{suggested} contract(s)[/bold] @ "
                       f"${best['mid']:.2f} = [red]${total_premium:,.0f} cost "
-                      f"-- this is the max loss[/red]\n")
+                      f"-- this is the max loss[/red]{_cap_note}\n")
     else:
         _size_line = (f"  Suggested: [bold]{suggested} contract(s)[/bold] @ "
                       f"${best['mid']:.2f} = "
-                      f"[green]${total_premium:.0f} premium[/green]\n")
+                      f"[green]${total_premium:.0f} premium[/green]{_cap_note}\n")
 
     if _is_long_single:
         # HELM-101 s84: for a buyer that figure is the max loss, not income.

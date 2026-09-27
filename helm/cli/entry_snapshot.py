@@ -142,6 +142,10 @@ def open_position_with_snapshot(
     # gets an explicit argument. Defaults to None, so nothing that calls
     # this today changes behaviour.
     origin_screen: Optional[str] = None,
+    # Russ, 2026-09-27: a trade booked over a W160/W201 decline carries the
+    # override in its notes, written in the same transaction as the position.
+    # None (every existing caller) changes nothing.
+    notes_extra: Optional[str] = None,
 ) -> tuple[str, str, str]:
     """
     Create position, leg, and entry snapshot in one atomic operation.
@@ -180,7 +184,8 @@ def open_position_with_snapshot(
             net_premium=net_premium,
             book=book,
             origin_screen=origin_screen,
-            notes=f"Pending execution — opened via HELM on {today}",
+            notes=(f"Pending execution — opened via HELM on {today}"
+                   + (f" -- {notes_extra}" if notes_extra else "")),
             conn=conn,
         )
 

@@ -1107,3 +1107,25 @@ CREATE INDEX IF NOT EXISTS idx_exit_considered_run ON exit_considered(run_starte
 CREATE INDEX IF NOT EXISTS idx_exit_considered_pos ON exit_considered(position_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_exit_considered_run_pos
     ON exit_considered(run_started_at, position_id);
+
+-- ============================================================
+-- PAPER REFUSALS (Russ, 2026-09-27)
+-- One row per paper candidate REFUSED by a risk cap, so a refusal is logged
+-- rather than dropped: W160 (CSP -- one contract's one-sigma move over
+-- $5,000, or not measurable) and W201 (long call / diagonal -- one contract's
+-- debit, the long leg's for a diagonal, over $5,000). Written by
+-- helm/cli/_paper_generate.py::_log_refusal, which also creates it on first
+-- write (the DDL there is the same). Not a model table; nothing maps it with
+-- SELECT *.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS paper_refusals (
+    id                TEXT PRIMARY KEY,
+    refused_at        TEXT NOT NULL,      -- local time, like positions.opened_at
+    ticker            TEXT NOT NULL,
+    strategy          TEXT NOT NULL,
+    rule              TEXT NOT NULL,      -- 'W160' (CSP) | 'W201' (long call, diagonals)
+    one_contract_risk REAL,               -- the $ the rule measured; NULL = not measurable
+    reason            TEXT NOT NULL,      -- 'refused by W160: one contract ...'
+    signal_id         TEXT,
+    origin_screen     TEXT
+);

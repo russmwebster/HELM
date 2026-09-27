@@ -406,6 +406,54 @@ def display_diagonal(ticker: str, spot: float, diagonals: list, args: list, labe
     _confirm_diagonal(ticker, spot, diagonals, args)
 
 
+def _diag_contracts_prompt(strategy: str, long_leg: dict):
+    """W160/W201 sizing and the contracts prompt, shared by both diagonal
+    flows. Sizing comes from open_cmd.suggest_contracts on the LONG leg's mid
+    (the diagonal's W160 risk -- rent from the short is not netted).
+
+    Returns (contracts, override_note): contracts > 0, or None when nothing is
+    to be recorded; override_note is the text to write to positions.notes when
+    the count was typed over a decline (Russ, 2026-09-27), else None.
+    W201 (Russ, 2026-09-27): when ONE contract's long leg is already over
+    $5,000 the suggestion is 0 -- the prompt defaults to 0, so accepting it
+    records nothing, and a typed count is Russ's override, said out loud.
+    Typing 0 now means "record nothing"; it used to be turned into 1.
+    """
+    from helm.config import get_active_account
+    from helm.cli.open_cmd import suggest_contracts
+    mid = long_leg.get("mid") or 0
+    n, _binding, note = suggest_contracts(strategy, None, mid, get_active_account())
+    declined = n <= 0
+    if declined:
+        console.print(f"  [red]Declined:[/red] {note}.")
+        console.print("  [dim]Nothing is recorded unless you type a contract count "
+                      "to override.[/dim]")
+    elif note:
+        console.print(f"  [dim]Suggested: {n} contract(s) on the long leg's "
+                      f"${mid:.2f} debit -- {note}.[/dim]")
+    raw = Prompt.ask("  Contracts", default=str(n))
+    try:
+        contracts = int(raw)
+    except ValueError:
+        if declined:
+            # HELM-152: refuse, never substitute -- least of all over a cap.
+            console.print(f"  [red]Cannot read the contract count: {raw!r}.[/red] "
+                          "Nothing was recorded.")
+            return None, None
+        contracts = n
+    if contracts <= 0:
+        console.print("  [dim]Nothing was recorded"
+                      + (" -- declined (W201)." if declined else " -- zero contracts.")
+                      + "[/dim]")
+        return None, None
+    if declined:
+        from helm import risk_cap as _rc
+        console.print(f"  [yellow]Override:[/yellow] "
+                      f"{_rc.override_line(strategy, _binding, contracts)}.")
+        return contracts, _rc.override_note(strategy, _binding, contracts, note)
+    return contracts, None
+
+
 def _confirm_diagonal(ticker: str, spot: float, diagonals: list, args: list = None):
     """Prompt, confirm fills, and log the two-leg position -- through the
     canonical multi-leg writer (W163). Books position + both legs + entry
@@ -492,11 +540,11 @@ def _confirm_diagonal(ticker: str, spot: float, diagonals: list, args: list = No
 
     s, l = d["short"], d["long"]
 
-    raw = Prompt.ask("  Contracts", default="1")
-    try:
-        contracts = max(1, int(raw))
-    except ValueError:
-        contracts = 1
+    # W160/W201: sized on the long leg's debit through the one shared
+    # sizing function; a long leg over $5,000 at one contract is declined.
+    contracts, override_note = _diag_contracts_prompt("DIAGONAL", l)
+    if contracts is None:
+        return
 
     short_fill = float(Prompt.ask(f"  Short fill price (mid ${s['mid']:.2f})", default=str(s["mid"])))
     long_fill  = float(Prompt.ask(f"  Long fill price  (mid ${l['mid']:.2f})", default=str(l["mid"])))
@@ -550,7 +598,8 @@ def _confirm_diagonal(ticker: str, spot: float, diagonals: list, args: list = No
               f"long ${l['strike']:.0f} {l['expiration']} -- fills confirmed at entry"
               + (" -- PINNED OUT OF BAND (s113/W163): not a screened candidate; "
                  f"short delta {s.get('delta')} {s.get('dte')}d, long delta {l.get('delta')} "
-                 f"{l.get('dte')}d at entry" if d.get("pinned_out_of_band") else ""))
+                 f"{l.get('dte')}d at entry" if d.get("pinned_out_of_band") else "")
+              + (f" -- {override_note}" if override_note else ""))
 
     console.print()
     console.print(f"  [green]OK[/green]  {ticker} DIAGONAL logged — {pos_id}")
@@ -670,9 +719,11 @@ def _confirm_diagonal_put(ticker, spot, diagonals):
         return
     d = diagonals[int(choice) - 1]
     s, l = d['short'], d['long']
-    raw = Prompt.ask('  Contracts', default='1')
-    try: contracts = max(1, int(raw))
-    except ValueError: contracts = 1
+
+    # W160/W201: same rule and the same function as the call diagonal.
+    contracts, override_note = _diag_contracts_prompt("DIAGONAL_PUT", l)
+    if contracts is None:
+        return
     short_fill = float(Prompt.ask(f"  Short fill price (mid ${s['mid']:.2f})", default=str(s['mid'])))
     long_fill  = float(Prompt.ask(f"  Long fill price  (mid ${l['mid']:.2f})", default=str(l['mid'])))
     net_debit_actual = round((long_fill - short_fill) * contracts * 100, 2)
@@ -696,7 +747,8 @@ def _confirm_diagonal_put(ticker, spot, diagonals):
     pos = Position.create(
         account_id=account_id, ticker=ticker, strategy='DIAGONAL_PUT',
         status='OPEN', total_contracts=contracts,
-        notes=f"Put diagonal: short ${s['strike']:.0f} {s['expiration']} / long ${l['strike']:.0f} {l['expiration']}",
+        notes=(f"Put diagonal: short ${s['strike']:.0f} {s['expiration']} / long ${l['strike']:.0f} {l['expiration']}"
+               + (f" -- {override_note}" if override_note else "")),
     )
     Leg.create(position_id=pos.id, leg_role='SHORT_PUT', direction='SHORT',
         open_price=short_fill, option_type='PUT',

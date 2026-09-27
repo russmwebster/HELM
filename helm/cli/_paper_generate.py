@@ -146,6 +146,45 @@ def _open_paper_keys() -> set:
 # duplicate on itself.
 
 
+# Over-cap refusals are LOGGED, not dropped (Russ, 2026-09-27): one row per
+# refused candidate. Its own table because helm_events CHECK-constrains
+# event_type (a new type means a table rebuild) and lifecycle_events is for
+# positions that exist. Created here on first write, like exit_flags.
+PAPER_REFUSALS_DDL = """CREATE TABLE IF NOT EXISTS paper_refusals (
+    id                TEXT PRIMARY KEY,
+    refused_at        TEXT NOT NULL,      -- local time, like positions.opened_at
+    ticker            TEXT NOT NULL,
+    strategy          TEXT NOT NULL,
+    rule              TEXT NOT NULL,      -- 'W160' (CSP) | 'W201' (long call, diagonals)
+    one_contract_risk REAL,               -- the $ the rule measured; NULL = not measurable
+    reason            TEXT NOT NULL,      -- 'refused by W160: one contract ...'
+    signal_id         TEXT,
+    origin_screen     TEXT
+)"""
+
+
+def _log_refusal(sig: dict, ticker: str, strategy: str, origin: str, exc) -> None:
+    """Write one paper_refusals row. Best-effort: a logging failure must not
+    kill the batch -- but it is printed, never swallowed silently."""
+    import uuid
+    from datetime import datetime
+    try:
+        from helm.db import transaction
+        with transaction() as conn:
+            conn.execute(PAPER_REFUSALS_DDL)
+            conn.execute(
+                "INSERT INTO paper_refusals (id, refused_at, ticker, strategy, rule, "
+                "one_contract_risk, reason, signal_id, origin_screen) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
+                (uuid.uuid4().hex, datetime.now().isoformat(timespec="seconds"),
+                 ticker, strategy, exc.rule,
+                 (round(float(exc.amount), 2) if exc.amount is not None else None),
+                 str(exc), (sig or {}).get("id"), origin))
+    except Exception as log_exc:  # noqa: BLE001
+        print("paper_refusals: could not log %s %s (%s: %s)"
+              % (ticker, strategy, type(log_exc).__name__, log_exc))
+
+
 def _book_and_stamp(sig: dict, ticker: str, strategy: str, spot, origin: str):
     """Book one paper position and stamp its provenance.
 
@@ -157,9 +196,15 @@ def _book_and_stamp(sig: dict, ticker: str, strategy: str, spot, origin: str):
     happened because a fix landed on one path and not its sibling; one body
     here means there is no sibling to miss.
     """
+    from helm.risk_cap import OverCapRefusal
     try:
         pos_id = _PAPER_BOOKERS[strategy](ticker, strategy, spot,
                                           scan_data=_scan_from_sig(sig))
+    except OverCapRefusal as exc:
+        # W160 / W201: a rule refusal, not an error and not a data gap -- its
+        # own reason in the summary, and a row in paper_refusals.
+        _log_refusal(sig, ticker, strategy, origin, exc)
+        return None, str(exc)
     except Exception as exc:  # one bad ticker must not kill the batch
         return None, f"error: {type(exc).__name__}: {exc}"
 

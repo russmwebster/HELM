@@ -37,6 +37,28 @@ def paper_open_one(ticker: str, strategy: str, spot: Optional[float],
     fill = top["bid"] if config["direction"] == "SHORT" else top["ask"]
     if not fill:
         return None
+    # Over-cap refusals (Russ, 2026-09-27). Raised, not returned as None, so
+    # the batch logs a named reason (paper_refusals) instead of calling it a
+    # fidelity skip.
+    #   CSP       -- W160: ONE contract's one-sigma move over $5,000. Spot is
+    #                the signal's (the same spot this booking's entry snapshot
+    #                records); IV and DTE are the contract's own. If they are
+    #                missing the risk is unmeasured, and an unmeasured risk is
+    #                not assumed to be under the cap -- refused, and said so.
+    #   LONG_CALL -- W201: ONE contract's debit (at the ask) over $5,000.
+    #   LONG_PUT and COVERED_CALL are not decided -- untouched.
+    from helm import risk_cap as _rc
+    if strategy == "CSP":
+        _sigma = _rc.csp_one_sigma_risk(spot, top.get("iv"), top.get("dte"), 1)
+        if _sigma is None:
+            raise _rc.OverCapRefusal(
+                "W160", strategy, None,
+                detail="one-sigma not measurable (IV, DTE or spot missing) -- "
+                       "not assumed to be under the $5,000 cap")
+        if _rc.one_contract_over_cap(_sigma):
+            raise _rc.OverCapRefusal("W160", strategy, _sigma)
+    elif strategy == "LONG_CALL" and _rc.one_contract_over_cap(fill * 100):
+        raise _rc.OverCapRefusal("W201", strategy, fill * 100)
     top["spot"] = spot
     # HELM-120 (W13 root cause, s90): fetch_chain_from_ibkr stamps a
     # hardcoded "direction": "SHORT" onto every row it returns, and
@@ -168,6 +190,11 @@ def paper_open_diagonal_one(ticker: str, strategy: str, spot: Optional[float],
     net_debit = round(long_fill - short_fill, 2)
     if net_debit <= 0:
         return None
+    # W201: the long leg's ONE-contract cost over $5,000 is refused on paper
+    # (a diagonal's W160 risk is its long leg; the short's rent is not netted).
+    from helm import risk_cap as _rc
+    if _rc.one_contract_over_cap(long_fill * 100):
+        raise _rc.OverCapRefusal("W201", strategy, long_fill * 100)
 
     legs = [
         {"direction": "LONG", "opt_type": side,
