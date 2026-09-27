@@ -575,7 +575,8 @@ def suggest_contracts(strategy: str, strike: float, mid: float,
 
     W195: a REAL long call is also declined (0, override by typed count)
     while the real long-premium sleeve is at or over 5% or the name already
-    holds a long call -- risk_cap.apply_w195_real_flags.
+    holds a long call; a real call diagonal or PMCC while the sleeve is at or
+    over 5% -- risk_cap.apply_w195_real_flags.
 
     0 is a decline, not "one contract" (HELM-110 s85):
       COVERED_CALL  -- fewer than 100 shares held
@@ -647,7 +648,8 @@ def suggest_contracts(strategy: str, strike: float, mid: float,
                 raw, binding = 20, "ceiling"
             # W195 (Russ, 2026-09-27): on the REAL book a long call is not
             # suggested while the real long-premium sleeve is at or over 5%,
-            # or while the name already holds a long call. A flag, not a
+            # or while the name already holds a long call; a call diagonal or
+            # PMCC not while the sleeve is at or over 5%. A flag, not a
             # block: it declines like W201 (0), and a typed count overrides.
             # Every caller of this function sizes a REAL trade -- the paper
             # book sizes in helm/cli/_paper_open.py and never comes here.

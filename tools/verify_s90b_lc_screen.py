@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Verify the long-call screen and its wiring into helm scan (HELM-101 step 4).
 
-SUPERSEDED FOR THE GATES (W195, 2026-09-27): this pins lc-screen-v1 -- G1 as a
-gate, the 60/40 cheapness/trend rank, no market gate. Against v2 its eight
-v1 gate/rank checks fail BY DESIGN (G1 is recorded not gated; rank is 50/50
-calm/cheap; the S&P gate fails closed when no reading is passed). The wiring
-half still holds. v2 is verified by _s123/verify_w195.py.
+UPDATED FOR lc-screen-v2 (W195, 2026-09-27; Russ: no check may fail by
+design). The gate half now pins v2: G1 recorded, not gated; the S&P-above-
+200-day gate, failing closed; rank = 50% calmness + 50% cheapness with no
+RSI or ADX term; the 0.72 bar. v1's G1 / 60-40 / RSI-penalty expectations
+are gone with v1. The wiring half is unchanged. The fuller v2 suite (73
+stored scans, routing, real flags) is _s123/verify_w195.py.
 
 Two halves, and they are different kinds of evidence:
 
@@ -45,23 +46,52 @@ from helm import lc_screen as S
 
 
 def row(**kw):
-    """A name that clears every gate, before kw overrides it."""
+    """A name that clears every gate and the bar, before kw overrides it:
+    HV252 18 (calmness 1.0), IV/HV90 0.72 (cheapness 0.9) -> score 0.95."""
     base = dict(ticker='TEST', bias_score=3.0, spot_price=100.0, sma_50=95.0,
-                sma_200=90.0, rsi_14=55.0, adx=30.0, iv_hv90_ratio=0.80,
-                hv_252=25.0, days_to_earnings=45, strategy='CSP')
+                sma_200=90.0, rsi_14=55.0, adx=30.0, iv_hv90_ratio=0.72,
+                hv_252=18.0, days_to_earnings=45, strategy='CSP')
     base.update(kw)
     return base
 
 
-print('lc_screen -- gates')
+UP = {'above': True, 'spx': 6600.0, 'sma200': 6000.0}   # S&P above its 200-day
+
+
+def scr(rows, market=UP):
+    return S.screen(rows, market=market)
+
+
+print('lc_screen -- gates (v2)')
 r = row()
-S.screen([r])
+scr([r])
 chk(r['lc_screen_pass'] == 1 and r['lc_screen_reject'] is None,
     'a clean name passes every gate')
+chk(json.loads(r['lc_gates_json'])['version'] == 'lc-screen-v2 (W195)',
+    'the record says lc-screen-v2')
+
+r = row(bias_score=1.0, spot_price=80.0)
+scr([r])
+g1 = json.loads(r['lc_gates_json'])['g1']
+chk(r['lc_screen_pass'] == 1 and g1['gate'] is False and g1['ok'] is False
+    and g1['bias'] == 1.0,
+    'G1 is recorded, not gated: weak bias and a broken stack still pass')
+
+for label, mk, want in (('S&P below its 200-day', {'above': False}, 'S&P below 200d'),
+                        ('S&P unread', {'above': None, 'error': 'x'}, 'S&P unknown'),
+                        ('no S&P passed at all', None, 'S&P unknown')):
+    r = row()
+    scr([r], market=mk)
+    chk(r['lc_screen_pass'] == 0 and r['lc_screen_reject'] == want,
+        'rejects on ' + label + ' -- fails closed  (got ' + repr(r['lc_screen_reject']) + ')')
+
+r = row(hv_252=30.0, iv_hv90_ratio=0.80)          # 0.5 x 0.5 + 0.5 x 0.5 = 0.50
+scr([r])
+chk(r['lc_rank_score'] == 0.5 and r['lc_screen_reject'] == 'below bar',
+    'a name clearing every gate but scoring under 0.72 is rejected "below bar"')
+chk(S.RANK_BAR == 0.72, 'the bar is 0.72 (provisional, review ~2026-10-27)')
 
 cases = [
-    ('G1 bias', dict(bias_score=1.0)),
-    ('G1 stack', dict(spot_price=80.0)),
     ('G3 vol', dict(iv_hv90_ratio=0.95)),
     ('G3 vol unknown', dict(iv_hv90_ratio=None)),
     ('G4 earnings unknown', dict(days_to_earnings=None)),
@@ -72,37 +102,35 @@ cases = [
 ]
 for want, over in cases:
     r = row(**over)
-    S.screen([r])
+    scr([r])
     got = r['lc_screen_reject'] or ''
     chk(want in got and r['lc_screen_pass'] == 0,
         'rejects on ' + want + '  (got ' + repr(got) + ')')
 
 # the three fail-closed cases are the ones worth stating separately: an
 # unmeasured gate must refuse, not wave through
-chk(all(S.screen([row(**o)]) == [] for _, o in cases if 'unknown' in _),
+chk(all(scr([row(**o)]) == [] for _, o in cases if 'unknown' in _),
     'an unmeasurable gate refuses rather than passes')
 
-# ADX must not gate -- it is a rank input only (design doc 7.3)
+# ADX and RSI neither gate nor score in v2 (W195); both are still recorded.
 r = row(adx=4.0)
-S.screen([r])
-chk(r['lc_screen_pass'] == 1, 'a very low ADX does not exclude a name')
+scr([r])
 r2 = row(adx=40.0)
-S.screen([r2])
-chk((r2['lc_rank_score'] or 0) > (r['lc_rank_score'] or 0),
-    'but a higher ADX ranks above a lower one')
-
-# RSI is a penalty, never a gate
-r = row(rsi_14=95.0)
-S.screen([r])
-chk(r['lc_screen_pass'] == 1, 'an extended RSI does not exclude a name')
-chk(S.rsi_penalty(95.0) > 0 and S.rsi_penalty(55.0) == 0.0,
-    'but it costs rank score')
+scr([r2])
+chk(r['lc_screen_pass'] == 1 and r['lc_rank_score'] == r2['lc_rank_score'],
+    'ADX neither excludes a name nor moves its score')
+r3 = row(rsi_14=95.0)
+scr([r3])
+comp = json.loads(r3['lc_gates_json'])['components']
+chk(r3['lc_screen_pass'] == 1 and r3['lc_rank_score'] == r2['lc_rank_score']
+    and comp['rsi_penalty'] > 0,
+    'an extended RSI costs nothing in v2 -- its penalty is recorded, not scored')
 
 print('\nlc_screen -- ranking and records')
-board = [row(ticker='AAA', iv_hv90_ratio=0.72),
-         row(ticker='BBB', iv_hv90_ratio=0.88),
-         row(ticker='CCC', bias_score=1.0)]
-surv = S.screen(board)
+board = [row(ticker='AAA', iv_hv90_ratio=0.72),     # 0.95
+         row(ticker='BBB', iv_hv90_ratio=0.78),     # 0.80
+         row(ticker='CCC', iv_hv90_ratio=0.85)]     # 0.625 -> below bar
+surv = scr(board)
 chk([r['ticker'] for r in surv] == ['AAA', 'BBB'],
     'cheaper vol ranks first (got ' + str([r['ticker'] for r in surv]) + ')')
 chk([r['lc_screen_rank'] for r in surv] == [1, 2], 'ranks are 1-based and dense')
@@ -117,14 +145,14 @@ chk(g['g5']['max'] == 40.0, 'the acted ceiling is the absolute one')
 # an alternative that could not be measured must read as unknown, not as
 # "the alternative disagreed" -- a board of four has no quintile
 small = [row(ticker='AAA'), row(ticker='BBB')]
-S.screen(small)
+scr(small)
 gs = json.loads(small[0]['lc_gates_json'])['g5']
 chk(gs['alt_quintile'] is None and gs['alt_ok'] is None
     and gs['alt_agrees'] is None,
     'too small a board logs the quintile as unknown, not as disagreement')
 
 big = [row(ticker='T%d' % i, hv_252=10.0 + i * 4) for i in range(10)]
-S.screen(big)
+scr(big)
 gb = json.loads(big[0]['lc_gates_json'])['g5']
 chk(gb['alt_quintile'] is not None and gb['alt_ok'] is True,
     'a full board does compute the quintile alternative')

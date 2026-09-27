@@ -111,11 +111,12 @@ def feed(text):
 
 
 import helm.cli.open_cmd as oc                             # noqa: E402
-# W195 (2026-09-27) adds real-book long-call FLAGS (sleeve >= 5%, name held)
-# that decline through this same path. The live book's real sleeve is over 5%,
-# so every real long call here would read W194. They are switched off for
-# this harness -- it tests W160/W201 -- and verified in _s123/verify_w195.py.
-risk_cap.real_long_call_flags = lambda *a, **k: []
+# W195 (2026-09-27) adds real-book FLAGS (sleeve >= 5% for long calls, call
+# diagonals and PMCCs; one long call per name) that decline through this same
+# path. The live book's real sleeve is over 5%, so every real long call and
+# diagonal here would read W194. They are switched off for this harness -- it
+# tests W160/W201 -- and verified in _s123/verify_w195.py.
+risk_cap.real_long_premium_flags = lambda *a, **k: []
 A = get_active_account()
 print("         account  %s\n" % A)
 

@@ -421,7 +421,11 @@ def _diag_contracts_prompt(strategy: str, long_leg: dict):
     """
     from helm.config import get_active_account
     from helm.cli.open_cmd import suggest_contracts
+    from helm import risk_cap as _rc0
     mid = long_leg.get("mid") or 0
+    # W195 (Russ, 2026-09-27): a real call diagonal / PMCC is also declined
+    # while the real long-premium sleeve is at or over 5% -- the same 0, the
+    # same typed override, recorded as "OVER-CAP OVERRIDE (W194)".
     n, _binding, note = suggest_contracts(strategy, None, mid, get_active_account())
     declined = n <= 0
     if declined:
@@ -443,7 +447,8 @@ def _diag_contracts_prompt(strategy: str, long_leg: dict):
         contracts = n
     if contracts <= 0:
         console.print("  [dim]Nothing was recorded"
-                      + (" -- declined (W201)." if declined else " -- zero contracts.")
+                      + ((" -- declined (%s)." % _rc0.rule_for(strategy, _binding))
+                         if declined else " -- zero contracts.")
                       + "[/dim]")
         return None, None
     if declined:

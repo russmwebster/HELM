@@ -295,30 +295,22 @@ def _print_lc_screen(rows):
     survivors = sorted((r for r in (rows or []) if r.get("lc_screen_pass")),
                        key=lambda r: (r.get("lc_screen_rank") or 999))
 
-    # Real-book flag inputs. A read failure is shown, never read as "fine".
-    real = {}
+    # Real-book verdicts: ONE source (risk_cap.w195_real_verdicts), shared
+    # with the PG board's candidate list. A read failure blocks every
+    # suggestion and says why -- never read as "fine".
     try:
         from helm import risk_cap as _rc
-        _acct = get_active_account()
-        real["sleeve"] = _rc.sleeve_view(_acct, "REAL")
-        real["held"] = _rc.held_long_names("REAL")
-        _c = get_conn()
-        try:
-            real["today"] = _c.execute(
-                "SELECT COUNT(*) FROM positions WHERE book='REAL' AND strategy='LONG_CALL' "
-                "AND substr(opened_at,1,10)=?", (date.today().isoformat(),)).fetchone()[0]
-        finally:
-            _c.close()
+        real = _rc.w195_real_verdicts(
+            [str(r.get("ticker") or "") for r in survivors], get_active_account())
     except Exception as _e:
-        real["error"] = "%s: %s" % (type(_e).__name__, _e)
+        real = {"verdicts": {}, "block": "real flags could not be read (%s: %s)"
+                % (type(_e).__name__, _e)}
 
     def _f(v, n=1):
         return f"{float(v):.{n}f}" if isinstance(v, (int, float)) else "--"
 
+    _style = {"suggest": "green", "held": "yellow", "day": "dim", "sleeve": "red"}
     if survivors:
-        sv = real.get("sleeve") or {}
-        sleeve_block = real.get("error") or sv.get("pct") is None or sv.get("over_cap")
-        slots = lc_screen.MAX_NEW_PER_DAY - (real.get("today") or 0)
         t = Table(box=box.SIMPLE, show_header=True, header_style="dim")
         t.add_column("#", width=3, justify="right")
         t.add_column("Ticker", width=8, no_wrap=True)
@@ -333,31 +325,18 @@ def _print_lc_screen(rows):
         for r in survivors:
             comp = _gates(r).get("components") or {}
             tk = str(r.get("ticker") or "").upper()
-            if sleeve_block:
-                verdict = "[red]no: sleeve[/red]"
-            elif tk in (real.get("held") or {}):
-                verdict = "[yellow]no: held[/yellow]"
-            elif slots <= 0:
-                verdict = "[dim]no: 2/day[/dim]"
-            else:
-                verdict = "[green]suggest[/green]"
-                slots -= 1
+            v = (real.get("verdicts") or {}).get(tk) or {"code": "sleeve", "label": "no: unread"}
+            st = _style.get(v["code"], "dim")
             t.add_row(str(r.get("lc_screen_rank") or "--"), tk or "--",
                       _f(r.get("lc_rank_score"), 3),
                       _f(comp.get("calmness"), 2), _f(comp.get("vol_cheapness"), 2),
                       _f(r.get("iv_hv90_ratio"), 3), _f(r.get("hv_252")),
-                      _f(r.get("bias_score"), 0), verdict,
+                      _f(r.get("bias_score"), 0), f"[{st}]{v['label']}[/{st}]",
                       str(r.get("strategy") or "--"))
         console.print(t)
-        if real.get("error"):
-            console.print(f"[red]  Real flags could not be read ({real['error']}) -- "
-                          f"no real long-call suggestions[/red]")
-        elif sv.get("pct") is None:
-            console.print(f"[red]  Real long-premium sleeve could not be measured "
-                          f"({sv.get('error')}) -- no real long-call suggestions (W194)[/red]")
-        elif sv.get("over_cap"):
-            console.print(f"[red]  Real long-premium sleeve {sv['pct']:.1f}% is at or over "
-                          f"5% -- no real long-call suggestions until it is under (W194/W195)[/red]")
+        if real.get("block"):
+            _b = real["block"]
+            console.print(f"[red]  Real: {_b[0].upper() + _b[1:]}.[/red]")
     else:
         console.print("[dim]  no candidates — nothing cleared every gate and the bar[/dim]")
     if hist:

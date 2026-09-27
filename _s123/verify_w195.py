@@ -239,13 +239,19 @@ ok("copy's real sleeve is over 5%% (%.2f%%)" % sv["pct"], sv["over_cap"] is True
 n, bnd, note = oc.suggest_contracts("LONG_CALL", 70.0, 3.00, A, ticker="ZZZ")
 ok("sleeve over 5% -> a real long call is declined (W194 flag)",
    (n, bnd) == (0, "w195_sleeve") and "%.1f%% of the account" % sv["pct"] in note, (n, bnd, note))
-n2, b2_, _ = oc.suggest_contracts("DIAGONAL", None, 30.0, A, ticker="ZZZ")
-ok("  ... a diagonal is not flagged by W195", n2 == 1 and b2_ == "risk_cap", (n2, b2_))
+n2, b2_, note2 = oc.suggest_contracts("DIAGONAL", None, 30.0, A)
+ok("  ... a call diagonal is declined by the same sleeve flag (Russ, on commit)",
+   (n2, b2_) == (0, "w195_sleeve") and "no new long calls or diagonals" in note2, (n2, b2_, note2))
+n2, b2_, _ = oc.suggest_contracts("PMCC", None, 30.0, A)
+ok("  ... and a PMCC", (n2, b2_) == (0, "w195_sleeve"), (n2, b2_))
+n2, b2_, _ = oc.suggest_contracts("DIAGONAL_PUT", None, 30.0, A)
+ok("  ... a put diagonal is not (W202 refuses it before sizing)", (n2, b2_) == (1, "risk_cap"), (n2, b2_))
 n3, b3_, note3 = oc.suggest_contracts("LONG_CALL", 700.0, 160.95, A, ticker="LLY")
 ok("  ... a W201 decline keeps W201 and gains the flag",
    (n3, b3_) == (0, "risk_cap") and note3.startswith("one contract is $16,095, over the $5,000 cap (W201); also the real long-premium sleeve"), note3)
-n4, _, _ = oc.suggest_contracts("LONG_CALL", 70.0, 3.00, A, ticker="")
-ok("  ... no ticker -> no flag lookup (sizing unchanged)", n4 == 16, n4)
+n4, b4_, _ = oc.suggest_contracts("LONG_CALL", 70.0, 3.00, A, ticker="")
+ok("  ... no ticker -> the sleeve still flags (one-per-name needs the name)",
+   (n4, b4_) == (0, "w195_sleeve"), (n4, b4_))
 
 LC = {"ticker": "ZZZ", "opt_type": "CALL", "strike": 70.0, "expiration": "2027-01-15", "dte": 110,
       "bid": 2.95, "ask": 3.05, "mid": 3.00, "delta": 0.75, "theta": -0.02, "gamma": 0.01,
@@ -271,12 +277,38 @@ ok("typed count overrides, said out loud, books 2",
 ok("  ... recorded: OVER-CAP OVERRIDE (W194)", note_z and "OVER-CAP OVERRIDE (W194): the real long-premium sleeve is"
    in (note_z[0] or ""), note_z)
 
+import helm.cli.diagonal as dg                              # noqa: E402
+DG = {"short": {"strike": 250.0, "expiration": "2026-11-20", "mid": 4.10, "delta": 0.30,
+                "dte": 54, "iv": 40.0, "oi": 900, "mid_source": "synthetic"},
+      "long": {"strike": 200.0, "expiration": "2027-06-17", "mid": 30.00, "delta": 0.80,
+               "dte": 263, "iv": 38.0, "oi": 500, "mid_source": "synthetic"}}
+QD = "select count(*) from positions where ticker='QDG' and strategy='DIAGONAL' and book='REAL'"
+d0 = count(QD)
+with feed("1\n\n") as out:
+    dg._confirm_diagonal("QDG", 230.0, [dict(DG)], args=[])
+t = out.getvalue()
+ok("real diagonal ($3,000 long leg, under W201): declined by the sleeve; Enter records nothing",
+   "Declined: the real long-premium sleeve is" in t and count(QD) == d0
+   and "Nothing was recorded -- declined (W194)." in t, t[-250:])
+with feed("1\n1\n4.10\n30.00\ny\n") as out:
+    dg._confirm_diagonal("QDG", 230.0, [dict(DG)], args=[])
+t = out.getvalue()
+nd = sqlite3.connect(COPY).execute("select notes from positions where ticker='QDG' and book='REAL' "
+                                   "order by created_at desc limit 1").fetchone()
+ok("  ... a typed count overrides, said out loud, and books",
+   "Override: 1 contract(s) with the real long-premium sleeve at or over 5% (W194)" in t
+   and count(QD) == d0 + 1, t[-250:])
+ok("  ... recorded: OVER-CAP OVERRIDE (W194)", nd and "OVER-CAP OVERRIDE (W194): the real long-premium "
+   "sleeve is" in (nd[0] or ""), nd)
+
 pv = sqlite3.connect(COPY).execute("select portfolio_value from accounts where id=?", (A,)).fetchone()[0]
 db("update accounts set portfolio_value=? where id=?", pv * 10, A)
 ok("(account x10 on the copy -> real sleeve %.2f%%, under 5%%)" % risk_cap.sleeve_view(A, "REAL")["pct"],
    risk_cap.sleeve_view(A, "REAL")["over_cap"] is False)
 n, bnd, note = oc.suggest_contracts("LONG_CALL", 70.0, 3.00, A, ticker="QQQX")
 ok("sleeve under 5%, name not held -> sized normally, no flag", (n, bnd) == (16, "risk_cap"), (n, bnd, note))
+n, bnd, _ = oc.suggest_contracts("DIAGONAL", None, 30.0, A)
+ok("sleeve under 5% -> a call diagonal is sized normally again", (n, bnd) == (1, "risk_cap"), (n, bnd))
 n, bnd, note = oc.suggest_contracts("LONG_CALL", 70.0, 3.00, A, ticker="KO")
 ok("KO holds a real long call -> declined, one per name (W195)",
    (n, bnd) == (0, "w195_held") and note == "KO already has an open LONG_CALL -- one long call per name (W195)", note)
@@ -333,7 +365,45 @@ t = footer()
 lines = {ln.split()[1]: ln for ln in t.splitlines() if ln.strip()[:1].isdigit()}
 ok("real sleeve over 5% -> every row 'no: sleeve' and the red line",
    all("no: sleeve" in v for v in lines.values()) and len(lines) == 4
-   and "no real long-call suggestions until it is under" in t, t[-300:])
+   and "Real: The real long-premium sleeve is" in t, t[-300:])
+
+# ---------------------------------------------- 5b. PG board candidate list
+print("\n-- 5b. PG board: the Real verdict on the candidate list (%s)" % PG)
+sys.path.insert(0, PG)
+import helm_engine as eng                                  # noqa: E402
+c = sqlite3.connect(COPY); c.row_factory = sqlite3.Row
+_t = dict(c.execute("select * from signals order by generated_at desc limit 1").fetchone())
+c.close()
+BGEN = "2098-12-31T15:00:00"   # earlier than section 6's scan, which must be the latest
+for i, (tk, p_, rk) in enumerate([("KO", 1, 1), ("ABT", 1, 2), ("WMT", 1, 3), ("V", 1, 4), ("XOM", 0, None)]):
+    srow = dict(_t, id="SIG-BRD-" + tk, ticker=tk, generated_at=BGEN, lc_screen_pass=p_, lc_screen_rank=rk,
+                top_strategy="CSP", recommendations="[]")
+    cc_ = sqlite3.connect(COPY)
+    cc_.execute("insert into signals (%s) values (%s)" % (",".join(srow), ",".join("?" * len(srow))), list(srow.values()))
+    cc_.commit(); cc_.close()
+sc_ = eng.latest_scan()
+lr = {x["ticker"]: x.get("lc_real") for x in sc_["candidates"]}
+ok("sleeve over 5%: every pass reads 'no: sleeve', the non-pass carries nothing, block text returned",
+   all((lr[k] or {}).get("label") == "no: sleeve" for k in ("KO", "ABT", "WMT", "V")) and lr["XOM"] is None
+   and "real long-premium sleeve is" in (sc_.get("lc_real_block") or ""), (lr, sc_.get("lc_real_block")))
+db("update accounts set portfolio_value=? where id=?", pv * 10, A)
+sc_ = eng.latest_scan()
+lr = {x["ticker"]: (x.get("lc_real") or {}).get("label") for x in sc_["candidates"]}
+ok("sleeve under: KO held, ABT and WMT suggested, V over 2/day -- same verdicts as the footer",
+   lr == {"KO": "no: held", "ABT": "suggest", "WMT": "suggest", "V": "no: 2/day", "XOM": None}
+   and sc_.get("lc_real_block") is None, lr)
+import app as pgapp                                        # noqa: E402
+cl = pgapp.app.test_client()
+_resp = cl.get("/scan")
+html = _resp.get_data(as_text=True)
+ok("/scan renders (200) and carries the verdicts to the page",
+   _resp.status_code == 200 and '"label": "suggest"' in html.replace('"label":"suggest"', '"label": "suggest"')
+   and "function realBadge" in html, _resp.status_code)
+db("update accounts set portfolio_value=? where id=?", pv, A)
+_resp = cl.get("/scan")
+html = _resp.get_data(as_text=True)
+ok("  ... and with the sleeve over, the block line is shown above the table",
+   'id="lcRealBlock"' in html and "real long-premium sleeve is" in html, _resp.status_code)
 
 # --------------------------------------------------------- 6. paper routing
 print("\n-- 6. paper routing (paper_generate buy wing)")

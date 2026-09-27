@@ -163,7 +163,7 @@ class OverCapRefusal(Exception):
         super().__init__(message or "refused by %s: %s" % (rule, self.detail))
 
 
-# W195 real-book flags (see real_long_call_flags). They decline a real long
+# W195 real-book flags (see real_long_premium_flags). They decline a real long
 # call through the same 0-and-override path as W160/W201, so the binding
 # names which rule said no.
 W195_SLEEVE = "w195_sleeve"
@@ -417,6 +417,10 @@ def sleeve_view(account_id, book="REAL", db=None):
 #          over 5%, or while the name already has an open long call (a call
 #          diagonal's long leg counts). Declines through the W201 path, so a
 #          typed count overrides and the override is recorded.
+#          Russ, 2026-09-27 (on commit): the SLEEVE flag also covers call
+#          diagonals and PMCCs -- they are in the sleeve, and the decision was
+#          to shrink it including diagonals. Same decline, same typed
+#          override, same note. One-per-name stays a long-call rule.
 #   PAPER: ENFORCED, and the paper sleeve counts ONLY long calls the W195
 #          screen itself booked (Russ chose option (a): the paper test
 #          measures the screen; paper's diagonals would measure the diagonal
@@ -441,23 +445,43 @@ def held_long_names(book="REAL", db=None, strategies=HELD_LONG_CALL_STRATEGIES):
     return {r["ticker"].upper(): r["strategy"] for r in rows}
 
 
-def real_long_call_flags(ticker, account_id, db=None):
-    """[(binding, text), ...] -- the W195 reasons HELM will not SUGGEST a
-    real long call on `ticker`. Empty = no flag. Read-only; flags, never acts.
+# Real strategies the SLEEVE flag declines, and the one the HELD flag does.
+# DIAGONAL_PUT is not here: booking a real put diagonal is refused outright
+# while W202 is parked, before any sizing.
+W195_SLEEVE_FLAGGED = ("LONG_CALL", "DIAGONAL", "PMCC")
+W195_HELD_FLAGGED = ("LONG_CALL",)
 
-    Fails CLOSED on the sleeve: a sleeve that cannot be measured is a flag
-    that says so, never a silent pass (an unmeasured risk must not read as a
-    small one)."""
-    flags = []
+
+def real_sleeve_flag(account_id, db=None):
+    """(binding, text) when the REAL long-premium sleeve blocks new longs, else
+    None. Fails CLOSED: a sleeve that cannot be measured is a flag that says
+    so, never a silent pass (an unmeasured risk must not read as a small one)."""
     sv = sleeve_view(account_id, "REAL", db=db)
     if sv.get("pct") is None:
-        flags.append((W195_SLEEVE, "the real long-premium sleeve could not be "
-                      "measured (%s) -- no long-call suggestion without it (W194)"
-                      % (sv.get("error") or "no account value")))
-    elif sv.get("over_cap"):
-        flags.append((W195_SLEEVE, "the real long-premium sleeve is %.1f%% of the "
-                      "account, at or over the 5%% cap -- no new long calls while it "
-                      "is (W194)" % sv["pct"]))
+        return (W195_SLEEVE, "the real long-premium sleeve could not be measured "
+                "(%s) -- no new long calls or diagonals without it (W194)"
+                % (sv.get("error") or "no account value"))
+    if sv.get("over_cap"):
+        return (W195_SLEEVE, "the real long-premium sleeve is %.1f%% of the account, "
+                "at or over the 5%% cap -- no new long calls or diagonals while it "
+                "is (W194)" % sv["pct"])
+    return None
+
+
+def real_long_premium_flags(strategy, ticker, account_id, db=None):
+    """[(binding, text), ...] -- the reasons HELM will not SUGGEST this real
+    long-premium trade. Empty = no flag. Read-only; flags, never acts.
+      sleeve (W194)          LONG_CALL, DIAGONAL, PMCC -- no ticker needed
+      one per name (W195)    LONG_CALL only, and only with a ticker
+    """
+    strategy = (strategy or "").upper()
+    flags = []
+    if strategy in W195_SLEEVE_FLAGGED:
+        f = real_sleeve_flag(account_id, db=db)
+        if f:
+            flags.append(f)
+    if strategy not in W195_HELD_FLAGGED or not ticker:
+        return flags
     try:
         held = held_long_names("REAL", db=db)
     except Exception as exc:
@@ -471,21 +495,71 @@ def real_long_call_flags(ticker, account_id, db=None):
 
 
 def apply_w195_real_flags(strategy, ticker, account_id, decision, db=None):
-    """Fold the W195 real flags into a (n, binding, note) sizing decision.
+    """Fold the real-book flags into a (n, binding, note) sizing decision.
 
-    LONG_CALL only. A flagged name becomes n = 0 (declined, override by
-    typed count) with the flag's binding; a trade W201 already declined keeps
-    W201 as its binding and gains the flags in its note."""
+    LONG_CALL (sleeve + one per name), DIAGONAL and PMCC (sleeve). A flagged
+    trade becomes n = 0 (declined, override by typed count) with the flag's
+    binding; a trade W201 already declined keeps W201 as its binding and
+    gains the flags in its note."""
     n, binding, note = decision
-    if (strategy or "").upper() != "LONG_CALL" or not ticker:
+    if (strategy or "").upper() not in W195_SLEEVE_FLAGGED:
         return decision
-    flags = real_long_call_flags(ticker, account_id, db=db)
+    flags = real_long_premium_flags(strategy, ticker, account_id, db=db)
     if not flags:
         return decision
     text = "; ".join(t for _, t in flags)
     if n is not None and n <= 0:
         return n, binding, ("%s; also %s" % (note, text)) if note else text
     return 0, flags[0][0], text
+
+
+def w195_real_verdicts(ranked_tickers, account_id, db=None, today=None):
+    """The REAL-book verdict for each long-call screen survivor, in rank order
+    -- the ONE source for the scan footer and the PG board's candidate list.
+
+    Returns {"verdicts": {TICKER: {"code", "label", "why"}}, "block": text or
+    None, "sleeve_pct", "today"}. code: suggest | held | day | sleeve.
+    A survivor is suggested only while the real sleeve is under 5%, the name
+    holds no long call (or call diagonal/PMCC), and fewer than
+    lc_screen.MAX_NEW_PER_DAY real long calls were opened today. Never raises:
+    a read failure blocks every suggestion and says why."""
+    from datetime import date as _date
+    from helm.lc_screen import MAX_NEW_PER_DAY
+    out = {"verdicts": {}, "block": None, "sleeve_pct": None, "today": None}
+    try:
+        f = real_sleeve_flag(account_id, db=db)
+        out["sleeve_pct"] = sleeve_view(account_id, "REAL", db=db).get("pct")
+        held = held_long_names("REAL", db=db)
+        conn = _conn(db)
+        try:
+            out["today"] = conn.execute(
+                "SELECT COUNT(*) FROM positions WHERE book='REAL' AND strategy='LONG_CALL' "
+                "AND substr(opened_at,1,10)=?",
+                ((today or _date.today()).isoformat(),)).fetchone()[0]
+        finally:
+            conn.close()
+    except Exception as exc:
+        f, held = (W195_SLEEVE, "real flags could not be read (%s: %s) -- no real "
+                   "long-call suggestions" % (type(exc).__name__, exc)), {}
+    if f:
+        out["block"] = f[1]
+    slots = MAX_NEW_PER_DAY - (out["today"] or 0)
+    for t in ranked_tickers or []:
+        t = (t or "").upper()
+        if f:
+            v = ("sleeve", "no: sleeve", f[1])
+        elif t in held:
+            v = ("held", "no: held", "%s already has an open %s -- one long call per "
+                 "name (W195)" % (t, held[t]))
+        elif slots <= 0:
+            v = ("day", "no: 2/day", "%d real long calls already opened today (W195)"
+                 % (out["today"] or 0))
+        else:
+            v = ("suggest", "suggest", "passes the screen; sleeve under 5%, name not "
+                 "held, a daily slot free")
+            slots -= 1
+        out["verdicts"][t] = dict(zip(("code", "label", "why"), v))
+    return out
 
 
 W195_ORIGIN = "LC_SCREEN"
@@ -666,22 +740,27 @@ def _selftest():
           "RULE OVERRIDE (W195): KO held; booked 1 contract(s) as typed")
     check("W195 override note sleeve", override_note("LONG_CALL", W195_SLEEVE, 1, "x")[:22],
           "OVER-CAP OVERRIDE (W19")
-    _saved = globals()["real_long_call_flags"]
+    _saved = globals()["real_long_premium_flags"]
     try:
-        globals()["real_long_call_flags"] = lambda t, a, db=None: [(W195_SLEEVE, "sleeve 8.7%")]
+        globals()["real_long_premium_flags"] = lambda s, t, a, db=None: [(W195_SLEEVE, "sleeve 8.7%")]
         check("W195 fold: sized trade declined", apply_w195_real_flags(
             "LONG_CALL", "KO", "a", (3, "risk_cap", "sized to 3 by x")),
             (0, W195_SLEEVE, "sleeve 8.7%"))
         check("W195 fold: W201 decline keeps W201", apply_w195_real_flags(
             "LONG_CALL", "LLY", "a", (0, "risk_cap", "one contract is $16,095 (W201)")),
             (0, "risk_cap", "one contract is $16,095 (W201); also sleeve 8.7%"))
-        check("W195 fold: diagonal untouched", apply_w195_real_flags(
-            "DIAGONAL", "KO", "a", (2, "risk_cap", "n")), (2, "risk_cap", "n"))
-        globals()["real_long_call_flags"] = lambda t, a, db=None: []
+        check("W195 fold: diagonal declined by the sleeve", apply_w195_real_flags(
+            "DIAGONAL", None, "a", (2, "risk_cap", "n")), (0, W195_SLEEVE, "sleeve 8.7%"))
+        check("W195 fold: PMCC declined by the sleeve", apply_w195_real_flags(
+            "PMCC", None, "a", (1, "risk_cap", "n"))[:2], (0, W195_SLEEVE))
+        for _st in ("DIAGONAL_PUT", "LONG_PUT", "CSP", "IRON_CONDOR"):
+            check("W195 fold: %s untouched" % _st, apply_w195_real_flags(
+                _st, "KO", "a", (2, "risk_cap", "n")), (2, "risk_cap", "n"))
+        globals()["real_long_premium_flags"] = lambda s, t, a, db=None: []
         check("W195 fold: no flags untouched", apply_w195_real_flags(
             "LONG_CALL", "KO", "a", (2, "risk_cap", "n")), (2, "risk_cap", "n"))
     finally:
-        globals()["real_long_call_flags"] = _saved
+        globals()["real_long_premium_flags"] = _saved
 
     if failures:
         print("FAIL (%d):" % len(failures))
