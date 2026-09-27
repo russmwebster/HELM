@@ -20,8 +20,17 @@ What it proves, each as a PASS/FAIL line:
      the page shows the decline, /api/risk and /positions still 200
   6. both ways      -- the self-test FAILS with the W201 rule removed in
      memory, PASSES restored; risk_cap.py is byte-identical after the run
-Chain data is synthetic (Yahoo is blocked from the VM); every evaluator that
-would fetch a chain is replaced in memory, and the harness says so.
+Chain data is synthetic; every evaluator that would fetch a chain is replaced
+in memory, and the harness says so.
+
+NETWORK ISOLATION (added after the first run on the Mac): booking a position
+runs HELM's post-booking side effects -- backfill_entry_vol connects to the IB
+gateway as client id 11, the SNAPSHOT AGENT'S id (W103), and the company name
+comes from Yahoo. From the VM both fail at once; on the Mac they really ran,
+slowly, and on a weekday inside a snapshot window could have knocked a live
+snapshot off the gateway. This harness now blocks every IB connect, stubs
+yfinance and no-ops the vol backfill BEFORE importing helm, and aborts if a
+connect is attempted anyway. It touches nothing outside its own DB copy.
 """
 import contextlib, hashlib, io, os, sqlite3, sys, tempfile
 
@@ -40,12 +49,35 @@ _s.close()
 os.environ["HELM_DB"] = COPY
 os.environ["HELM_ROOT"] = ROOT
 
+# ---- network isolation, before any helm import --------------------------
+import types                                               # noqa: E402
+_yf = types.ModuleType("yfinance")
+_yf.Ticker = lambda t: types.SimpleNamespace(
+    fast_info=types.SimpleNamespace(last_price=772.55, display_name=str(t)),
+    options=(), history=lambda *a, **k: None, info={})
+sys.modules["yfinance"] = _yf                              # stand-in, whole run
+IB_ATTEMPTS = []
+try:
+    import ib_insync as _ibi                               # real module, connect disabled
+
+    def _no_connect(self, *a, **k):
+        IB_ATTEMPTS.append((a, k))
+        raise ConnectionRefusedError("verify_w201: IB gateway blocked in the harness")
+    _ibi.IB.connect = _no_connect
+    if hasattr(_ibi.IB, "connectAsync"):
+        _ibi.IB.connectAsync = _no_connect
+except ImportError:
+    pass
+import helm.vol_context as _vc                             # noqa: E402
+_vc.backfill_entry_vol = lambda *a, **k: None              # the post-booking IBKR call
+
 from helm.config import DB_PATH, get_active_account      # noqa: E402
 from helm import risk_cap                                  # noqa: E402
 assert str(DB_PATH) == COPY, DB_PATH
 RC_PATH = risk_cap.__file__
 RC_SHA = hashlib.sha256(open(RC_PATH, "rb").read()).hexdigest()
 print("harness: code from %s\n         db copy  %s (fresh VACUUM INTO of %s)" % (ROOT, COPY, SRC))
+print("         network  yfinance stubbed; IB connect blocked; vol backfill off")
 
 N, FAILS = 0, []
 
@@ -324,18 +356,9 @@ if "--no-pg" not in sys.argv and os.path.isdir(PG):
     html = cl.get("/open/LLY?strategy=LONG_CALL").get_data(as_text=True)
     ok("board page shows the decline", "Declined:</b> " + W in html)
     ok("board page has no tuple text", "(0, " not in html and "risk_cap'" not in html)
-    import types
-    _fake = types.ModuleType("yfinance")            # the board fetches CSP spot from yfinance
-    _fake.Ticker = lambda t: types.SimpleNamespace(fast_info=types.SimpleNamespace(last_price=772.55))
-    _real_yf = sys.modules.get("yfinance")
-    sys.modules["yfinance"] = _fake
-    oc.evaluate_contracts = lambda *a, **k: [dict(META)]
+    oc.evaluate_contracts = lambda *a, **k: [dict(META)]   # spot comes from the yfinance stand-in
     html = cl.get("/open/META?strategy=CSP").get_data(as_text=True)
     ok("board CSP page shows the one-sigma decline (stand-in spot $772.55)", "Declined:</b> " + WC in html)
-    if _real_yf is not None:
-        sys.modules["yfinance"] = _real_yf
-    else:
-        sys.modules.pop("yfinance", None)
     oc.evaluate_contracts = lambda *a, **k: [dict(KO)]
     html = cl.get("/open/KO?strategy=LONG_CALL").get_data(as_text=True)
     ok("board control: 'Suggested size: 16 contracts (sized to 16 by ...)'",
@@ -358,6 +381,18 @@ ok("self-test PASSES restored", restored == 0)
 ok("risk_cap.py byte-identical after the run",
    hashlib.sha256(open(RC_PATH, "rb").read()).hexdigest() == RC_SHA)
 ok("live database untouched (this run wrote only to the copy)", str(DB_PATH) == COPY)
+ok("no IB gateway connection was attempted", not IB_ATTEMPTS, IB_ATTEMPTS[:2])
+# control for that zero: a deliberate connect must be caught by the block
+if "ib_insync" in sys.modules:
+    import helm.ibkr as _hi
+    try:
+        _hi.get_ib()
+        caught = False
+    except Exception:
+        caught = True
+    ok("control: a deliberate get_ib() is blocked and counted", caught and len(IB_ATTEMPTS) == 1)
+else:
+    ok("control: ib_insync not installed here, so nothing can connect", True, "no ib_insync")
 
 print("\n%d checks, %d failed%s" % (N, len(FAILS), (": " + "; ".join(FAILS)) if FAILS else ""))
 sys.exit(1 if FAILS else 0)
