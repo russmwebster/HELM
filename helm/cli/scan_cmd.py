@@ -249,8 +249,7 @@ def _print_declined(declined):
 
 
 def _print_lc_screen(rows):
-    """HELM-101 step 4: the buy-side screen's verdict, shown beside the existing
-    route and routing nothing.
+    """The buy-side screen's verdict (HELM-101 step 4; W195 v2 from 2026-09-27).
 
     Deliberately a separate block rather than a column on the main table. W11's
     lesson is that a column added without its cell shifts every value to its
@@ -261,44 +260,106 @@ def _print_lc_screen(rows):
     The reject histogram is not decoration. A screen that reports only its
     survivors cannot be argued with, and the single most useful thing this one
     can tell you is which gate emptied the board.
+
+    W195: the "Real" column is the real-book FLAG -- HELM informs, never acts
+    (HELM-193). A survivor is suggested for the real book only while the real
+    long-premium sleeve is under 5% (W194), the name holds no long call, and
+    fewer than 2 real long calls were opened today; the rest say why not.
+    Paper routing applies the same limits itself (_paper_generate).
     """
     try:
+        import json as _json
         from helm import lc_screen
     except Exception:
         return
     n_pass, n_total, hist = lc_screen.summarize(rows or [])
     if not n_total:
         return
-    console.print(f"[dim]Long-call screen — {n_pass} of {n_total} pass · "
-                  f"non-routing, books nothing[/dim]")
+
+    def _gates(r):
+        try:
+            return _json.loads(r.get("lc_gates_json") or "null") or {}
+        except Exception:
+            return {}
+
+    mkt = next((g.get("mkt") for g in map(_gates, rows or []) if g.get("mkt")), None) or {}
+    if mkt.get("above") is None:
+        sp = "[red]S&P unknown (%s) -- no new longs[/red]" % (mkt.get("error") or "not read")
+    else:
+        sp = "S&P %s %s vs 200-day %s" % (
+            "[green]above[/green]" if mkt["above"] else "[red]below[/red]",
+            mkt.get("spx"), mkt.get("sma200"))
+    console.print(f"[dim]Long-call screen W195 — {n_pass} of {n_total} pass · bar "
+                  f"{lc_screen.RANK_BAR:.2f} (provisional, review ~2026-10-27) · "
+                  f"max {lc_screen.MAX_NEW_PER_DAY}/day · [/dim]{sp}")
     survivors = sorted((r for r in (rows or []) if r.get("lc_screen_pass")),
                        key=lambda r: (r.get("lc_screen_rank") or 999))
+
+    # Real-book flag inputs. A read failure is shown, never read as "fine".
+    real = {}
+    try:
+        from helm import risk_cap as _rc
+        _acct = get_active_account()
+        real["sleeve"] = _rc.sleeve_view(_acct, "REAL")
+        real["held"] = _rc.held_long_names("REAL")
+        _c = get_conn()
+        try:
+            real["today"] = _c.execute(
+                "SELECT COUNT(*) FROM positions WHERE book='REAL' AND strategy='LONG_CALL' "
+                "AND substr(opened_at,1,10)=?", (date.today().isoformat(),)).fetchone()[0]
+        finally:
+            _c.close()
+    except Exception as _e:
+        real["error"] = "%s: %s" % (type(_e).__name__, _e)
 
     def _f(v, n=1):
         return f"{float(v):.{n}f}" if isinstance(v, (int, float)) else "--"
 
     if survivors:
+        sv = real.get("sleeve") or {}
+        sleeve_block = real.get("error") or sv.get("pct") is None or sv.get("over_cap")
+        slots = lc_screen.MAX_NEW_PER_DAY - (real.get("today") or 0)
         t = Table(box=box.SIMPLE, show_header=True, header_style="dim")
         t.add_column("#", width=3, justify="right")
         t.add_column("Ticker", width=8, no_wrap=True)
         t.add_column("Score", width=6, justify="right")
+        t.add_column("Calm", width=5, justify="right")
+        t.add_column("Cheap", width=5, justify="right")
         t.add_column("IV/HV90", width=8, justify="right")
         t.add_column("HV252", width=6, justify="right")
-        t.add_column("ADX", width=5, justify="right")
         t.add_column("Bias", width=5, justify="right")
+        t.add_column("Real", width=12, no_wrap=True)
         t.add_column("Sell-side route", width=18, no_wrap=True)
         for r in survivors:
-            t.add_row(str(r.get("lc_screen_rank") or "--"),
-                      str(r.get("ticker") or "--"),
+            comp = _gates(r).get("components") or {}
+            tk = str(r.get("ticker") or "").upper()
+            if sleeve_block:
+                verdict = "[red]no: sleeve[/red]"
+            elif tk in (real.get("held") or {}):
+                verdict = "[yellow]no: held[/yellow]"
+            elif slots <= 0:
+                verdict = "[dim]no: 2/day[/dim]"
+            else:
+                verdict = "[green]suggest[/green]"
+                slots -= 1
+            t.add_row(str(r.get("lc_screen_rank") or "--"), tk or "--",
                       _f(r.get("lc_rank_score"), 3),
-                      _f(r.get("iv_hv90_ratio"), 3),
-                      _f(r.get("hv_252")),
-                      _f(r.get("adx")),
-                      _f(r.get("bias_score"), 0),
+                      _f(comp.get("calmness"), 2), _f(comp.get("vol_cheapness"), 2),
+                      _f(r.get("iv_hv90_ratio"), 3), _f(r.get("hv_252")),
+                      _f(r.get("bias_score"), 0), verdict,
                       str(r.get("strategy") or "--"))
         console.print(t)
+        if real.get("error"):
+            console.print(f"[red]  Real flags could not be read ({real['error']}) -- "
+                          f"no real long-call suggestions[/red]")
+        elif sv.get("pct") is None:
+            console.print(f"[red]  Real long-premium sleeve could not be measured "
+                          f"({sv.get('error')}) -- no real long-call suggestions (W194)[/red]")
+        elif sv.get("over_cap"):
+            console.print(f"[red]  Real long-premium sleeve {sv['pct']:.1f}% is at or over "
+                          f"5% -- no real long-call suggestions until it is under (W194/W195)[/red]")
     else:
-        console.print("[dim]  no candidates — nothing cleared every gate[/dim]")
+        console.print("[dim]  no candidates — nothing cleared every gate and the bar[/dim]")
     if hist:
         worst = "  ".join(f"{k} {v}" for k, v in hist.most_common(5))
         console.print(f"[dim]  rejected by: {worst}[/dim]")
@@ -944,11 +1005,21 @@ def run():
     # NON-ROUTING: sets no strategy, books nothing. It writes five lc_*
     # fields which _PASSTHROUGH carries into signals. Wrapped, because a
     # screen that routes nothing must never break a scan that does.
+    #
+    # W195 (2026-09-27): the screen now gates on the S&P 500 being above its
+    # 200-day, read HERE, once per scan (not the market_context row, which
+    # describes the previous session). An unread index is passed as-is and
+    # the screen fails closed on it -- no reading, no new longs.
     try:
         from helm.cli._decision_capture import attach_days_to_earnings
         from helm import lc_screen as _lcs
         attach_days_to_earnings(results)
-        _lcs.screen([r for r in results if not r.get("error")])
+        try:
+            from helm.market_context import spx_vs_200_now
+            _mkt = spx_vs_200_now()
+        except Exception as _e:
+            _mkt = {"above": None, "error": "reading raised %s" % type(_e).__name__}
+        _lcs.screen([r for r in results if not r.get("error")], market=_mkt)
     except Exception:
         pass
 

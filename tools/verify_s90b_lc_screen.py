@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 """Verify the long-call screen and its wiring into helm scan (HELM-101 step 4).
 
+SUPERSEDED FOR THE GATES (W195, 2026-09-27): this pins lc-screen-v1 -- G1 as a
+gate, the 60/40 cheapness/trend rank, no market gate. Against v2 its eight
+v1 gate/rank checks fail BY DESIGN (G1 is recorded not gated; rank is 50/50
+calm/cheap; the S&P gate fails closed when no reading is passed). The wiring
+half still holds. v2 is verified by _s123/verify_w195.py.
+
 Two halves, and they are different kinds of evidence:
 
   * The lc_screen unit checks exercise new code. They pass as soon as the

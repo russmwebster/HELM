@@ -710,8 +710,20 @@ def display_diagonal_put(ticker, spot, diagonals, args):
     _confirm_diagonal_put(ticker, spot, diagonals)
 
 
+W202_PARKED = ("Booking a real put diagonal is parked (W202): its booking code has a "
+               "known fault (it looks up an accounts column that does not exist), so "
+               "HELM refuses here rather than crash part-way. Nothing was recorded.")
+
+
 def _confirm_diagonal_put(ticker, spot, diagonals):
-    """Prompt, confirm fills, and log the two-leg put diagonal position."""
+    """Prompt, confirm fills, and log the two-leg put diagonal position.
+
+    W202 (Russ, 2026-09-27): PARKED. Refuses before any prompt; the real fix
+    waits until put diagonals are traded. The body below is kept as it was --
+    it is what W202 will fix (accounts has no `name` column, and it should
+    book through open_multileg_with_snapshot like _confirm_diagonal)."""
+    console.print(f"  [red]Not available:[/red] {W202_PARKED}")
+    return
     choice = Prompt.ask('  Select diagonal', default='1',
         choices=[str(i+1) for i in range(len(diagonals))] + ['n'], show_choices=False)
     if choice.lower() == 'n':

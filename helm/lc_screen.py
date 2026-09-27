@@ -17,6 +17,27 @@ it left open settled by Russ in s90:
   * The screen is NON-ROUTING in this ship. It records a verdict and a rank and
     books nothing. Paper routing is a separate, later switch.
 
+W195 (Russ, 2026-09-27) -- lc-screen-v2. What changed from v1, and what did not:
+  * G1 (bias >= +2 and the full MA stack) is NO LONGER A GATE. Bias and the
+    stack are still measured and recorded on every row (gates['g1']), marked
+    gate: false, so the log can still say what G1 would have done.
+  * NEW market gate: the S&P 500 must be above its 200-day average, read at
+    scan time and passed in by the caller (`market=`). Unknown fails CLOSED:
+    no reading, no new longs.
+  * Rank = 50% calmness + 50% cheapness, no RSI penalty. Calmness is 1 at
+    HV252 <= 20%, 0 at 40% (the G5 ceiling), linear between. Cheapness is the
+    unchanged vol_cheapness (IV / HV90). Trend quality and the RSI penalty
+    are still computed and recorded as components; neither is scored.
+  * A fixed rank BAR of 0.72 is part of the pass: a name clearing every gate
+    but scoring under the bar is rejected 'below bar'. PROVISIONAL -- review
+    after a month of paper results (~2026-10-27). Chosen from the 73-scan
+    re-score and the per-day replay (_s123/w195_rescore.py,
+    _s123/w195_replay_daily.py).
+  * At most MAX_NEW_PER_DAY (2) new long calls a day, and one long call per
+    name. Both are ROUTING limits, so they are enforced by the callers that
+    route (paper generate; the scan footer's real suggestions), not here.
+  G3, G4 and G5 are unchanged.
+
 Nothing here reads or writes the database, imports rich, or touches the sell
 side. It is a pure function of a list of scan rows, which is what makes it
 testable against a real board without a broker.
@@ -41,7 +62,17 @@ RSI_PENALTY_FROM = 70.0  # extension is a rank penalty, never a gate
 RSI_PENALTY_FULL = 90.0
 RSI_PENALTY_MAX = 0.10
 
-SCREEN_VERSION = 'lc-screen-v1 (s90)'
+# W195 (Russ, 2026-09-27) -- see module docstring.
+RANK_BAR = 0.72          # PROVISIONAL: review after a month of paper results (~2026-10-27)
+MAX_NEW_PER_DAY = 2      # routing limit, enforced by the callers that route
+W_CALM = 0.50
+W_CHEAP = 0.50
+CALM_FULL_HV252 = 20.0   # calmness 1.0 at or below this HV252
+CALM_ZERO_HV252 = 40.0   # calmness 0.0 at or above (= the G5 ceiling)
+# W_VOL / W_TREND / the RSI constants above are v1's. Kept because the
+# components they produce are still recorded; the v2 score uses none of them.
+
+SCREEN_VERSION = 'lc-screen-v2 (W195)'
 
 # W70 / HELM-125 (s91): how far INSIDE the G3 gate a name must sit before it may
 # ROUTE. The board verdict is unchanged -- the screen still publishes pass/fail
@@ -130,6 +161,23 @@ def vol_cheapness(ratio):
     return round((G3_RATIO_MAX - r) / (G3_RATIO_MAX - 0.70), 4)
 
 
+def calmness(hv252):
+    """0..1 from the underlying's own one-year realised vol (W195).
+
+    1.0 at HV252 <= 20%, 0.0 at 40% (the G5 ceiling) and above, linear
+    between. The level effect Hu & Jacobs describe: calls on calm names
+    return more. None when unmeasured -- never scored as calm.
+    """
+    h = _num(hv252)
+    if h is None:
+        return None
+    if h <= CALM_FULL_HV252:
+        return 1.0
+    if h >= CALM_ZERO_HV252:
+        return 0.0
+    return round((CALM_ZERO_HV252 - h) / (CALM_ZERO_HV252 - CALM_FULL_HV252), 4)
+
+
 def trend_quality(bias, adx):
     """0..1 from directional bias, modulated by trend strength.
 
@@ -170,8 +218,13 @@ def rsi_penalty(rsi):
 
 # -- the gates ---------------------------------------------------------------
 
-def evaluate_gates(row, hv252_quintile=None):
-    """Run G1-G5 over one scan row. Returns (gates, failures).
+def evaluate_gates(row, hv252_quintile=None, market=None):
+    """Run the gates over one scan row. Returns (gates, failures).
+
+    W195: G1 is recorded, not gated. `market` is the caller's scan-time S&P
+    reading, {'above': bool|None, 'spx', 'sma200', 'asof', 'source', 'error'};
+    None or above=None fails the market gate CLOSED. The rank bar is applied
+    in screen(), because it needs the score.
 
     gates is the full record -- every gate's inputs, threshold and verdict,
     plus the logged-not-acted quintile alternative. It is written to
@@ -195,13 +248,20 @@ def evaluate_gates(row, hv252_quintile=None):
     # G1 -- direction. Bias AND the full stack: the stack requirement is not
     # redundant, it drops a strong bounce inside a downtrend (ABT in the
     # original dry run: bias +3 with price below its own SMA200).
+    # W195: RECORDED, NOT GATED. Measured exactly as v1 did, so the log can
+    # still say what G1 would have done; it no longer adds a failure.
     g1_bias_ok = bias is not None and bias >= G1_BIAS_MIN
     g1_stack_ok = (spot is not None and s50 is not None and s200 is not None
                    and spot > s50 > s200)
-    if not g1_bias_ok:
-        fails.append('G1 bias')
-    elif not g1_stack_ok:
-        fails.append('G1 stack')
+
+    # W195 market gate -- S&P 500 above its 200-day, read at scan time by the
+    # caller. Fails closed: an unread index is no new longs, never a pass.
+    m = market or {}
+    mkt_above = m.get('above')
+    if mkt_above is None:
+        fails.append('S&P unknown')
+    elif not mkt_above:
+        fails.append('S&P below 200d')
 
     # G3 -- vol not expensive, with a buffer. This replaces BOTH the old
     # IVR < 35 and the design draft's VRP <= 0 on HV30, which section 7.2
@@ -258,9 +318,15 @@ def evaluate_gates(row, hv252_quintile=None):
 
     gates = {
         'version': SCREEN_VERSION,
+        'mkt': {'above': mkt_above, 'spx': m.get('spx'), 'sma200': m.get('sma200'),
+                'asof': m.get('asof'), 'source': m.get('source'),
+                'error': m.get('error'), 'ok': bool(mkt_above),
+                'note': 'S&P 500 above its 200-day at scan time; fails closed'},
         'g1': {'bias': bias, 'bias_min': G1_BIAS_MIN, 'bias_ok': g1_bias_ok,
                'spot': spot, 'sma_50': s50, 'sma_200': s200,
-               'stack_ok': g1_stack_ok},
+               'stack_ok': g1_stack_ok,
+               'ok': bool(g1_bias_ok and g1_stack_ok), 'gate': False,
+               'note': 'recorded, not gated (W195)'},
         'g3': {'iv_hv90_ratio': ratio, 'max': G3_RATIO_MAX, 'ok': g3_ok,
                'hv_90': _num(row.get('hv_90')),          # the gate denominator
                'hv_90_ex_earn': _num(row.get('hv_90_ex_earn')),
@@ -285,19 +351,17 @@ def evaluate_gates(row, hv252_quintile=None):
 
 
 def rank_score(row):
-    """The 60/40 blend, minus the RSI extension penalty. None if unscoreable.
+    """W195: 50% calmness + 50% cheapness, no RSI penalty. None if either
+    input is unmeasured -- an unscoreable name can never clear the bar.
 
-    Weights are explicitly provisional -- the promotion criterion in the
-    addendum is a test against the calibration log, not more literature. They
-    are recorded in the gates blob on every row so a later scoring pass can
-    re-weight from stored inputs rather than re-running the scan.
+    The weights and every component are recorded in the gates blob on every
+    row, so a later pass can re-weight from stored inputs.
     """
     v = vol_cheapness(row.get('iv_hv90_ratio'))
-    t = trend_quality(row.get('bias_score') if row.get('bias_score') is not None
-                      else row.get('auto_bias_score'), row.get('adx'))
-    if v is None or t is None:
+    c = calmness(row.get('hv_252'))
+    if v is None or c is None:
         return None
-    return round(max(0.0, W_VOL * v + W_TREND * t - rsi_penalty(row.get('rsi_14'))), 4)
+    return round(W_CALM * c + W_CHEAP * v, 4)
 
 
 def hv252_quintile(rows):
@@ -313,14 +377,18 @@ def hv252_quintile(rows):
     return round(vals[idx], 4)
 
 
-def screen(rows):
+def screen(rows, market=None):
     """Annotate a whole scan board in place and return the survivors, ranked.
+
+    W195: `market` is the scan-time S&P reading (see evaluate_gates); a pass
+    now also needs lc_rank_score >= RANK_BAR. Survivors are every name that
+    passed -- the 2-a-day and one-per-name limits belong to the router.
 
     Writes five fields onto every row, passing or not:
       lc_screen_pass    1 / 0
       lc_screen_rank    1-based among survivors, None otherwise
       lc_screen_reject  comma-joined failing gates, None when it passed
-      lc_rank_score     the 60/40 blend
+      lc_rank_score     the W195 50/50 calmness/cheapness score
       lc_gates_json     the full gate record, including the logged alternative
 
     ROUTING IS NOT TOUCHED. This never sets row['strategy'] and never books
@@ -333,12 +401,23 @@ def screen(rows):
 
     survivors = []
     for r in rows:
-        gates, fails = evaluate_gates(r, hv252_quintile=q)
+        gates, fails = evaluate_gates(r, hv252_quintile=q, market=market)
         score = rank_score(r)
+        # The bar is checked on every row and recorded on every row, but only
+        # NAMED as the failure when every gate passed -- a G3 reject scores
+        # under the bar by construction, and listing it twice would bury the
+        # histogram's one job (which gate emptied the board).
+        bar_ok = score is not None and score >= RANK_BAR
+        if not fails and not bar_ok:
+            fails.append('below bar')
         gates['score'] = score
-        gates['weights'] = {'vol': W_VOL, 'trend': W_TREND}
+        gates['bar'] = {'bar': RANK_BAR, 'score': score, 'ok': bar_ok,
+                        'note': 'provisional; review ~2026-10-27 (W195)'}
+        gates['weights'] = {'calm': W_CALM, 'cheap': W_CHEAP}
         gates['components'] = {
+            'calmness': calmness(r.get('hv_252')),
             'vol_cheapness': vol_cheapness(r.get('iv_hv90_ratio')),
+            # v1 components -- recorded, not scored (W195).
             'trend_quality': trend_quality(
                 r.get('bias_score') if r.get('bias_score') is not None
                 else r.get('auto_bias_score'), r.get('adx')),

@@ -155,30 +155,53 @@ class OverCapRefusal(Exception):
     contract'. str() is the logged reason: "refused by W160: ..." for a CSP,
     "refused by W201: ..." for a long call or diagonal."""
 
-    def __init__(self, rule, strategy, amount, detail=None):
+    def __init__(self, rule, strategy, amount, detail=None, message=None):
         self.rule, self.strategy, self.amount = rule, (strategy or "").upper(), amount
-        self.detail = detail or over_cap_text(strategy, amount)
-        super().__init__("refused by %s: %s" % (rule, self.detail))
+        self.detail = detail or (over_cap_text(strategy, amount) if amount is not None else "")
+        # `message` replaces the whole reason when the cap could not run at all
+        # (Russ, 2026-09-27: "refused: no IV, cap couldn't run").
+        super().__init__(message or "refused by %s: %s" % (rule, self.detail))
 
 
-def rule_for(strategy):
-    """Which decision declines this strategy at one contract."""
+# W195 real-book flags (see real_long_call_flags). They decline a real long
+# call through the same 0-and-override path as W160/W201, so the binding
+# names which rule said no.
+W195_SLEEVE = "w195_sleeve"
+W195_HELD = "w195_held"
+
+
+def rule_for(strategy, binding=None):
+    """Which decision declines this strategy (W160 / W201), or, for the W195
+    real-book flags, which rule raised the flag."""
+    if binding == W195_SLEEVE:
+        return "W194"
+    if binding == W195_HELD:
+        return "W195"
     return "W160" if (strategy or "").upper() == "CSP" else "W201"
 
 
 def override_line(strategy, binding, n):
     """What the CLI prints when Russ types a count over a decline."""
-    limit = ("the 5% cash ceiling" if (binding or "").startswith("cash_ceiling")
-             else "the $5,000 cap")
-    return "%d contract(s) over %s (%s) -- your call, recorded as typed" % (
-        n, limit, rule_for(strategy))
+    b = binding or ""
+    if b == W195_SLEEVE:
+        what = "with the real long-premium sleeve at or over 5%"
+    elif b == W195_HELD:
+        what = "in a name that already has an open long call"
+    else:
+        what = "over " + ("the 5% cash ceiling" if b.startswith("cash_ceiling")
+                          else "the $5,000 cap")
+    return "%d contract(s) %s (%s) -- your call, recorded as typed" % (
+        n, what, rule_for(strategy, binding))
 
 
 def override_note(strategy, binding, n, size_note):
     """What is WRITTEN to positions.notes when a declined trade is booked by
-    override (Russ, 2026-09-27). Searchable: notes LIKE '%OVER-CAP OVERRIDE%'."""
-    return "OVER-CAP OVERRIDE (%s): %s; booked %d contract(s) as typed" % (
-        rule_for(strategy), size_note, n)
+    override (Russ, 2026-09-27). Searchable: notes LIKE '%OVERRIDE (W%'.
+    A cap (W160/W201/W194) is 'OVER-CAP OVERRIDE'; W195's one-per-name is
+    not a cap, so it says 'RULE OVERRIDE'."""
+    prefix = "RULE OVERRIDE" if binding == W195_HELD else "OVER-CAP OVERRIDE"
+    return "%s (%s): %s; booked %d contract(s) as typed" % (
+        prefix, rule_for(strategy, binding), size_note, n)
 
 
 def _money(x):
@@ -389,6 +412,131 @@ def sleeve_view(account_id, book="REAL", db=None):
 
 
 # ---------------------------------------------------------------------------
+# W195 -- the long-call screen's limits (Russ, 2026-09-27)
+#   REAL : a FLAG. No real long-call suggestion while the real sleeve is at or
+#          over 5%, or while the name already has an open long call (a call
+#          diagonal's long leg counts). Declines through the W201 path, so a
+#          typed count overrides and the override is recorded.
+#   PAPER: ENFORCED, and the paper sleeve counts ONLY long calls the W195
+#          screen itself booked (Russ chose option (a): the paper test
+#          measures the screen; paper's diagonals would measure the diagonal
+#          sleeve instead -- they alone held 10.6% of the account on
+#          2026-09-27, W199).
+# ---------------------------------------------------------------------------
+
+# A put diagonal's long leg is a put: not "a long call in the name".
+HELD_LONG_CALL_STRATEGIES = ("LONG_CALL", "DIAGONAL", "PMCC")
+
+
+def held_long_names(book="REAL", db=None, strategies=HELD_LONG_CALL_STRATEGIES):
+    """{ticker: strategy} for every OPEN position in `book` holding a long call."""
+    conn = _conn(db)
+    try:
+        rows = conn.execute(
+            "SELECT ticker, strategy FROM positions WHERE book=? AND status='OPEN' "
+            "AND strategy IN (%s)" % ",".join("?" for _ in strategies),
+            (book,) + tuple(strategies)).fetchall()
+    finally:
+        conn.close()
+    return {r["ticker"].upper(): r["strategy"] for r in rows}
+
+
+def real_long_call_flags(ticker, account_id, db=None):
+    """[(binding, text), ...] -- the W195 reasons HELM will not SUGGEST a
+    real long call on `ticker`. Empty = no flag. Read-only; flags, never acts.
+
+    Fails CLOSED on the sleeve: a sleeve that cannot be measured is a flag
+    that says so, never a silent pass (an unmeasured risk must not read as a
+    small one)."""
+    flags = []
+    sv = sleeve_view(account_id, "REAL", db=db)
+    if sv.get("pct") is None:
+        flags.append((W195_SLEEVE, "the real long-premium sleeve could not be "
+                      "measured (%s) -- no long-call suggestion without it (W194)"
+                      % (sv.get("error") or "no account value")))
+    elif sv.get("over_cap"):
+        flags.append((W195_SLEEVE, "the real long-premium sleeve is %.1f%% of the "
+                      "account, at or over the 5%% cap -- no new long calls while it "
+                      "is (W194)" % sv["pct"]))
+    try:
+        held = held_long_names("REAL", db=db)
+    except Exception as exc:
+        held, flags = {}, flags + [(W195_HELD, "open long calls could not be read "
+                                    "(%s) -- one long call per name unchecked (W195)" % exc)]
+    t = (ticker or "").upper()
+    if t in held:
+        flags.append((W195_HELD, "%s already has an open %s -- one long call per "
+                      "name (W195)" % (t, held[t])))
+    return flags
+
+
+def apply_w195_real_flags(strategy, ticker, account_id, decision, db=None):
+    """Fold the W195 real flags into a (n, binding, note) sizing decision.
+
+    LONG_CALL only. A flagged name becomes n = 0 (declined, override by
+    typed count) with the flag's binding; a trade W201 already declined keeps
+    W201 as its binding and gains the flags in its note."""
+    n, binding, note = decision
+    if (strategy or "").upper() != "LONG_CALL" or not ticker:
+        return decision
+    flags = real_long_call_flags(ticker, account_id, db=db)
+    if not flags:
+        return decision
+    text = "; ".join(t for _, t in flags)
+    if n is not None and n <= 0:
+        return n, binding, ("%s; also %s" % (note, text)) if note else text
+    return 0, flags[0][0], text
+
+
+W195_ORIGIN = "LC_SCREEN"
+W195_VERSION_LIKE = '%"version": "lc-screen-v2%'
+
+
+def w195_paper_sleeve(account_id, db=None):
+    """The PAPER sleeve W195 is capped on: OPEN paper long calls the v2 screen
+    booked (origin LC_SCREEN, originating signal scored by lc-screen-v2).
+    Same shape as sleeve_view. v1 LC_SCREEN long calls and paper diagonals are
+    NOT counted -- Russ's option (a), 2026-09-27."""
+    try:
+        conn = _conn(db)
+    except Exception as exc:
+        return {"error": str(exc), "value": None, "pct": None, "over_cap": None}
+    try:
+        ids = {r[0] for r in conn.execute(
+            "SELECT p.id FROM positions p JOIN signals s ON s.id = p.signal_id "
+            "WHERE p.book='PAPER' AND p.status='OPEN' AND p.strategy='LONG_CALL' "
+            "AND p.origin_screen=? AND s.lc_gates_json LIKE ?",
+            (W195_ORIGIN, W195_VERSION_LIKE))}
+        positions = [p for p in sleeve_positions(conn, "PAPER") if p["position_id"] in ids]
+        acct = conn.execute("SELECT portfolio_value, buying_power FROM accounts WHERE id=?",
+                            (account_id,)).fetchone()
+    except Exception as exc:
+        return {"error": str(exc), "value": None, "pct": None, "over_cap": None}
+    finally:
+        conn.close()
+    value = round(sum(p["cost"] for p in positions), 2)
+    account_value = (acct["portfolio_value"] or acct["buying_power"] or 0) if acct else 0
+    pct = round(100.0 * value / account_value, 2) if account_value else None
+    return {"book": "PAPER", "scope": "W195 long calls only", "value": value,
+            "account_value": account_value or None, "pct": pct,
+            "cap_pct": SLEEVE_CAP_PCT * 100.0,
+            "over_cap": (pct is not None and pct >= SLEEVE_CAP_PCT * 100.0),
+            "positions": positions}
+
+
+def position_long_cost(position_id, db=None):
+    """The open long leg's cost for one position (the sleeve's measure), or None."""
+    conn = _conn(db)
+    try:
+        leg = _open_long_leg(conn, position_id)
+    finally:
+        conn.close()
+    if not leg:
+        return None
+    return debit_risk(leg.get("open_price"), leg.get("contracts"), leg.get("multiplier") or 100)
+
+
+# ---------------------------------------------------------------------------
 # Self-test -- no network, no writes. `python3 -m helm.risk_cap --selftest`
 # ---------------------------------------------------------------------------
 
@@ -490,6 +638,9 @@ def _selftest():
           "refused by W160: one contract (one-sigma move) is $12,034, over the $5,000 cap")
     check("paper LC refusal text", str(OverCapRefusal("W201", "LONG_CALL", 16150)),
           "refused by W201: one contract is $16,150, over the $5,000 cap")
+    e = OverCapRefusal("W160", "CSP", None, message="refused: no IV, cap couldn't run")
+    check("paper CSP no-IV refusal text", (str(e), e.rule, e.amount),
+          ("refused: no IV, cap couldn't run", "W160", None))
     check("rule_for CSP / LC / DIAGONAL", (rule_for("CSP"), rule_for("LONG_CALL"),
                                             rule_for("DIAGONAL")), ("W160", "W201", "W201"))
     n, b, note = size_decision("CSP", 0, "risk_cap", 12034)
@@ -500,6 +651,37 @@ def _selftest():
     check("override note CSP", override_note("CSP", b, 1, note),
           "OVER-CAP OVERRIDE (W160): one contract (one-sigma move) is $12,034, over the "
           "$5,000 cap -- not taken as a CSP (W160); booked 1 contract(s) as typed")
+
+    # --- W195 real-book flags: wording + fold (pure; the DB reads are verified
+    # on a copy by _s123/verify_w195.py)
+    check("W195 rule_for sleeve / held", (rule_for("LONG_CALL", W195_SLEEVE),
+                                          rule_for("LONG_CALL", W195_HELD)), ("W194", "W195"))
+    check("W195 override line sleeve", override_line("LONG_CALL", W195_SLEEVE, 2),
+          "2 contract(s) with the real long-premium sleeve at or over 5% (W194) -- "
+          "your call, recorded as typed")
+    check("W195 override line held", override_line("LONG_CALL", W195_HELD, 1),
+          "1 contract(s) in a name that already has an open long call (W195) -- "
+          "your call, recorded as typed")
+    check("W195 override note held", override_note("LONG_CALL", W195_HELD, 1, "KO held"),
+          "RULE OVERRIDE (W195): KO held; booked 1 contract(s) as typed")
+    check("W195 override note sleeve", override_note("LONG_CALL", W195_SLEEVE, 1, "x")[:22],
+          "OVER-CAP OVERRIDE (W19")
+    _saved = globals()["real_long_call_flags"]
+    try:
+        globals()["real_long_call_flags"] = lambda t, a, db=None: [(W195_SLEEVE, "sleeve 8.7%")]
+        check("W195 fold: sized trade declined", apply_w195_real_flags(
+            "LONG_CALL", "KO", "a", (3, "risk_cap", "sized to 3 by x")),
+            (0, W195_SLEEVE, "sleeve 8.7%"))
+        check("W195 fold: W201 decline keeps W201", apply_w195_real_flags(
+            "LONG_CALL", "LLY", "a", (0, "risk_cap", "one contract is $16,095 (W201)")),
+            (0, "risk_cap", "one contract is $16,095 (W201); also sleeve 8.7%"))
+        check("W195 fold: diagonal untouched", apply_w195_real_flags(
+            "DIAGONAL", "KO", "a", (2, "risk_cap", "n")), (2, "risk_cap", "n"))
+        globals()["real_long_call_flags"] = lambda t, a, db=None: []
+        check("W195 fold: no flags untouched", apply_w195_real_flags(
+            "LONG_CALL", "KO", "a", (2, "risk_cap", "n")), (2, "risk_cap", "n"))
+    finally:
+        globals()["real_long_call_flags"] = _saved
 
     if failures:
         print("FAIL (%d):" % len(failures))

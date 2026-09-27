@@ -155,7 +155,7 @@ PAPER_REFUSALS_DDL = """CREATE TABLE IF NOT EXISTS paper_refusals (
     refused_at        TEXT NOT NULL,      -- local time, like positions.opened_at
     ticker            TEXT NOT NULL,
     strategy          TEXT NOT NULL,
-    rule              TEXT NOT NULL,      -- 'W160' (CSP) | 'W201' (long call, diagonals)
+    rule              TEXT NOT NULL,      -- 'W160' (CSP) | 'W201' (long call, diagonals) | 'W194' (W195 sleeve)
     one_contract_risk REAL,               -- the $ the rule measured; NULL = not measurable
     reason            TEXT NOT NULL,      -- 'refused by W160: one contract ...'
     signal_id         TEXT,
@@ -302,6 +302,52 @@ def _lc_routable_survivors() -> list:
         conn.close()
 
 
+def _lc_booked_today() -> int:
+    """W195: buy-wing long calls the paper book opened today (local date).
+    The 2-a-day limit counts bookings, so it holds across every scan and
+    every generate run in the day."""
+    from datetime import date
+    conn = get_conn()
+    try:
+        return conn.execute(
+            "SELECT COUNT(*) FROM positions WHERE book='PAPER' AND strategy='LONG_CALL' "
+            "AND origin_screen=? AND substr(opened_at,1,10)=?",
+            (LC_SCREEN, date.today().isoformat())).fetchone()[0]
+    finally:
+        conn.close()
+
+
+def _w195_gate(ticker, seen, booked_today, sleeve):
+    """W195 paper limits, in order. Returns None (book it) or (reason, refusal):
+    a refusal is an OverCapRefusal to log to paper_refusals, else None.
+
+      1. one long call per name -- any OPEN paper LONG_CALL on the ticker,
+         whatever booked it (paper diagonals do not count: option (a))
+      2. at most lc_screen.MAX_NEW_PER_DAY buy-wing bookings today
+      3. the paper W195 sleeve (W195 long calls only) under 5% BEFORE the
+         trade -- the replay's rule; one trade may carry it over, the next
+         is refused. Unmeasurable fails closed.
+    """
+    from helm.lc_screen import MAX_NEW_PER_DAY
+    from helm.risk_cap import OverCapRefusal, SLEEVE_CAP_PCT
+    if (ticker, "LONG_CALL") in seen:
+        return "one long call per name (W195): already open in paper book", None
+    if booked_today >= MAX_NEW_PER_DAY:
+        return ("daily limit (W195): %d buy-wing long calls already booked today"
+                % booked_today), None
+    val, acct = sleeve.get("value"), sleeve.get("account_value")
+    if val is None or not acct:
+        msg = ("refused by W194: the W195 paper sleeve could not be measured (%s)"
+               % (sleeve.get("error") or "no account value"))
+        return msg, OverCapRefusal("W194", "LONG_CALL", None, message=msg)
+    if val >= SLEEVE_CAP_PCT * acct:
+        msg = ("refused by W194: W195 paper long calls hold $%s, %.2f%% of $%s -- "
+               "at or over the 5%% sleeve" % (format(int(round(val)), ","),
+                                              100.0 * val / acct, format(int(round(acct)), ",")))
+        return msg, OverCapRefusal("W194", "LONG_CALL", None, message=msg)
+    return None
+
+
 def paper_generate() -> dict:
     """Open HELM's paper picks for the latest run's passed-on, single-leg field.
     Returns a summary dict; prints a visible summary."""
@@ -369,7 +415,17 @@ def paper_generate() -> dict:
     #
     # Same guards as the sell pass (open in the real book, already open in
     # paper, no spot), plus the W70 routing margin inside _lc_routable_survivors.
+    #
+    # W195 (Russ, 2026-09-27): survivors are already past the v2 gates and the
+    # 0.72 bar (lc_screen). Here, in rank order: one long call per name, at
+    # most 2 buy-wing bookings a day, and the 5% sleeve measured on the W195
+    # paper long calls ONLY (option (a)). A held name does not use up a daily
+    # slot -- the next-ranked name is tried.
+    from helm import risk_cap as _rc
+    from helm.config import get_active_account
     lc_field = _lc_routable_survivors()
+    booked_today = _lc_booked_today() if lc_field else 0
+    sleeve = _rc.w195_paper_sleeve(get_active_account()) if lc_field else {}
     for sig in lc_field:
         ticker = sig.get("ticker")
         spot = sig.get("spot_price")
@@ -378,8 +434,12 @@ def paper_generate() -> dict:
         if strategy not in eligible:
             skipped.append((ticker, strategy, "LONG_CALL not paperable"))
             continue
-        if (ticker, strategy) in seen:
-            skipped.append((ticker, strategy, "already open in paper book"))
+        blocked = _w195_gate(ticker, seen, booked_today, sleeve)
+        if blocked:
+            reason, refusal = blocked
+            if refusal is not None:
+                _log_refusal(sig, ticker, strategy, LC_SCREEN, refusal)
+            skipped.append((ticker, strategy, reason))
             continue
         if spot is None:
             skipped.append((ticker, strategy, "no scan spot_price"))
@@ -392,6 +452,17 @@ def paper_generate() -> dict:
 
         booked.append((ticker, strategy, pos_id))
         seen.add((ticker, strategy))
+        booked_today += 1
+        try:
+            _cost = _rc.position_long_cost(pos_id)
+        except Exception:
+            _cost = None
+        if _cost is None or sleeve.get("value") is None:
+            # Cannot account for what was just booked: stop routing rather
+            # than let the next trade pass on a sleeve that is now wrong.
+            sleeve = {"value": None, "error": "cost of %s unreadable" % pos_id}
+        else:
+            sleeve = dict(sleeve, value=sleeve["value"] + _cost)
 
     _print_summary(console, field, lc_field, booked, skipped)
     # W21's lesson, applied here before it can bite: both fields are reported

@@ -147,6 +147,57 @@ def _yf_fetch(symbol, start, end):
     return out
 
 
+# --- W195: the S&P reading the long-call screen gates on, at SCAN time ------
+
+SPX_STALE_DAYS = 5      # a last bar older than this (calendar days) is no reading
+
+
+def spx_vs_200_now(fetcher=None, today=None):
+    """S&P 500 vs its 200-day average, read now, for the W195 market gate.
+
+    Deliberately NOT the market_context row: that row describes the PREVIOUS
+    session and is written once a day, while the screen runs on every scan.
+    During a session yfinance's last ^GSPC bar is today's, priced live; the
+    200-day average includes it (the same arithmetic as _sma, target = last
+    bar).
+
+    Returns {'above', 'spx', 'sma200', 'asof', 'source', 'error'}. Any failure
+    -- fetch raised, empty frame, fewer than 200 bars, a last bar more than
+    SPX_STALE_DAYS old -- returns above=None with the reason, and the screen
+    fails closed on None. Never raises.
+    """
+    from datetime import date as _date
+    today = today or _date.today()
+    out = {"above": None, "spx": None, "sma200": None, "asof": None,
+           "source": "yfinance:%s" % SYMBOLS["spx"], "error": None}
+    fetcher = fetcher or _yf_fetch
+    try:
+        got = fetcher(SYMBOLS["spx"], today - timedelta(days=LOOKBACK_DAYS),
+                      today + timedelta(days=1))
+    except Exception as e:                          # reported, never swallowed
+        out["error"] = "fetch raised %s" % type(e).__name__
+        return out
+    if not got:
+        out["error"] = "empty frame, no exception"
+        return out
+    dates = sorted(d for d in got if d <= today)
+    if not dates:
+        out["error"] = "no bar on or before %s" % today
+        return out
+    last = dates[-1]
+    out["asof"] = str(last)
+    if (today - last).days > SPX_STALE_DAYS:
+        out["error"] = "stale: last bar %s" % last
+        return out
+    if len(dates) < SMA_SLOW:
+        out["error"] = "fewer than %d bars to %s" % (SMA_SLOW, last)
+        return out
+    s200 = sum(got[d] for d in dates[-SMA_SLOW:]) / float(SMA_SLOW)
+    spx = got[last]
+    out.update(spx=round(spx, 2), sma200=round(s200, 2), above=bool(spx > s200))
+    return out
+
+
 def _band(vix):
     if vix is None:
         return None

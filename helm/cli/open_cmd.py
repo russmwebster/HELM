@@ -573,6 +573,10 @@ def suggest_contracts(strategy: str, strike: float, mid: float,
     mid for CSP / long call / long put, and the LONG LEG's mid for the
     diagonal family (DIAGONAL, PMCC, DIAGONAL_PUT).
 
+    W195: a REAL long call is also declined (0, override by typed count)
+    while the real long-premium sleeve is at or over 5% or the name already
+    holds a long call -- risk_cap.apply_w195_real_flags.
+
     0 is a decline, not "one contract" (HELM-110 s85):
       COVERED_CALL  -- fewer than 100 shares held
       CSP           -- one contract over the $5,000 one-sigma cap or the 5%
@@ -641,7 +645,15 @@ def suggest_contracts(strategy: str, strike: float, mid: float,
                             else (by_cash, "cash_ceiling"))
             if raw > 20:
                 raw, binding = 20, "ceiling"
-            return risk_cap.size_decision(strategy, raw, binding, debit_1)
+            # W195 (Russ, 2026-09-27): on the REAL book a long call is not
+            # suggested while the real long-premium sleeve is at or over 5%,
+            # or while the name already holds a long call. A flag, not a
+            # block: it declines like W201 (0), and a typed count overrides.
+            # Every caller of this function sizes a REAL trade -- the paper
+            # book sizes in helm/cli/_paper_open.py and never comes here.
+            return risk_cap.apply_w195_real_flags(
+                strategy, ticker, account_id,
+                risk_cap.size_decision(strategy, raw, binding, debit_1))
 
         if strategy == "CSP":
             # W160: one-sigma $ per contract against $5,000; collateral
@@ -1374,7 +1386,7 @@ def confirm_and_log(ticker: str, strategy: str, contracts: list, config: dict,
     from helm import risk_cap as _rc_ov
     if num_contracts <= 0:
         console.print("[dim]Nothing was recorded"
-                      + (" -- declined (%s)." % _rc_ov.rule_for(strategy) if declined_over_cap
+                      + (" -- declined (%s)." % _rc_ov.rule_for(strategy, binding) if declined_over_cap
                          else " -- zero contracts.") + "[/dim]")
         console.print()
         return

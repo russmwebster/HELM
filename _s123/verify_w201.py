@@ -111,6 +111,11 @@ def feed(text):
 
 
 import helm.cli.open_cmd as oc                             # noqa: E402
+# W195 (2026-09-27) adds real-book long-call FLAGS (sleeve >= 5%, name held)
+# that decline through this same path. The live book's real sleeve is over 5%,
+# so every real long call here would read W194. They are switched off for
+# this harness -- it tests W160/W201 -- and verified in _s123/verify_w195.py.
+risk_cap.real_long_call_flags = lambda *a, **k: []
 A = get_active_account()
 print("         account  %s\n" % A)
 
@@ -267,6 +272,21 @@ ok("  ... and the override is recorded in positions.notes",
        "select notes from positions where ticker='AMAT' and strategy='DIAGONAL' and book='REAL' "
        "order by created_at desc limit 1").fetchone()[0] or ""))
 
+print("\n-- 3b. W202 parked: a real put diagonal is refused, not crashed")
+REAL_DGP = "select count(*) from positions where strategy='DIAGONAL_PUT' and book='REAL'"
+g0 = count(REAL_DGP)
+with feed("1\n1\n4.10\n12.00\ny\n") as out:
+    try:
+        dg._confirm_diagonal_put("AMAT", 230.0, [dict(D)])
+        crashed = None
+    except Exception as exc:          # the pre-W202 behaviour: OperationalError
+        crashed = exc
+t = out.getvalue()
+ok("put diagonal: refused with the W202 message, no crash",
+   crashed is None and "Not available:" in t and "parked (W202)" in t, crashed or t.strip()[:120])
+ok("  ... before any prompt, and nothing written",
+   "Select diagonal" not in t and count(REAL_DGP) == g0)
+
 # ------------------------------------------------------------- 4. paper
 print("\n-- 4. paper book (_book_and_stamp -> bookers)")
 import helm.cli._paper_open as po                          # noqa: E402
@@ -323,9 +343,12 @@ ok("  ... logged 'refused by W160', with the $ figure, signal and screen",
    and lr == ("W160", 12034.09, why, "SIG-TEST-META", "SELL_SCREEN"), lr)   # stored to the cent
 po.evaluate_contracts = lambda *a, **k: [dict(META, source="ibkr", iv=None)]
 pid, why = pgen._book_and_stamp({}, "META", "CSP", 772.55, "SELL_SCREEN")
-ok("paper CSP with no IV refused as not measurable, logged with NULL risk",
-   pid is None and why.startswith("refused by W160: one-sigma not measurable")
-   and refusals() == r0 + 4 and last_refusal()[3] is None, why)
+ok("paper CSP with no IV refused as 'refused: no IV, cap couldn't run', logged W160, NULL risk",
+   pid is None and why == "refused: no IV, cap couldn't run"
+   and refusals() == r0 + 4 and last_refusal()[2:] == ("W160", None, why), last_refusal())
+n_noiv = count("select count(*) from paper_refusals where reason = ?",
+               "refused: no IV, cap couldn't run")
+ok("  ... and countable by that exact reason", n_noiv == 1, n_noiv)
 po.evaluate_contracts = lambda *a, **k: [dict(CALM, source="ibkr")]
 pid, why = pgen._book_and_stamp({}, "KO", "CSP", 70.0, "SELL_SCREEN")
 ok("paper CSP control: an under-cap CSP still books, nothing logged",
@@ -363,6 +386,20 @@ if "--no-pg" not in sys.argv and os.path.isdir(PG):
     html = cl.get("/open/KO?strategy=LONG_CALL").get_data(as_text=True)
     ok("board control: 'Suggested size: 16 contracts (sized to 16 by ...)'",
        "Suggested size: 16 contracts" in html and "sized to 16 by the $5,000/trade risk cap (W160)" in html)
+    oc.evaluate_diagonals = lambda *a, **k: [{
+        "short_exp": "2026-11-20", "short_dte": 54, "short_strike": 210.0, "short_mid": 4.10,
+        "short_bid": 4.0, "short_delta": 0.3, "short_iv": 40.0, "short_oi": 900,
+        "long_exp": "2027-06-17", "long_dte": 263, "long_strike": 250.0, "long_mid": 30.0,
+        "long_ask": 30.2, "long_delta": 0.8, "long_iv": 38.0, "long_oi": 500,
+        "net_debit": 25.9, "width": 40.0, "breakeven": 184.1, "score": 50.0}]
+    r = eng.evaluate("AMAT", "DIAGONAL_PUT")
+    ok("board: put diagonal is not offered Log (W202), with the reason",
+       r.get("found") and r.get("confirm_supported") is False
+       and "parked (W202)" in (r.get("confirm_note") or ""), (r.get("confirm_supported"), r.get("reason")))
+    html = cl.get("/open/AMAT?strategy=DIAGONAL_PUT").get_data(as_text=True)
+    ok("board: put diagonal page shows the W202 note", "Logging a put diagonal is parked (W202)" in html)
+    r = eng.evaluate("AMAT", "DIAGONAL")
+    ok("board control: a call diagonal is still offered Log", r.get("confirm_supported") is True)
     for path in ("/api/risk", "/positions", "/api/exposure"):
         ok("board %s still 200" % path, cl.get(path).status_code == 200)
 else:

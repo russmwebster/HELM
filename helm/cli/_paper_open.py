@@ -49,12 +49,19 @@ def paper_open_one(ticker: str, strategy: str, spot: Optional[float],
     #   LONG_PUT and COVERED_CALL are not decided -- untouched.
     from helm import risk_cap as _rc
     if strategy == "CSP":
+        # Russ, 2026-09-27: keep refusing when the cap cannot run, and log each
+        # one in these words so their frequency can be counted. Spot cannot be
+        # the missing input here -- a None spot returned above.
+        if not top.get("iv"):
+            raise _rc.OverCapRefusal("W160", strategy, None,
+                                     message="refused: no IV, cap couldn't run")
+        if not top.get("dte") or float(top.get("dte")) <= 0:
+            raise _rc.OverCapRefusal("W160", strategy, None,
+                                     message="refused: no DTE, cap couldn't run")
         _sigma = _rc.csp_one_sigma_risk(spot, top.get("iv"), top.get("dte"), 1)
         if _sigma is None:
-            raise _rc.OverCapRefusal(
-                "W160", strategy, None,
-                detail="one-sigma not measurable (IV, DTE or spot missing) -- "
-                       "not assumed to be under the $5,000 cap")
+            raise _rc.OverCapRefusal("W160", strategy, None,
+                                     message="refused: one-sigma not computable, cap couldn't run")
         if _rc.one_contract_over_cap(_sigma):
             raise _rc.OverCapRefusal("W160", strategy, _sigma)
     elif strategy == "LONG_CALL" and _rc.one_contract_over_cap(fill * 100):
