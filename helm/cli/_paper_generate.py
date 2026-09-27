@@ -155,7 +155,7 @@ PAPER_REFUSALS_DDL = """CREATE TABLE IF NOT EXISTS paper_refusals (
     refused_at        TEXT NOT NULL,      -- local time, like positions.opened_at
     ticker            TEXT NOT NULL,
     strategy          TEXT NOT NULL,
-    rule              TEXT NOT NULL,      -- 'W160' (CSP) | 'W201' (long call, diagonals) | 'W194' (W195 sleeve)
+    rule              TEXT NOT NULL,      -- 'W160' (CSP) | 'W201' (long call, diagonals) | 'W194' (W195 sleeve) | 'W189' (CSP spread)
     one_contract_risk REAL,               -- the $ the rule measured; NULL = not measurable
     reason            TEXT NOT NULL,      -- 'refused by W160: one contract ...'
     signal_id         TEXT,

@@ -64,6 +64,19 @@ def paper_open_one(ticker: str, strategy: str, spot: Optional[float],
                                      message="refused: one-sigma not computable, cap couldn't run")
         if _rc.one_contract_over_cap(_sigma):
             raise _rc.OverCapRefusal("W160", strategy, _sigma)
+        # W189 (Russ, 2026-09-26): the top-ranked contract's spread >= 10% of
+        # mid -> refused and logged. Not substituted with a lower-ranked
+        # contract: the paper book trades its top pick or nothing (no
+        # auto-substitution, and it keeps the screen's evidence clean). An
+        # unmeasurable spread is refused too, and said so.
+        _sp = _rc.spread_pct_of(top)
+        if _sp is None:
+            raise _rc.OverCapRefusal("W189", strategy, None,
+                                     message="refused: no bid/ask, spread gate couldn't run")
+        if _rc.csp_spread_too_wide(_sp):
+            raise _rc.OverCapRefusal("W189", strategy, None,
+                                     message="refused by W189: " + _rc.w189_text(_sp)
+                                     .replace(" -- not suggested as a CSP (W189)", ""))
     elif strategy == "LONG_CALL" and _rc.one_contract_over_cap(fill * 100):
         raise _rc.OverCapRefusal("W201", strategy, fill * 100)
     top["spot"] = spot

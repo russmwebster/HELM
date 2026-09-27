@@ -538,7 +538,7 @@ def score_contract(row: dict, direction: str, delta_sweet: tuple,
 def spread_flag(spread_pct: Optional[float]) -> str:
     if spread_pct is None:
         return "[dim]--[/dim]"
-    if spread_pct <= 10:
+    if spread_pct < 10:     # W189: 10.0% is already over the CSP line
         return f"[green]{spread_pct:.1f}%[/green]"
     elif spread_pct <= 15:
         return f"[yellow]{spread_pct:.1f}%[/yellow]"
@@ -564,7 +564,7 @@ def delta_flag(delta: Optional[float], delta_min: float, delta_max: float,
 def suggest_contracts(strategy: str, strike: float, mid: float,
                       account_id: str, ticker: str = "",
                       iv: float = None, dte: float = None,
-                      spot: float = None) -> tuple:
+                      spot: float = None, spread_pct: float = None) -> tuple:
     """
     Suggest a contract count and say honestly why. Returns
     (contracts, binding, note); `note` is the line to show the trader.
@@ -572,6 +572,9 @@ def suggest_contracts(strategy: str, strike: float, mid: float,
     `mid` is the per-share price the risk is measured on: the option's own
     mid for CSP / long call / long put, and the LONG LEG's mid for the
     diagonal family (DIAGONAL, PMCC, DIAGONAL_PUT).
+
+    W189: a REAL CSP whose `spread_pct` (bid-ask as % of mid, from
+    risk_cap.spread_pct_of) is at or over 10% is declined the same way.
 
     W195: a REAL long call is also declined (0, override by typed count)
     while the real long-premium sleeve is at or over 5% or the name already
@@ -677,7 +680,11 @@ def suggest_contracts(strategy: str, strike: float, mid: float,
                 raw, binding, amount = (by_cash or 0), "cash_ceiling_only_no_iv", collateral_1
             if raw > 20:
                 raw, binding = 20, "ceiling"
-            return risk_cap.size_decision(strategy, raw, binding, amount)
+            # W189 (Russ, 2026-09-26): spread >= 10% of mid at entry -> the
+            # real book is told no, like W160; a typed count overrides.
+            return risk_cap.apply_w189_flag(
+                strategy, spread_pct,
+                risk_cap.size_decision(strategy, raw, binding, amount))
 
         # Anything else (IRON_CONDOR / spreads / straddles passed here with a
         # strike as a collateral proxy): the pre-W160 cash rule, floored to 1
@@ -1335,9 +1342,11 @@ def confirm_and_log(ticker: str, strategy: str, contracts: list, config: dict,
     # W160 (s122): CSP also gets iv/dte/spot, so its cap is the one-sigma
     # risk figure, not the pre-W160 collateral proxy.
     account_for_sizing = get_active_account()
+    from helm import risk_cap as _rc_sp
     suggested, binding, size_note = suggest_contracts(
         strategy, selected["strike"], fill_price, account_for_sizing,
-        ticker=ticker, iv=selected.get("iv"), dte=selected.get("dte"), spot=spot)
+        ticker=ticker, iv=selected.get("iv"), dte=selected.get("dte"), spot=spot,
+        spread_pct=_rc_sp.spread_pct_of(selected))
     declined_over_cap = False
     if suggested <= 0:
         console.print()
@@ -1359,7 +1368,10 @@ def confirm_and_log(ticker: str, strategy: str, contracts: list, config: dict,
         # written to the position's notes (Russ, 2026-09-27 -- CSPs now match).
         declined_over_cap = True
         console.print(f"[red]Declined:[/red] {size_note}.")
-        if strategy == "CSP":
+        if binding == _rc_sp.W189_SPREAD:
+            console.print("[dim]Another strike or expiry with a tighter market, or skip "
+                          "it.[/dim]")
+        elif strategy == "CSP":
             console.print("[dim]A put spread takes this with the $5,000 as its max "
                           "loss, or skip it.[/dim]")
         console.print("[dim]Nothing is recorded unless you type a contract count "
@@ -3662,11 +3674,13 @@ def run():
         t.add_column("Source",   width=10, no_wrap=True)
 
     from helm.entry_bands import effective_bands as _eff_bands
+    from helm import risk_cap as _risk_cap_sp
     for rank, c in enumerate(contracts, 1):
         # Suggest contracts
         suggested, _row_binding, _row_note = suggest_contracts(
             strategy, c["strike"], c["mid"], account_id, ticker=ticker,
-            iv=c.get("iv"), dte=c.get("dte"), spot=spot)
+            iv=c.get("iv"), dte=c.get("dte"), spot=spot,
+            spread_pct=_risk_cap_sp.spread_pct_of(c))
 
         spread_str = spread_flag(c.get("spread_pct"))
         # HELM-135 (W71): flag against the band actually ENFORCED, not the
@@ -3762,7 +3776,8 @@ def run():
     best = contracts[0]
     suggested, _best_binding, _best_note = suggest_contracts(
         strategy, best["strike"], best["mid"], account_id, ticker=ticker,
-        iv=best.get("iv"), dte=best.get("dte"), spot=spot)
+        iv=best.get("iv"), dte=best.get("dte"), spot=spot,
+        spread_pct=_risk_cap_sp.spread_pct_of(best))
     total_premium = round(best["mid"] * 100 * suggested, 2)
     # One wording source (risk_cap.size_decision): a floored 1 says "floored",
     # never "sized by the cap".
@@ -3772,7 +3787,10 @@ def run():
     # lot, a CSP over its cap (W160), a long call whose one contract is over
     # $5,000 (W201).
     if suggested <= 0:
-        if strategy == "CSP":
+        if _best_binding == _risk_cap_sp.W189_SPREAD:
+            _size_line = (f"  [red]Declined:[/red] {_best_note} -- a tighter contract, skip "
+                          f"it, or type a count at --confirm to override\n")
+        elif strategy == "CSP":
             _size_line = (f"  [red]Declined:[/red] {_best_note} -- a put spread, skip "
                           f"it, or type a count at --confirm to override\n")
         elif strategy != "COVERED_CALL":

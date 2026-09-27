@@ -168,6 +168,8 @@ class OverCapRefusal(Exception):
 # names which rule said no.
 W195_SLEEVE = "w195_sleeve"
 W195_HELD = "w195_held"
+# W189 (Russ, 2026-09-26): a CSP whose bid-ask spread is >= 10% of mid at entry.
+W189_SPREAD = "w189_spread"
 
 
 def rule_for(strategy, binding=None):
@@ -177,6 +179,8 @@ def rule_for(strategy, binding=None):
         return "W194"
     if binding == W195_HELD:
         return "W195"
+    if binding == W189_SPREAD:
+        return "W189"
     return "W160" if (strategy or "").upper() == "CSP" else "W201"
 
 
@@ -187,6 +191,8 @@ def override_line(strategy, binding, n):
         what = "with the real long-premium sleeve at or over 5%"
     elif b == W195_HELD:
         what = "in a name that already has an open long call"
+    elif b == W189_SPREAD:
+        what = "with the bid-ask spread at or over 10% of mid"
     else:
         what = "over " + ("the 5% cash ceiling" if b.startswith("cash_ceiling")
                           else "the $5,000 cap")
@@ -197,9 +203,10 @@ def override_line(strategy, binding, n):
 def override_note(strategy, binding, n, size_note):
     """What is WRITTEN to positions.notes when a declined trade is booked by
     override (Russ, 2026-09-27). Searchable: notes LIKE '%OVERRIDE (W%'.
-    A cap (W160/W201/W194) is 'OVER-CAP OVERRIDE'; W195's one-per-name is
-    not a cap, so it says 'RULE OVERRIDE'."""
-    prefix = "RULE OVERRIDE" if binding == W195_HELD else "OVER-CAP OVERRIDE"
+    A cap (W160/W201/W194) is 'OVER-CAP OVERRIDE'; W195's one-per-name and
+    W189's spread gate are not caps, so they say 'RULE OVERRIDE'."""
+    prefix = ("RULE OVERRIDE" if binding in (W195_HELD, W189_SPREAD)
+              else "OVER-CAP OVERRIDE")
     return "%s (%s): %s; booked %d contract(s) as typed" % (
         prefix, rule_for(strategy, binding), size_note, n)
 
@@ -409,6 +416,67 @@ def sleeve_view(account_id, book="REAL", db=None):
     return {"book": book, "value": value, "account_value": account_value or None,
             "pct": pct, "cap_pct": SLEEVE_CAP_PCT * 100.0, "over_cap": over_cap,
             "positions": positions}
+
+
+# ---------------------------------------------------------------------------
+# W189 -- the CSP spread gate (Russ, 2026-09-26, CSP deep dive decision 1)
+#   A CSP whose bid-ask spread is >= 10% of its mid at entry.
+#   PAPER: refused, logged to paper_refusals (rule W189).
+#   REAL : a FLAG -- declined like W160/W195 (suggestion 0, Enter records
+#          nothing, a typed count overrides, "RULE OVERRIDE (W189)" in notes).
+#   Measure: (ask - bid) / mid x 100, rounded to 0.1 -- the same figure
+#   entry_snapshots.bid_ask_spread_pct stores and the deep dive split on
+#   (<10%: 92 trades, 80% won, median +56%; >=10%: 44, 55% won, +13%).
+# ---------------------------------------------------------------------------
+
+CSP_SPREAD_MAX_PCT = 10.0
+
+
+def spread_pct_of(contract):
+    """The contract's bid-ask spread as % of mid (0.1 precision). The chain
+    row's own spread_pct first -- it is exactly what the entry snapshot will
+    store (bid_ask_spread_pct), which is what the deep dive split on -- else
+    computed the chain fetcher's way from a live bid and ask (mid rounded to
+    the cent), else None. Never guesses: a missing quote is None, not 0."""
+    c = contract or {}
+    try:
+        sp = c.get("spread_pct")
+        if sp is not None:
+            return round(float(sp), 1)
+        bid, ask = c.get("bid"), c.get("ask")
+        if bid is not None and ask is not None:
+            bid, ask = float(bid), float(ask)
+            if bid > 0 and ask > 0 and ask >= bid:
+                mid = round((bid + ask) / 2.0, 2)
+                return round((ask - bid) / mid * 100.0, 1)
+        return None
+    except (TypeError, ValueError):
+        return None
+
+
+def csp_spread_too_wide(spread_pct):
+    """True when a CSP's spread is at or over the W189 line. None -> None."""
+    if spread_pct is None:
+        return None
+    return float(spread_pct) >= CSP_SPREAD_MAX_PCT
+
+
+def w189_text(spread_pct):
+    return ("the bid-ask spread is %.1f%% of mid, at or over 10%% -- not suggested "
+            "as a CSP (W189)" % float(spread_pct))
+
+
+def apply_w189_flag(strategy, spread_pct, decision):
+    """Fold the W189 spread gate into a REAL CSP's (n, binding, note).
+    Unmeasured spread -> unchanged (the real book is informed, and every
+    chain row that reaches a suggestion carries a live bid and ask)."""
+    if (strategy or "").upper() != "CSP" or not csp_spread_too_wide(spread_pct):
+        return decision
+    n, binding, note = decision
+    text = w189_text(spread_pct)
+    if n is not None and n <= 0:
+        return n, binding, ("%s; also %s" % (note, text)) if note else text
+    return 0, W189_SPREAD, text
 
 
 # ---------------------------------------------------------------------------
@@ -761,6 +829,29 @@ def _selftest():
             "LONG_CALL", "KO", "a", (2, "risk_cap", "n")), (2, "risk_cap", "n"))
     finally:
         globals()["real_long_premium_flags"] = _saved
+
+    # --- W189: the CSP spread gate
+    check("W189 spread from bid/ask", spread_pct_of({"bid": 1.80, "ask": 2.00}), 10.5)
+    check("W189 stored pct wins (it is what the snapshot stores)",
+          spread_pct_of({"spread_pct": 9.94, "bid": 1.0, "ask": 2.0}), 9.9)
+    check("W189 no quote -> None", spread_pct_of({"bid": 0, "ask": 2.0}), None)
+    check("W189 9.9 passes / 10.0 refused", (csp_spread_too_wide(9.9), csp_spread_too_wide(10.0)),
+          (False, True))
+    check("W189 fold: sized CSP declined", apply_w189_flag("CSP", 12.3, (3, "cash_ceiling", "x")),
+          (0, W189_SPREAD, "the bid-ask spread is 12.3% of mid, at or over 10% -- not "
+                           "suggested as a CSP (W189)"))
+    check("W189 fold: W160 decline keeps W160", apply_w189_flag(
+        "CSP", 12.3, (0, "risk_cap", "one contract ... (W160)"))[:2], (0, "risk_cap"))
+    check("W189 fold: under 10% untouched", apply_w189_flag("CSP", 9.9, (3, "risk_cap", "x")),
+          (3, "risk_cap", "x"))
+    check("W189 fold: unmeasured untouched", apply_w189_flag("CSP", None, (3, "risk_cap", "x")),
+          (3, "risk_cap", "x"))
+    check("W189 fold: not a CSP untouched", apply_w189_flag("BULL_PUT_SPREAD", 30.0,
+                                                            (1, "risk_cap", "x")), (1, "risk_cap", "x"))
+    check("W189 wording", (rule_for("CSP", W189_SPREAD), override_line("CSP", W189_SPREAD, 2),
+                           override_note("CSP", W189_SPREAD, 2, "t")),
+          ("W189", "2 contract(s) with the bid-ask spread at or over 10% of mid (W189) -- your "
+                   "call, recorded as typed", "RULE OVERRIDE (W189): t; booked 2 contract(s) as typed"))
 
     if failures:
         print("FAIL (%d):" % len(failures))
