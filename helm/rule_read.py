@@ -104,7 +104,16 @@ def explain(reason, strategy, pnl_pct=None, dte_now=None, arms=None,
                          "and the stop at %s."
                          % (_pct(gb.get("hwm")), _pct(pnl_pct), _pct(gb.get("floor")),
                             _pct(v3.get("stop", L.STOP_LOSS_PCT))))
-        elif fam in (D.CREDIT_FAMILY, D.COVERED_FAMILY, D.DEBIT_SPREAD_FAMILY, D.DIAGONAL_FAMILY):
+        elif fam == D.DIAGONAL_FAMILY:
+            # W203 (2026-09-29): the paper book has no diagonal rule but the
+            # long leg's calendar until W180 step 7, so "would hold" here is an
+            # absence, not a judgment -- say so rather than read like advice.
+            lines.append("The paper book's diagonal rules (harvest, breach, stop, "
+                         "give-back -- W180 step 7) are not built yet. Until they "
+                         "are, it closes a diagonal only when the long leg reaches "
+                         "%s DTE." % dte_exit)
+            lines.append("Decide from this position's exit flags, not from this box.")
+        elif fam in (D.CREDIT_FAMILY, D.COVERED_FAMILY, D.DEBIT_SPREAD_FAMILY):
             lines.append("Holding. %s captured against a %s target; %s days to the "
                          "%s-day calendar." % (_pct(pnl_pct), _pct(target_pct), dte_now, dte_exit))
         else:
@@ -112,7 +121,9 @@ def explain(reason, strategy, pnl_pct=None, dte_now=None, arms=None,
     return {"fires": fires, "reason": reason,
             "label": LABEL.get(reason, "hold"),
             "headline": ("The paper rule would CLOSE this now — %s." % LABEL[reason]) if fires
-                        else "The paper rule would hold this.",
+                        else ("No paper rule for diagonals yet — this is not a hold signal."
+                              if fam == D.DIAGONAL_FAMILY
+                              else "The paper rule would hold this."),
             "lines": lines,
             "doctrine": ("It would not close YOUR position: on the real book the rule "
                          "informs and never acts (HELM-193)."),
