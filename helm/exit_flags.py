@@ -413,6 +413,15 @@ def _live_at(leg, t):
     od = str(leg.get("open_date") or leg.get("created_at") or "")[:10]
     if od and od > t[:10]:
         return False
+    # W204 (2026-09-30): a leg ADDED to a position that was already open -- a
+    # re-sold short -- is live on its booking day only from its booking time.
+    # Day granularity gave AA's 09-25 short (booked 14:10) the 10:00 and 12:30
+    # checks, where _diag_rows' primary fallback handed it the check's own
+    # mark: the LONG's price ($2.65 against a $0.62 sale), read as SHORT ON.
+    # _legs() sets live_from; a leg dict without it behaves exactly as before.
+    lf = str(leg.get("live_from") or "")
+    if lf and lf[:10] == t[:10] and t < lf:
+        return False
     if str(leg.get("status") or "").upper() == "OPEN":
         return True
     cd = str(leg.get("close_date") or "")
@@ -530,9 +539,25 @@ _LEG_COLS = ("id", "leg_role", "option_type", "direction", "strike",
 
 
 def _legs(conn, position_id):
-    return [dict(zip(_LEG_COLS, r)) for r in conn.execute(
+    legs = [dict(zip(_LEG_COLS, r)) for r in conn.execute(
         "SELECT " + ", ".join(_LEG_COLS) + " FROM legs WHERE position_id=? "
         "ORDER BY expiration, id", (position_id,))]
+    # W204: live_from = the booking time of a leg opened on a LATER day than
+    # its position (a re-sell), so _live_at() does not credit it with checks
+    # that ran before it existed. Legs booked with the position get none: the
+    # s111 repair re-created AA at 18:47 on 09-01, after that day's 15:16
+    # check, and that reading is genuinely the position's. legs.created_at
+    # is local time, like checks.checked_at (measured 2026-09-30). The
+    # position's opening day is its legs' earliest open_date -- the same as
+    # positions.opened_at on every diagonal (523 positions measured, the two
+    # that differ are a covered call and a condor) -- so no second table.
+    pod = min((str(l.get("open_date") or "")[:10] for l in legs
+               if l.get("open_date")), default="")
+    for l in legs:
+        od = str(l.get("open_date") or "")[:10]
+        if pod and od and od > pod and l.get("created_at"):
+            l["live_from"] = str(l["created_at"])
+    return legs
 
 
 def _diag_rows(conn, position_id, legs=None):

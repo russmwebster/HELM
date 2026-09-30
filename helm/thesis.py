@@ -1300,6 +1300,293 @@ def close_svg(track, width=760, height=230, trail=None):
             % (width, height, _aria, "".join(e)))
 
 
+# ---------------------------------------------------------------------------
+# W88 slice 5 / W180 step 4 (2026-09-30): the diagonal card's two panels.
+#
+# The cost-to-close chart above nets the long and the short, and the long
+# dominates it, so no harvest situation can be seen there. These two panels sit
+# beneath it on the SAME date axis (one x slot per check day, same margins):
+#   top    -- the LONG as % of its ORIGINAL debit (the number the LONG-ONLY rules
+#             read, standing rule 2026-09-23), with the -50% stop and the stepped
+#             give-back trail from long_exit.trail_floor;
+#   bottom -- each SHORT as % of its premium kept, (open - mark) / open, one
+#             segment per short leg, with the 25% / 50% lines and the leg's own
+#             worthless floor (mark <= $0.05).
+# Readings are exactly the diagonal rule's: exit_flags._diag_rows (leg_checks,
+# plus the primary leg's check mark where leg_checks has none) and
+# exit_flags._live_at (a leg is read only while it was on the book -- W204 for
+# re-sells, and no post-close repeats, W185). A short with NO reading at all is
+# drawn as a labelled "no readings" band, never a line. Display only.
+# ---------------------------------------------------------------------------
+
+def diag_panels(legs, rows):
+    """Pure. legs from exit_flags._legs, rows from exit_flags._diag_rows.
+    One point per check day per leg -- the LAST check of the day that read that
+    leg, the rule close_series uses. The long's trail uses the peak over EVERY
+    check, as the rule does, not just the plotted ones. None when no row."""
+    from helm import exit_flags as _EF
+    from helm import posview as _PV
+    from helm import long_exit as _le
+    if not rows:
+        return None
+    opt = [l for l in legs or [] if _EF._is_opt(l)]
+    shorts = [l for l in opt if str(l.get("direction") or "").upper() == "SHORT"]
+    longs = [l for l in opt if str(l.get("direction") or "").upper() == "LONG"]
+    days = sorted({(r.get("checked_at") or "")[:10] for r in rows if r.get("checked_at")})
+    if not days:
+        return None
+    lser, sser, peak = {}, {}, {}
+    for r in rows:
+        t = r.get("checked_at") or ""
+        marks = r.get("marks") or {}
+        ll = [l for l in longs if l["id"] in marks and _EF._live_at(l, t)]
+        if ll:
+            lg = sorted(ll, key=lambda l: str(l.get("expiration") or ""))[-1]
+            op, m = _f(lg.get("open_price")), _f(marks.get(lg["id"]))
+            if op and m is not None:
+                pct = (m - op) / op * 100.0
+                peak[lg["id"]] = max(peak.get(lg["id"], pct), pct)
+                fl = _le.trail_floor(peak[lg["id"]] / 100.0)
+                lser.setdefault(lg["id"], {})[t[:10]] = {
+                    "date": t[:10], "time": t[11:16], "pct": pct, "mark": m,
+                    "peak": peak[lg["id"]],
+                    "trail": None if fl is None else fl * 100.0}
+        for s in shorts:
+            if s["id"] in marks and _EF._live_at(s, t):
+                cap = _PV.captured_pct(s, marks.get(s["id"]))
+                if cap is not None:
+                    sser.setdefault(s["id"], {})[t[:10]] = {
+                        "date": t[:10], "time": t[11:16], "pct": cap,
+                        "mark": _f(marks.get(s["id"]))}
+
+    def _lab(l):
+        return "%s %s · %s" % ((l.get("option_type") or "?")[:1].upper(),
+                              ("%g" % _f(l.get("strike"))) if _f(l.get("strike")) is not None else "?",
+                              str(l.get("expiration") or "")[5:10])
+
+    long_segs = []
+    for l in sorted(longs, key=lambda l: (str(l.get("open_date") or ""), l["id"])):
+        pts = [lser[l["id"]][d] for d in sorted(lser.get(l["id"], {}))]
+        if not pts:
+            continue
+        long_segs.append({"leg": l["id"], "label": _lab(l), "debit": _f(l.get("open_price")),
+                          "open": str(l.get("status") or "").upper() == "OPEN",
+                          "points": pts, "now": pts[-1]})
+    short_segs = []
+    for s in sorted(shorts, key=lambda l: (str(l.get("open_date") or l.get("created_at") or ""), l["id"])):
+        pts = [sser[s["id"]][d] for d in sorted(sser.get(s["id"], {}))]
+        op = _f(s.get("open_price"))
+        is_open = str(s.get("status") or "").upper() == "OPEN"
+        od = str(s.get("open_date") or s.get("created_at") or "")[:10]
+        cd = None if is_open else str(s.get("close_date") or "")[:10] or None
+        exp = str(s.get("expiration") or "")[:10]
+        cp = _f(s.get("close_price"))
+        end = None
+        if not is_open:
+            end = {"date": cd, "price": cp,
+                   "pct": _PV.captured_pct(s, cp) if cp is not None else None,
+                   "how": "expired" if (cd and exp and cd >= exp) else "bought back"}
+        short_segs.append({
+            "leg": s["id"], "label": _lab(s), "premium": op, "open": is_open,
+            "open_date": od, "end": end, "expiration": exp, "points": pts,
+            "now": pts[-1] if pts else None,
+            "worthless": ((op - _EF.WORTHLESS_MARK) / op * 100.0) if op else None,
+            # still OPEN after its expiry day: not yet settled (paper settles by
+            # hand). Said on the card, not hidden.
+            "unsettled": bool(is_open and exp and days and exp < days[-1]),
+            "no_readings": not pts})
+    if not long_segs and not short_segs:
+        return None
+    return {"days": days, "longs": long_segs, "shorts": short_segs,
+            "stop": _le.STOP_LOSS_PCT * 100.0, "band": _le.GIVE_BACK_BAND * 100.0,
+            "harvest": tuple(sorted(_EF.HARVEST_LEVELS)),
+            "worthless_mark": _EF.WORTHLESS_MARK}
+
+
+def _pct(v):
+    return "%+.0f%%" % v if v is not None else "—"
+
+
+def diag_panels_svg(pn, width=760, panel_h=170, gap=34):
+    """Inline SVG, both panels in one picture on one x axis. Same margins as
+    close_svg so the three charts' dates line up. Ink for the data, the card's
+    tokens for the rule lines; every line is also named in words beside it."""
+    if not pn:
+        return None
+    days = pn["days"]
+    n = len(days)
+    idx = {d: i for i, d in enumerate(days)}
+    ml, mr, mt = 66, 84, 22
+    pw = width - ml - mr
+    height = mt + panel_h + gap + panel_h + 26
+
+    def X(i):
+        return ml + (pw / 2.0 if n == 1 else pw * i / (n - 1.0))
+
+    def scale(top, lo, hi):
+        def Y(v):
+            return top + panel_h - ((v - lo) / (hi - lo)) * panel_h if hi > lo else top + panel_h / 2.0
+        return Y
+
+    muted, ink, ink2 = "var(--viz-muted,#898781)", "var(--viz-ink,#0b0b0b)", "var(--viz-ink2,#52514e)"
+    grid, warn, bad = "var(--viz-grid,#e1e0d9)", "var(--viz-warn,#d29922)", "var(--viz-bad,#e34948)"
+    e = []
+
+    def txt(x, y, s, fill=muted, anchor="start", weight=None):
+        e.append('<text x="%.1f" y="%.1f"%s font-size="10.5"%s fill="%s">%s</text>'
+                 % (x, y, "" if anchor == "start" else ' text-anchor="%s"' % anchor,
+                    ' font-weight="%s"' % weight if weight else "", fill, s))
+
+    def hline(Y, v, color, dash, label, lx=None):
+        e.append('<line x1="%.1f" x2="%.1f" y1="%.1f" y2="%.1f" stroke="%s" stroke-width="1.3" stroke-dasharray="%s"/>'
+                 % (ml, ml + pw, Y(v), Y(v), color, dash))
+        if label:
+            txt(ml + pw + 8, Y(v) + 3.5, label, color)
+
+    def grid_y(Y, lo, hi):
+        step = _nice_step(hi - lo)
+        t, k = (int(lo / step) + (1 if lo > 0 else 0)) * step, 0
+        while t <= hi and k < 8:
+            e.append('<line x1="%.1f" x2="%.1f" y1="%.1f" y2="%.1f" stroke="%s" stroke-width="1"/>'
+                     % (ml, ml + pw, Y(t), Y(t), grid))
+            txt(ml - 9, Y(t) + 3.5, "%+.0f%%" % t if t else "0%", muted, "end")
+            t += step
+            k += 1
+
+    # ---- top: the long --------------------------------------------------
+    top = mt
+    lv = [p["pct"] for s in pn["longs"] for p in s["points"]]
+    lt = [p["trail"] for s in pn["longs"] for p in s["points"] if p["trail"] is not None]
+    lo = min(lv + lt + [pn["stop"], 0.0])
+    hi = max(lv + lt + [0.0, 10.0])
+    pad = (hi - lo) * 0.10 or 10.0
+    lo, hi = lo - pad, hi + pad
+    Y = scale(top, lo, hi)
+    grid_y(Y, lo, hi)
+    deb = pn["longs"][-1]["debit"] if pn["longs"] else None
+    txt(ml, top - 8, "LONG leg — %% of its original debit%s · ↑ better"
+        % ((" ($%.2f)" % deb) if deb else ""))
+    hline(Y, pn["stop"], bad, "5 4", "stop %+.0f%%" % pn["stop"])
+    for s in pn["longs"]:
+        pts = s["points"]
+        seg, prev = [], None
+        for p in pts:
+            if p["trail"] is None:
+                prev = None
+                continue
+            x = X(idx[p["date"]])
+            seg.append(("M%.1f %.1f" % (x, Y(p["trail"]))) if prev is None
+                       else ("L%.1f %.1f L%.1f %.1f" % (x, Y(prev), x, Y(p["trail"]))))
+            prev = p["trail"]
+        if seg:
+            e.append('<path d="%s" fill="none" stroke="%s" stroke-width="1.5" stroke-dasharray="3 3"/>'
+                     % (" ".join(seg), warn))
+            txt(ml + pw + 8, Y(prev) + 3.5 + (11 if abs(Y(prev) - Y(pn["stop"])) < 11 else 0),
+                "trail %+.0f%%" % prev, warn)
+        d = " ".join("%s%.1f %.1f" % ("L" if i else "M", X(idx[p["date"]]), Y(p["pct"]))
+                     for i, p in enumerate(pts))
+        e.append('<path d="%s" fill="none" stroke="%s" stroke-width="2" stroke-linejoin="round"/>' % (d, ink))
+        for p in pts[:-1]:
+            e.append('<circle cx="%.1f" cy="%.1f" r="2.2" fill="%s"/>' % (X(idx[p["date"]]), Y(p["pct"]), ink))
+        lp = pts[-1]
+        e.append('<circle cx="%.1f" cy="%.1f" r="4" fill="%s" stroke="var(--viz-surface,#fcfcfb)" stroke-width="2"/>'
+                 % (X(idx[lp["date"]]), Y(lp["pct"]), ink))
+        txt(X(idx[lp["date"]]) + 8, Y(lp["pct"]) - 7, _pct(lp["pct"]), ink, weight="600")
+
+    # ---- bottom: the shorts ---------------------------------------------
+    top2 = mt + panel_h + gap
+    sv = [p["pct"] for s in pn["shorts"] for p in s["points"]]
+    sv += [s["end"]["pct"] for s in pn["shorts"] if s["end"] and s["end"]["pct"] is not None]
+    lo2 = min(sv + [0.0])
+    lo2 = lo2 - max(5.0, (100.0 - lo2) * 0.06)
+    hi2 = 108.0
+    Y2 = scale(top2, lo2, hi2)
+    grid_y(Y2, lo2, 100.0)
+    txt(ml, top2 - 8, "SHORT legs — % of the premium kept · ↑ better · 100% = expires worthless")
+    for h in pn["harvest"]:
+        hline(Y2, h, ink2, "6 3", "%.0f%% kept" % h)
+    last_i = n - 1
+    for s in pn["shorts"]:
+        i0 = idx.get(s["open_date"], 0 if s["open_date"] < days[0] else None)
+        if i0 is None:
+            i0 = next((i for i, d in enumerate(days) if d >= s["open_date"]), last_i)
+        endd = s["end"]["date"] if s["end"] else None
+        i1 = last_i if not endd else next((i for i in range(n - 1, -1, -1) if days[i] <= endd), 0)
+        x0, x1 = X(i0), X(max(i0, i1))
+        if s["worthless"] is not None:
+            e.append('<line x1="%.1f" x2="%.1f" y1="%.1f" y2="%.1f" stroke="%s" stroke-width="1" stroke-dasharray="1 3"/>'
+                     % (x0, max(x1, x0 + 6), Y2(s["worthless"]), Y2(s["worthless"]), muted))
+        if s["no_readings"]:
+            e.append('<rect x="%.1f" y="%.1f" width="%.1f" height="%.1f" fill="%s" fill-opacity="0.13"/>'
+                     % (x0, top2, max(6.0, x1 - x0), panel_h, muted))
+            txt((x0 + x1) / 2.0, top2 + panel_h / 2.0, "no readings", muted, "middle")
+        else:
+            pts = s["points"]
+            d = " ".join("%s%.1f %.1f" % ("L" if i else "M", X(idx[p["date"]]), Y2(p["pct"]))
+                         for i, p in enumerate(pts))
+            e.append('<path d="%s" fill="none" stroke="%s" stroke-width="2" stroke-linejoin="round"/>' % (d, ink))
+            for p in pts:
+                e.append('<circle cx="%.1f" cy="%.1f" r="2.2" fill="%s"/>' % (X(idx[p["date"]]), Y2(p["pct"]), ink))
+        # the sale: hollow ring at 0%; label with strike and expiry
+        e.append('<circle cx="%.1f" cy="%.1f" r="3.5" fill="var(--viz-surface,#fcfcfb)" stroke="%s" stroke-width="1.5"/>'
+                 % (x0, Y2(0.0), ink))
+        txt(x0 + 4, Y2(0.0) + 14, "sold %s" % s["label"], ink2)
+        if s["end"] and s["end"]["pct"] is not None:
+            ex, ey = X(i1), Y2(s["end"]["pct"])
+            e.append('<rect x="%.1f" y="%.1f" width="7" height="7" fill="%s"/>' % (ex - 3.5, ey - 3.5, ink))
+            txt(ex, ey - 8, "%s %.0f%%" % (s["end"]["how"], s["end"]["pct"]), ink, "end")
+        elif s["now"] is not None:
+            nx, ny = X(idx[s["now"]["date"]]), Y2(s["now"]["pct"])
+            txt(nx + 8, ny - 7, "%.0f%%" % s["now"]["pct"], ink, weight="600")
+            if s["unsettled"]:
+                txt(nx - 4, ny + (16 if ny < top2 + 30 else -12),
+                    "expired %s — not yet settled" % s["expiration"][5:], warn, "end")
+
+    every = max(1, -(-n // 6))
+    gapn = -(-every * 7 // 10)
+    for i, d in enumerate(days):
+        if i == n - 1 or (i % every == 0 and i <= n - 1 - gapn):
+            txt(X(i), top2 + panel_h + 16, d[5:], muted, "middle")
+    for yb in (top + panel_h, top2 + panel_h):
+        e.append('<line x1="%.1f" x2="%.1f" y1="%.1f" y2="%.1f" stroke="var(--viz-axis,#c3c2b7)" stroke-width="1"/>'
+                 % (ml, ml + pw, yb, yb))
+    aria = ("Two panels on one date axis: the long leg as a percent of its original debit "
+            "with its stop and give-back trail, and each short leg as a percent of its premium kept")
+    return ('<svg viewBox="0 0 %d %d" role="img" aria-label="%s" '
+            'style="display:block;width:100%%;height:auto;overflow:visible">%s</svg>'
+            % (width, height, aria, "".join(e)))
+
+
+def diag_panel_lines(pn):
+    """The panels in words -- one line per leg, so nothing depends on colour or
+    on reading a chart."""
+    if not pn:
+        return []
+    out = []
+    for s in pn["longs"]:
+        p = s["now"]
+        out.append("Long %s: %s of its $%.2f debit on %s (peak %s; stop %+.0f%%; trail %s)."
+                   % (s["label"], _pct(p["pct"]), s["debit"] or 0, p["date"][5:],
+                      _pct(p["peak"]), pn["stop"], _pct(p["trail"])))
+    for s in pn["shorts"]:
+        head = "Short %s, sold %s at $%.2f" % (s["label"], s["open_date"][5:], s["premium"] or 0)
+        if s["no_readings"]:
+            tail = "no readings while it was open"
+        elif s["open"]:
+            tail = "%.0f%% kept on %s (mark $%.2f)" % (s["now"]["pct"], s["now"]["date"][5:],
+                                                       s["now"]["mark"] or 0)
+            if s["unsettled"]:
+                tail += "; expired %s and not yet settled" % s["expiration"][5:]
+        else:
+            tail = "last read %.0f%% kept" % s["now"]["pct"]
+        if s["end"]:
+            tail += "; %s %s at $%.2f%s" % (
+                s["end"]["how"], (s["end"]["date"] or "")[5:], s["end"]["price"] or 0,
+                (" — %.0f%% kept" % s["end"]["pct"]) if s["end"]["pct"] is not None else "")
+        out.append("%s: %s." % (head, tail))
+    return out
+
+
 def exit_rules(pos, checks, latest, entry_thesis_row):
     """The long-family exit rules (v3), in precedence order, with what each one
     would do right now (HELM-148, rewritten for v3 in HELM-150).
