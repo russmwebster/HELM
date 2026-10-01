@@ -17,6 +17,8 @@ in child processes with PYTHONHASHSEED=0, then checks:
 Usage: python3 tools/verify_s125_card.py
        python3 tools/verify_s125_card.py render HELM_TREE PG_TREE OUT.json COPY  (child)
 Perturbation run 2026-10-01: closing sale computed without net rent -> FAIL.
+  * rent vs decay (added 2026-10-01): the weekly figures = leg_checks theta x contracts x 100 x 7;
+  * recoverability (added 2026-10-01): (strike + effective cost - spot) / (spot x long IV x sqrt(days/365)).
 """
 import html, json, os, re, shutil, site, sqlite3, subprocess, sys, tempfile, types
 USERSITE = site.getusersitepackages()
@@ -64,7 +66,9 @@ def check(old, new, copy, tree):
         nonlocal P, F
         P += bool(cond); F += (not cond)
         if not cond and F <= 30: print("FAIL", n, det)
-    strip = lambda h: re.sub(r"\?v=\d+", "", h)
+    # prev/next and "N of M on the board" read the LIVE board cache, not the copy:
+    # strip the nav block so a board change between renders is not a code change
+    strip = lambda h: re.sub(r'(?s)<div class="cardnav".*?</div>', "", re.sub(r"\?v=\d+", "", h))
     nd = 0
     for p, m in meta.items():
         h = B[p]["html"]
@@ -100,6 +104,34 @@ def check(old, new, copy, tree):
             dec = re.search(r'<section id="decide">(.*?)</section>', h, re.S)
             got = sorted(txt(x) for x in re.findall(r"<td>▲ ([^<]+)</td>", dec.group(1))) if dec else None
             ok("firing = rule " + p, got == want, (got, want))
+            # rent vs decay: independent from leg_checks theta at the latest check
+            rdm = re.search(r"the short earns about \$([\d,]+) a week; the long loses about \$([\d,]+) a week", h)
+            lcid = c.execute("select id, theta from checks where position_id=? and data_quality='GOOD' "
+                             "and pnl_unrealized is not null order by checked_at desc limit 1", (p,)).fetchone()
+            tht = {r[0]: r[1] for r in c.execute("select leg_id, theta from leg_checks where check_id=? "
+                                                  "and theta is not null", (lcid[0],))}
+            live_s = [l for l in legs if l["direction"] == "SHORT" and l["status"] == "OPEN"]
+            if rdm and live_s:
+                s_th = tht.get(live_s[-1]["id"], lcid[1])
+                ok("rent per week " + p, abs(float(rdm.group(1).replace(",", "")) - abs(s_th) * live_s[-1]["contracts"] * 700) <= 1,
+                   (rdm.group(1), s_th))
+                ok("decay per week " + p, abs(float(rdm.group(2).replace(",", "")) - abs(tht[lg["id"]]) * lg["contracts"] * 700) <= 1,
+                   (rdm.group(2), tht.get(lg["id"])))
+            # recoverability: independent from the legs, rent and the long's IV
+            rcm = re.search(r'Can it recover\?</td><td><span[^>]*>([\d.]+)×</span>', h)
+            ivr = c.execute("select iv_current from leg_checks where check_id=? and leg_id=?", (lcid[0], lg["id"])).fetchone()
+            sp_ = c.execute("select spot_price from checks where id=?", (lcid[0],)).fetchone()[0]
+            if rcm and ivr and ivr[0] and sp_:
+                import math, datetime
+                rent_i = 0.0
+                for l in legs:
+                    if l["direction"] != "SHORT": continue
+                    rent_i += l["open_price"] * l["contracts"] * 100
+                    if l["status"] != "OPEN": rent_i -= l["close_price"] * l["contracts"] * 100
+                eff = (cost - rent_i) / (lg["contracts"] * 100)
+                days = (datetime.date.fromisoformat(lg["expiration"][:10]) - datetime.date.today()).days
+                ratio = ((lg["strike"] + eff) - sp_) / (sp_ * ivr[0] / 100 * math.sqrt(days / 365))
+                ok("recover ratio " + p, abs(float(rcm.group(1)) - ratio) <= 0.011, (rcm.group(1), round(ratio, 3)))
             mv = re.search(r"<h4>Close[^<]*</h4><div class=\"res[^\"]*\">\+?\$?([^ <]+) back", h)
             closing = [x for x in re.findall(r"<tr><td>(Closing today[^<]*)</td><td class=\"num\">([^<]+)</td>", led.group(1))]
             if mv and closing:

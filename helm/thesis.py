@@ -1925,7 +1925,7 @@ def diag_money_svg(points, limit, events=(), final=None, width=760, height=250):
 
 
 def diag_view(pos, legs, rows, flags, quotes=None, entry_spot=None, earnings_next=None,
-              today=None, panels=None):
+              today=None, panels=None, thetas=None, primary_theta=None, ivs=None):
     """Everything the four-question diagonal card shows, as plain data.
     legs/rows: exit_flags._legs/_diag_rows. flags: exit_flags rows (dicts).
     quotes: {leg_id: (bid, ask)} at the latest check. Returns None when there is
@@ -2090,6 +2090,96 @@ def diag_view(pos, legs, rows, flags, quotes=None, entry_spot=None, earnings_nex
                                         else ("$%.2f above" % (b["effective"] - lmark))) if b["effective"] >= lmark
                                        else "already below", lmark)})
         nxt.append({"head": "Long stop", "text": "the long at $%.2f (half its $%.2f price)" % (lg["open_price"] * 0.5, lg["open_price"])})
+    # --- rent vs decay (Russ, 2026-10-01): is waiting paying? -------------------
+    # Each leg's theta at the latest check (per share per day, as journaled),
+    # x contracts x 100 x 7 for a week. The short's decay is rent earned; the
+    # long's is value lost to time. Display only; omitted when a theta is missing.
+    th = dict(thetas or {})
+    if live_short is not None and live_short["id"] not in th and primary_theta is not None:
+        th[live_short["id"]] = primary_theta   # the primary leg's greeks live on the check row
+    rd = None
+    lt = _f(th.get(lg["id"]))
+    if not closed and lt is not None:
+        long_week = lt * c * m * 7.0
+        if live_short is not None:
+            st_ = _f(th.get(live_short["id"]))
+            if st_ is not None:
+                short_week = -st_ * sh_n(live_short) * 7.0
+                net = short_week + long_week
+                rd = {"short_week": round(short_week), "long_week": round(long_week), "net": round(net),
+                      "text": "the short earns about %s a week; the long loses about %s a week to time — "
+                              "waiting is %s about %s a week"
+                              % (_amt(short_week), _amt(-long_week),
+                                 "paying you" if net >= 0 else "costing you", _amt(abs(net)))}
+        else:
+            rd = {"short_week": 0, "long_week": round(long_week), "net": round(long_week),
+                  "text": "no short on — the long loses about %s a week to time with no rent coming in"
+                          % _amt(-long_week)}
+    v["rent_decay"] = rd
+
+    # --- can it recover? (Russ, 2026-10-01) ---------------------------------------
+    # The long-call card's recoverability test (s111, W162), on the diagonal's
+    # EFFECTIVE cost: the stock price at which the whole trade is even at the
+    # long's expiry (strike + effective cost a share) against the one-sigma move
+    # the market prices over the days left (spot x the long's IV x sqrt(days/365)).
+    # Same bands: < 0.75x ordinary, 0.75-1.25x a stretch, > 1.25x unusual.
+    rec = None
+    iv = _f((ivs or {}).get(lg["id"]))
+    ldays = _dd(today, lg.get("expiration"))
+    if not closed and sp and iv and ldays and ldays > 0 and lg.get("strike") is not None:
+        import math as _m
+        put = lg.get("option_type") == "PUT"
+        be = lg["strike"] - b["effective"] if put else lg["strike"] + b["effective"]
+        need = (sp - be) if put else (be - sp)
+        sigma = sp * (iv / 100.0) * _m.sqrt(ldays / 365.0)
+        if sigma > 0:
+            r_ = need / sigma
+            if r_ <= 0:
+                band, word = "holds", "already past it"
+            elif r_ < 0.75:
+                band, word = "holds", "within an ordinary move"
+            elif r_ <= 1.25:
+                band, word = "stretch", "a stretch: it needs an above-average move"
+            else:
+                band, word = "unusual", "it needs an unusual move"
+            rec = {"be": round(be, 2), "need_pct": round(100.0 * need / sp, 1),
+                   "sigma_pct": round(100.0 * sigma / sp, 1), "ratio": round(r_, 2), "band": band,
+                   "iv": iv, "days": ldays,
+                   "text": ("%s at $%.2f by %s puts the whole trade at even: %s%.1f%% from $%.2f, against a "
+                            "typical move of ±%.1f%% over %d days — %s"
+                            % (tk, be, _md(lg.get("expiration")), "+" if need >= 0 else "−",
+                               abs(100.0 * need / sp), sp, 100.0 * sigma / sp, ldays, word))}
+    v["recover"] = rec
+
+    # --- what has each keep cost? (Russ, 2026-10-01) ------------------------------
+    # For a rule still firing that you KEPT: the whole trade at the last check on
+    # the day you kept it, against now. Holds each keep to account.
+    if rs and whole is not None:
+        last_on = {}
+        for day, w, la, tm in pts:
+            last_on[day] = w
+        days_sorted = sorted(last_on)
+        for x in rs["rows"]:
+            # loss rules only; and only while the LATEST flag of that kind is a keep
+            # (an open flag since then means the question is live again)
+            if not x["firing"] or x["kind"] not in _DIAG_LOSS:
+                continue
+            if any(f.get("kind") == x["kind"] and not f.get("disposition") for f in flags or []):
+                continue
+            kept = sorted((f for f in flags or [] if f.get("kind") == x["kind"]
+                           and str(f.get("disposition") or "").upper() == "KEEP" and f.get("decided_date")),
+                          key=lambda f: str(f["decided_date"]))
+            if not kept:
+                continue
+            kd = str(kept[-1]["decided_date"])[:10]
+            prior = [d for d in days_sorted if d <= kd]
+            if not prior or last_on[prior[-1]] is None:
+                continue
+            then = last_on[prior[-1]]
+            x["since_keep"] = {"date": _md(kd), "then": then, "delta": round(whole - then, 2),
+                               "text": "since you kept it %s (%s): %s" % (_md(kd), _d(then), _d(whole - then))}
+    if rd:
+        nxt.append({"head": "Rent vs decay", "text": rd["text"]})
     v["next"] = nxt
 
     # --- dates -----------------------------------------------------------------
