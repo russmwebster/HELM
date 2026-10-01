@@ -1757,10 +1757,24 @@ def evaluate(pos, legs, checks, entry_snap=None, entry_thesis_row=None,
 
     mark = _f((latest or {}).get("pnl_unrealized"))
     dte = (latest or {}).get("dte_now")
+    # s125 (2026-10-01, diagonal card review A4): an OPEN card describes the legs
+    # still open. A bought-back or settled leg stays in `legs` -- the P&L and the
+    # two-leg panels count it -- but it is not part of the instrument any more,
+    # so the contract line, the expirations, the break-even, the expiry note and
+    # the strike tracker read `live_legs`. A CLOSED card is the post-mortem and
+    # keeps every leg. An unsettled leg past expiry is still OPEN, so it stays.
+    live_legs = legs
+    if not closed:
+        live_legs = [l for l in legs or []
+                     if str(l.get("status") or "OPEN").upper() == "OPEN"] or legs
+    # A diagonal's legs expire on different dates and its rent has moved since
+    # entry, so a strikes-at-one-expiry break-even or expiry value is not a fact
+    # about it. Not shown until the effective basis is built (review step 2).
+    _expiry_math = strat not in _DIAG
     ladder, conv = (None, None)
     if not closed and latest:
-        ladder, conv = expiry_ladder(pos, legs, latest.get("spot_price"), mark, _f(dte))
-    xt = exit_track(legs, checks, closed)
+        ladder, conv = expiry_ladder(pos, live_legs, latest.get("spot_price"), mark, _f(dte))
+    xt = exit_track(live_legs, checks, closed)
     if xt is None and strat in _LONGS:
         xt = exit_track_long(pos, checks, closed)
     # The cost-to-close track. exit_track answers a different question — the BEST
@@ -1768,8 +1782,8 @@ def evaluate(pos, legs, checks, entry_snap=None, entry_thesis_row=None,
     # every position with a premium and traces the LAST check of each day. Both
     # read the journal through _day_marks, so they cannot drift on what a day is.
     ct = close_series(pos, checks, closed, today=today)
-    if ct and latest is not None and not closed:
-        _xpnl = _pnl_at_expiry(legs, latest.get("spot_price"))
+    if ct and latest is not None and not closed and _expiry_math:
+        _xpnl = _pnl_at_expiry(live_legs, latest.get("spot_price"))
         _xcost = position_value(_f(pos.get("net_premium")), _xpnl) if _xpnl is not None else None
         if (_xcost is not None and ct.get("now") is not None
                 and _xcost - ct["now"] > max(100.0, 0.02 * _xcost)):
@@ -1879,7 +1893,7 @@ def evaluate(pos, legs, checks, entry_snap=None, entry_thesis_row=None,
                      "stops being the cheap part of the trade"
                      % (int(round(_ed0 - _dn0)), int(round(_ed0))))
 
-    _exps = sorted({(l.get("expiration") or "")[:10] for l in legs or []
+    _exps = sorted({(l.get("expiration") or "")[:10] for l in live_legs or []
                     if l.get("option_type") not in (None, "STOCK") and l.get("expiration")})
 
     # W90 / HELM-142 -- earnings-inside-window flag. Display only; the W81
@@ -1924,10 +1938,10 @@ def evaluate(pos, legs, checks, entry_snap=None, entry_thesis_row=None,
                  if (closed and _real is not None and _prem) else None)
     return {
         "position_id": pos.get("id"), "ticker": pos.get("ticker"),
-        "contract": contract_line(pos, legs),
+        "contract": contract_line(pos, live_legs),
         "spot": _f((latest or {}).get("spot_price")),
         "expirations": _exps,
-        "breakevens": breakevens(legs),
+        "breakevens": breakevens(live_legs) if _expiry_math else [],
         "strategy": strat, "book": pos.get("book"), "closed": closed,
         "deal": deal_sentence(pos, legs),
         "beliefs": beliefs,
