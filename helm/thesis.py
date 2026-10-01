@@ -1704,6 +1704,114 @@ def diag_panels_svg(pn, width=760, panel_h=170, gap=34):
             % (width, height, aria, "".join(e)))
 
 
+# ── review step 3 (2026-10-01): the diagonal rule's state, on the card ─────
+_DIAG_LOSS = ("pos_stop", "breach", "long_stop", "long_giveback", "long_dte7", "long_dte21")
+_DIAG_LABEL = {
+    "pos_stop": "position stop", "breach": "breach", "worthless": "worthless",
+    "harvest50": "harvest at 50%", "harvest25": "harvest at 25%",
+    "long_stop": "long stop", "long_giveback": "give-back", "long_dte7": "7 days left",
+    "long_dte21": "21 days left", "bare": "no short on",
+}
+
+
+def diag_rule_state(legs, rows, flags, book="REAL"):
+    """What the diagonal rule (exit_flags, W180 step 5) reads on the LATEST check:
+    its mode, every exit that governs that mode with its reading, which kinds are
+    firing, and each firing kind's flag status. Pure: `legs`/`rows` are
+    exit_flags._legs/_diag_rows (the rule's own readings -- standing rule: a
+    diagonal card draws what the diagonal rule reads); `flags` are exit_flags
+    rows (dicts). Display only."""
+    from helm import exit_flags as EF
+    ser = EF.diag_series(legs, rows)
+    if not ser:
+        return None
+    r, kinds, info = ser[-1]
+    mode = info.get("state")
+    if mode not in ("SHORT ON", "LONG ONLY"):
+        return None
+    byleg = {l["id"]: l for l in legs or []}
+
+    def status(k):
+        if book == "PAPER":
+            return "the paper book writes no flags"
+        fs = [f for f in flags or [] if f.get("kind") == k]
+        op = [f for f in fs if not f.get("disposition")]
+        if op:
+            return "flag open since %s" % str(op[-1].get("flag_date"))[5:10]
+        done = sorted((f for f in fs if f.get("disposition")),
+                      key=lambda f: (str(f.get("decided_date") or ""), str(f.get("flag_date") or "")))
+        if done:
+            f = done[-1]
+            word = {"KEEP": "kept", "ACTED": "acted on"}.get(str(f["disposition"]).upper(),
+                                                            str(f["disposition"]).lower())
+            why = (" — “%s”" % f["reason"]) if f.get("reason") else ""
+            return "%s %s%s; still firing" % (word, str(f.get("decided_date") or "")[5:10], why)
+        return "no flag yet — flags are written at the snapshot"
+
+    rows_out = []
+
+    def add(k, rule, reading):
+        on = k in kinds
+        rows_out.append({"kind": k, "label": _DIAG_LABEL[k], "rule": rule, "reading": reading,
+                         "firing": on, "status": status(k) if on else None})
+
+    pp = _f(r.get("pnl_pct"))
+    if mode == "SHORT ON":
+        sh = byleg.get(info.get("leg")) or {}
+        k_ = _f(sh.get("strike"))
+        cap, mk, streak = info.get("captured"), info.get("mark"), info.get("streak") or 0
+        b = buffer_pct([sh], r.get("spot_price")) if sh else None
+        add("pos_stop", "out at %.0f%% of the opening net debit" % EF.STOP_PCT,
+            "position %s" % ("—" if pp is None else "%+.0f%%" % pp))
+        add("breach", "spot through the short's $%g strike %d check days running" % (k_ or 0, EF.BREACH_DAYS),
+            ("spot $%.2f, %s" % (_f(r.get("spot_price")) or 0,
+                                 ("%.1f%% inside the strike" % b[0]) if b and b[0] >= 0
+                                 else ("%.1f%% through it, %d day%s" % (-b[0], streak, "" if streak == 1 else "s"))))
+            if b else "spot unread")
+        add("worthless", "short mark at or under $%.2f" % EF.WORTHLESS_MARK,
+            "mark %s" % ("—" if mk is None else "$%.2f" % mk))
+        for lvl in EF.HARVEST_LEVELS:
+            add("harvest%d" % lvl, "%.0f%% of the short's premium kept" % lvl,
+                "kept %s, %s DTE" % ("—" if cap is None else "%.0f%%" % cap, info.get("dte")))
+        exits_note = "No profit target on the whole trade; the short is harvested, the long waits."
+    else:
+        lp, pk, ldte = info.get("long_pct"), info.get("peak"), info.get("dte")
+        trail = None if pk is None else max(pk - EF.GIVE_BACK_PTS, EF.STOP_PCT)
+        add("long_stop", "out at %.0f%% of the long's original debit" % EF.STOP_PCT,
+            "long %s" % ("—" if lp is None else "%+.0f%%" % lp))
+        add("long_giveback", "%.0f points below the long's best reading" % EF.GIVE_BACK_PTS,
+            "best %s, trail %s, now %s" % ("—" if pk is None else "%+.0f%%" % pk,
+                                           "—" if trail is None else "%+.0f%%" % trail,
+                                           "—" if lp is None else "%+.0f%%" % lp))
+        add("long_dte21", "at %d days left, if the long is not positive" % EF.LONG_DTE_SOFT, "%s DTE" % ldte)
+        add("long_dte7", "at %d days left, regardless" % EF.LONG_DTE_HARD, "%s DTE" % ldte)
+        add("bare", "no short is sold against the long", "re-sell, or decide the long as a long call")
+        exits_note = "No profit target: the long-call rules exit on a fall from the best reading, never at a target."
+    firing = [x for x in rows_out if x["firing"]]
+    loss = [x for x in firing if x["kind"] in _DIAG_LOSS]
+    if firing:
+        head = "%s — firing: %s" % (mode, ", ".join(x["label"] for x in firing))
+    else:
+        head = "%s — nothing is firing" % mode
+    if book == "PAPER":
+        book_note = ("On the paper book these rules do not act yet (W180 step 7): the paper agent "
+                     "closes a diagonal only when the long leg reaches 21 DTE.")
+    else:
+        book_note = ("On the real book these are review flags, not sell signals: you decide, and "
+                     "HELM records it (HELM-193).")
+    if firing:
+        bits = ["%s (%s; %s)" % (x["label"], x["reading"], x["status"]) for x in firing]
+        read = "The diagonal rule (%s) is firing: %s. %s" % (mode, "; ".join(bits), book_note)
+    else:
+        read = ("The diagonal rule (%s) has nothing firing on the latest check. %s %s"
+                % (mode, exits_note, book_note))
+    pill = "%s · %s" % (mode, ("%d firing" % len(firing)) if firing else "nothing firing")
+    stamp = "BROKEN" if loss else ("FRAYING" if firing else "HOLDS")
+    return {"mode": mode, "asof": r.get("checked_at"), "rows": rows_out, "firing": [x["kind"] for x in firing],
+            "headline": head, "exits_note": exits_note, "book_note": book_note,
+            "read": read, "pill": pill, "stamp": stamp, "fires": bool(firing)}
+
+
 def diag_panel_lines(pn):
     """The panels in words -- one line per leg, so nothing depends on colour or
     on reading a chart."""
@@ -1876,8 +1984,19 @@ def evaluate(pos, legs, checks, entry_snap=None, entry_thesis_row=None,
             beliefs.append(_recover_belief(pos, legs, latest))
             beliefs.append(_premium_belief(pos, legs, entry_snap, cur_sig, latest))
     elif strat in _DIAG:
-        beliefs.append(_direction_belief(pos, entry_thesis_row, checks, cur_sig, want_up=True))
-        beliefs.append(_term_belief(pos))
+        # Review step 3 (2026-10-01, B1): say why these are grey, truthfully.
+        # entry_thesis is written for LONG_CALL only -- no diagonal has ever had
+        # one, whatever its date -- and P6 has never had an evaluator.
+        if entry_thesis_row:
+            beliefs.append(_direction_belief(pos, entry_thesis_row, checks, cur_sig, want_up=True))
+        else:
+            beliefs.append(_belief("direction", "%s keeps going up" % pos.get("ticker"),
+                                   "not captured for diagonals",
+                                   "no entry thesis is recorded for this strategy — HELM captures one for long calls only",
+                                   UNKNOWN, "nothing is invented; the diagonal rule above is what reads this position"))
+        beliefs.append(_belief("term", "the long clock is worth owning while the short clock pays rent",
+                               "asserted at entry", "not built — no evaluator exists for this belief (P6)",
+                               UNKNOWN, "the weakest observable; grey until it is built"))
     else:
         beliefs.append(_belief("unmapped", "%s %s" % (pos.get("ticker"), strat),
                                "no belief mapping for this strategy yet",
