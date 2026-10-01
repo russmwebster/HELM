@@ -9,6 +9,11 @@ Usage (device VM, HELM_ROOT layout as in the standing facts):
   python3 tools/verify_s125_legs.py compare OLD.json NEW.json               (asserts)
 Perturbation used 2026-10-01: contract_line(pos, legs) restored -> 21 FAIL.
 """
+import sys as _sys
+if __name__ == "__main__" and (len(_sys.argv) < 2 or _sys.argv[1] == "main"):
+    print("tools/verify_s125_legs.py: SUPERSEDED-s125e -- diagonals render thesis_diag.html since 2026-10-01; this harness checked the old diagonal card (step 1). Run tools/verify_s125_card.py and tools/verify_s125_loss_limit.py instead. Exiting without checking.")
+    _sys.exit(0)
+
 import hashlib, json, os, re, site, sqlite3, sys, tempfile, types
 USERSITE = site.getusersitepackages()
 MODE = sys.argv[1] if len(sys.argv) > 1 else "main"

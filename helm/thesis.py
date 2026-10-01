@@ -1707,7 +1707,7 @@ def diag_panels_svg(pn, width=760, panel_h=170, gap=34):
 # ── review step 3 (2026-10-01): the diagonal rule's state, on the card ─────
 _DIAG_LOSS = ("pos_stop", "breach", "long_stop", "long_giveback", "long_dte7", "long_dte21")
 _DIAG_LABEL = {
-    "pos_stop": "position stop", "breach": "breach", "worthless": "worthless",
+    "pos_stop": "loss limit", "breach": "breach", "worthless": "worthless",
     "harvest50": "harvest at 50%", "harvest25": "harvest at 25%",
     "long_stop": "long stop", "long_giveback": "give-back", "long_dte7": "7 days left",
     "long_dte21": "21 days left", "bare": "no short on",
@@ -1750,10 +1750,19 @@ def diag_rule_state(legs, rows, flags, book="REAL"):
 
     rows_out = []
 
-    def add(k, rule, reading):
+    def add(k, rule, reading, layer=None):
         on = k in kinds
         rows_out.append({"kind": k, "label": _DIAG_LABEL[k], "rule": rule, "reading": reading,
-                         "firing": on, "status": status(k) if on else None})
+                         "firing": on, "status": status(k) if on else None,
+                         "layer": layer or ("whole" if k == "pos_stop" else
+                                            ("short" if mode == "SHORT ON" else "long"))})
+
+    whole, lim = info.get("whole"), info.get("loss_limit")
+    if lim is not None and whole is not None:
+        gap = -whole - lim
+        add("pos_stop", "the whole trade loses half of what the long cost ($%s)" % format(round(lim), ","),
+            "whole trade %s · %s" % (_money(whole), ("$%s past it" % format(round(gap), ",")) if gap >= 0
+                                     else ("$%s to go" % format(round(-gap), ","))))
 
     pp = _f(r.get("pnl_pct"))
     if mode == "SHORT ON":
@@ -1761,8 +1770,6 @@ def diag_rule_state(legs, rows, flags, book="REAL"):
         k_ = _f(sh.get("strike"))
         cap, mk, streak = info.get("captured"), info.get("mark"), info.get("streak") or 0
         b = buffer_pct([sh], r.get("spot_price")) if sh else None
-        add("pos_stop", "out at %.0f%% of the opening net debit" % EF.STOP_PCT,
-            "position %s" % ("—" if pp is None else "%+.0f%%" % pp))
         add("breach", "spot through the short's $%g strike %d check days running" % (k_ or 0, EF.BREACH_DAYS),
             ("spot $%.2f, %s" % (_f(r.get("spot_price")) or 0,
                                  ("%.1f%% inside the strike" % b[0]) if b and b[0] >= 0
@@ -1810,6 +1817,380 @@ def diag_rule_state(legs, rows, flags, book="REAL"):
     return {"mode": mode, "asof": r.get("checked_at"), "rows": rows_out, "firing": [x["kind"] for x in firing],
             "headline": head, "exits_note": exits_note, "book_note": book_note,
             "read": read, "pill": pill, "stamp": stamp, "fires": bool(firing)}
+
+
+# ── the diagonal card, organised around four questions (s125, 2026-10-01) ────
+# Agreed with Russ from three mockups: At a glance → Is anything asking for a
+# decision? → Your moves → Where do I stand? (a dollar ledger) → What is this
+# trade? → Detail. Dollars for the whole trade; percentages only where a rule is
+# defined in them (the long's own rules, a short's premium kept). Pure: every
+# input is passed in; the rule's own readings (exit_flags._legs/_diag_rows) feed
+# it, so the card and the flags cannot disagree. Display only.
+def _d(x):
+    """Signed dollars, whole numbers: −$2,390 / +$1,390."""
+    return _money(x)
+
+
+def _dd(day_a, day_b):
+    try:
+        return (date.fromisoformat(str(day_b)[:10]) - date.fromisoformat(str(day_a)[:10])).days
+    except (ValueError, TypeError):
+        return None
+
+
+def _md(iso):
+    try:
+        d = date.fromisoformat(str(iso)[:10])
+        return "%s %d" % (d.strftime("%b"), d.day)
+    except (ValueError, TypeError):
+        return str(iso or "?")
+
+
+def diag_money_svg(points, limit, events=(), final=None, width=760, height=250):
+    """The trade over time, in dollars: the whole trade (solid), the long alone
+    with no rent (dashed), the gap between them shaded (rent the shorts earned,
+    or cost), even, and the loss limit. points: [(day, whole, long_alone)];
+    events: [(day, label)]; final: (day, whole, long_alone) for a closed card's
+    realized end. One point per check day, last check -- never interpolated."""
+    import math
+    allp = list(points) + ([final] if final else [])
+    if not allp:
+        return None
+    vals = [v for p in allp for v in p[1:] if v is not None] + [0.0] + ([-limit] if limit else [])
+    lo, hi = min(vals), max(vals)
+    pad = (hi - lo) * 0.08 or 100.0
+    lo, hi = lo - pad, hi + pad
+    ml, mr, mt, mb = 64, 150, 34, 30
+    pw, ph = width - ml - mr, height - mt - mb
+    n = len(allp)
+    X = lambda i: ml + pw * i / max(n - 1, 1)
+    Y = lambda v: mt + ph * (hi - v) / (hi - lo)
+    raw = (hi - lo) / 4.0
+    mag = 10 ** math.floor(math.log10(raw)) if raw > 0 else 1
+    st = next((k * mag for k in (1, 2, 2.5, 5, 10) if raw <= k * mag), 10 * mag)
+    e = []
+    g = math.ceil(lo / st) * st
+    while g <= hi:
+        e.append('<line x1="%d" x2="%d" y1="%.1f" y2="%.1f" stroke="var(--viz-grid,#2a333f)" stroke-width="1"/>'
+                 % (ml, ml + pw, Y(g), Y(g)))
+        e.append('<text x="%d" y="%.1f" text-anchor="end" font-size="11" fill="var(--viz-muted,#8b959d)">%s</text>'
+                 % (ml - 8, Y(g) + 4, _d(g) if g else "$0"))
+        g += st
+    e.append('<line x1="%d" x2="%d" y1="%.1f" y2="%.1f" stroke="var(--viz-muted,#8b959d)" stroke-width="1.2" stroke-dasharray="4 4"/>'
+             % (ml, ml + pw, Y(0), Y(0)))
+    e.append('<text x="%d" y="%.1f" font-size="11" fill="var(--viz-muted,#8b959d)">even</text>' % (ml + 4, Y(0) - 5))
+    if limit:
+        e.append('<line x1="%d" x2="%d" y1="%.1f" y2="%.1f" stroke="var(--viz-bad,#f85149)" stroke-width="1.4" stroke-dasharray="6 4"/>'
+                 % (ml, ml + pw, Y(-limit), Y(-limit)))
+        e.append('<text x="%d" y="%.1f" font-size="11" fill="var(--viz-bad,#f85149)">loss limit %s</text>'
+                 % (ml + 4, Y(-limit) - 5, _d(-limit)))
+    W = [(X(i), Y(p[1])) for i, p in enumerate(allp)]
+    full = all(p[2] is not None for p in allp)
+    if full:
+        L = [(X(i), Y(p[2])) for i, p in enumerate(allp)]
+        col = "var(--viz-good,#3fb950)" if allp[-1][1] >= allp[-1][2] else "var(--viz-bad,#f85149)"
+        poly = " ".join("%.1f,%.1f" % q for q in W) + " " + " ".join("%.1f,%.1f" % q for q in reversed(L))
+        e.append('<polygon points="%s" fill="%s" fill-opacity="0.13"/>' % (poly, col))
+        e.append('<polyline points="%s" fill="none" stroke="var(--viz-muted,#8b959d)" stroke-width="1.8" stroke-dasharray="5 3"/>'
+                 % " ".join("%.1f,%.1f" % q for q in L))
+    e.append('<polyline points="%s" fill="none" stroke="var(--viz-ink,#e6edf3)" stroke-width="2.4"/>'
+             % " ".join("%.1f,%.1f" % q for q in W))
+    for x, y in W:
+        e.append('<circle cx="%.1f" cy="%.1f" r="2.4" fill="var(--viz-ink,#e6edf3)"/>' % (x, y))
+    lx, ly = W[-1]
+    e.append('<text x="%.1f" y="%.1f" font-size="12" font-weight="700" fill="var(--viz-ink,#e6edf3)">whole trade %s</text>'
+             % (lx + 8, ly - 6, _d(allp[-1][1])))
+    if full:
+        e.append('<text x="%.1f" y="%.1f" font-size="11.5" fill="var(--viz-muted,#8b959d)">long alone %s</text>'
+                 % (L[-1][0] + 8, L[-1][1] + 14, _d(allp[-1][2])))
+    idx = {p[0]: i for i, p in enumerate(allp)}
+    j = 0
+    for day, lab in events:
+        if day not in idx:
+            continue
+        x = X(idx[day])
+        e.append('<line x1="%.1f" x2="%.1f" y1="%d" y2="%d" stroke="var(--viz-warn,#d29922)" stroke-width="1" stroke-opacity=".55"/>'
+                 % (x, x, mt, mt + ph))
+        e.append('<text x="%.1f" y="%d" font-size="10.5" fill="var(--viz-warn,#d29922)">%s</text>'
+                 % (x + 3, mt - 6 - 12 * (j % 2), lab))
+        j += 1
+    step = max(1, n // 6)
+    for i, p in enumerate(allp):
+        if i % step == 0 or i == n - 1:
+            e.append('<text x="%.1f" y="%d" text-anchor="middle" font-size="11" fill="var(--viz-muted,#8b959d)">%s</text>'
+                     % (X(i), height - 8, str(p[0])[5:].replace("-", "/")))
+    return ('<svg viewBox="0 0 %d %d" role="img" aria-label="The whole trade and the long alone, in dollars, '
+            'by check day" style="display:block;width:100%%;height:auto;overflow:visible">%s</svg>'
+            % (width, height, "".join(e)))
+
+
+def diag_view(pos, legs, rows, flags, quotes=None, entry_spot=None, earnings_next=None,
+              today=None, panels=None):
+    """Everything the four-question diagonal card shows, as plain data.
+    legs/rows: exit_flags._legs/_diag_rows. flags: exit_flags rows (dicts).
+    quotes: {leg_id: (bid, ask)} at the latest check. Returns None when there is
+    not exactly one long or no journaled reading."""
+    from helm import exit_flags as EF
+    opt = [l for l in legs or [] if l.get("option_type") not in (None, "STOCK")]
+    longs = [l for l in opt if str(l.get("direction") or "").upper() == "LONG"]
+    if len(longs) != 1 or not rows:
+        return None
+    lg = longs[0]
+    shorts = sorted((l for l in opt if str(l.get("direction") or "").upper() == "SHORT"),
+                    key=lambda l: (_ts(l.get("created_at")) or str(l.get("open_date") or "")))
+    c, m = _f(lg.get("contracts")) or 1.0, _f(lg.get("multiplier")) or 100.0
+    sh_n = lambda l: (_f(l.get("contracts")) or 0.0) * (_f(l.get("multiplier")) or 100.0)
+    closed = str(pos.get("status") or "").upper() == "CLOSED"
+    book = str(pos.get("book") or "REAL").upper()
+    tk = pos.get("ticker")
+    last = rows[-1]
+    at = last["checked_at"]
+    b = diag_basis(legs, at=at)
+    if not b:
+        return None
+    long_cost = b["long_cost"]
+    limit = EF.LOSS_LIMIT_FRAC * long_cost
+    whole = _f(last.get("pnl_unrealized"))
+    marks = last.get("marks") or {}
+    today = str(today or at)[:10]
+
+    # --- the day series: whole trade and the long alone -----------------------
+    byday = {}
+    for r in rows:
+        byday[r["checked_at"][:10]] = r
+    pts = []
+    for day in sorted(byday):
+        r = byday[day]
+        w = _f(r.get("pnl_unrealized"))
+        lm = _f((r.get("marks") or {}).get(lg["id"]))
+        la = None
+        if lm is not None:
+            la = (lm - lg["open_price"]) * c * m
+        else:
+            # the long has no mark of its own: the whole trade less every short's
+            # own P&L at that check, where every short live then is marked
+            t = r["checked_at"]
+            tot, ok = 0.0, True
+            for s in shorts:
+                bk_ = _ts(s.get("created_at")) or str(s.get("open_date") or "")[:10]
+                if bk_ and bk_ > t:
+                    continue
+                cd = _ts(s.get("close_date"))
+                if str(s.get("status") or "").upper() != "OPEN" and cd and cd <= t:
+                    tot += (s["open_price"] - s["close_price"]) * sh_n(s)
+                else:
+                    sm = _f((r.get("marks") or {}).get(s["id"]))
+                    if sm is None:
+                        ok = False
+                        break
+                    tot += (s["open_price"] - sm) * sh_n(s)
+            la = (w - tot) if (ok and w is not None) else None
+        pts.append((day, w, None if la is None else round(la, 2), r["checked_at"][11:16]))
+    events = []
+    first_day = min((str(l.get("open_date") or "")[:10] for l in opt if l.get("open_date")), default="")
+    for i, s in enumerate(shorts, 1):
+        od = str(s.get("open_date") or "")[:10]
+        if od and od > first_day:
+            events.append((od, "S%d sold" % i))
+        if str(s.get("status") or "").upper() != "OPEN" and s.get("close_date"):
+            events.append((str(s["close_date"])[:10],
+                           "S%d %s" % (i, "expired" if (s.get("close_price") or 0) == 0 else "back")))
+
+    # --- legs ------------------------------------------------------------------
+    live_short = next((s for s in reversed(shorts) if str(s.get("status") or "").upper() == "OPEN"), None)
+    lmark = _f(marks.get(lg["id"]))
+    smark = _f(marks.get(live_short["id"])) if live_short else None
+    long_value = (lmark * c * m) if lmark is not None else None
+    rent = b["rent"]
+    sale = round(whole + long_cost - rent, 2) if whole is not None else None
+    q = quotes or {}
+    real_sale = None
+    if lg["id"] in q and q[lg["id"]][0] is not None and (
+            live_short is None or (live_short["id"] in q and q[live_short["id"]][1] is not None)):
+        real_sale = q[lg["id"]][0] * c * m - ((q[live_short["id"]][1] * sh_n(live_short)) if live_short else 0.0)
+    legrows = [{"role": "Long", "contract": "+%d %s %s $%g %s" % (c, tk, _fmt_exp(lg.get("expiration")), lg["strike"],
+                                                                 "P" if lg.get("option_type") == "PUT" else "C"),
+                "days": None if closed else _dd(today, lg.get("expiration")),
+                "paid": lg["open_price"],
+                "now": (lg.get("close_price") if closed else lmark),
+                "state": (("sold %s · %s" % (_md(lg.get("close_date")), _d((lg["close_price"] - lg["open_price"]) * c * m)))
+                          if closed and lg.get("close_price") is not None else
+                          ("worth %s of the %s paid" % (_amt(long_value), _amt(long_cost)) if long_value is not None
+                           else "no mark")),
+                "live": not closed}]
+    for i, s in reversed(list(enumerate(shorts, 1))):
+        live = str(s.get("status") or "").upper() == "OPEN"
+        kept = None
+        px = smark if (live and s is live_short) else _f(s.get("close_price"))
+        if px is not None and s.get("open_price"):
+            kept = (s["open_price"] - px) / s["open_price"] * 100.0
+        if live:
+            st = "%s kept · sold %s" % ("—" if kept is None else "%.0f%%" % kept, _md(s.get("open_date")))
+        else:
+            how = "expired" if (s.get("close_price") or 0) == 0 else "bought back"
+            st = "%s %s · %s kept" % (how, _md(s.get("close_date")), "—" if kept is None else "%.0f%%" % kept)
+        legrows.append({"role": "Short #%d" % i,
+                        "contract": "−%d %s %s $%g %s" % (_f(s.get("contracts")) or 0, tk, _fmt_exp(s.get("expiration")),
+                                                          s["strike"], "P" if s.get("option_type") == "PUT" else "C"),
+                        "days": _dd(today, s.get("expiration")) if live else None,
+                        "paid": s["open_price"], "now": px, "state": st, "live": live})
+
+    # --- the rule --------------------------------------------------------------
+    rs = diag_rule_state(legs, rows, flags, book=book) if not closed else None
+    n_sold = b["n_sold"]
+    n_back = sum(1 for s in shorts if str(s.get("status") or "").upper() != "OPEN")
+    v = {"ticker": tk, "book": book, "closed": closed, "position_id": pos.get("id"),
+         "asof": at, "whole": whole, "limit": round(limit, 2), "long_cost": long_cost,
+         "rent": rent, "sale": sale, "real_sale": None if real_sale is None else round(real_sale, 2),
+         "real_whole": None if real_sale is None else round(real_sale + rent - long_cost, 2),
+         "long_value": long_value, "lmark": lmark, "smark": smark,
+         "n_sold": n_sold, "n_back": n_back, "legs": legrows, "rule": rs,
+         "even": diag_even_line(dict(b, pnl=whole), closed), "basis": b,
+         "panels": panels, "days": list(reversed(pts)),
+         "chart": diag_money_svg([p[:3] for p in pts], limit, events,
+                                 final=None)}
+    v["mode"] = (rs or {}).get("mode") or ("CLOSED" if closed else ("SHORT ON" if live_short else "LONG ONLY"))
+    sp = _f(last.get("spot_price"))
+    v["spot"] = sp
+    v["spot_move"] = (100.0 * (sp - entry_spot) / entry_spot) if (sp and entry_spot) else None
+    if whole is not None:
+        gap = -whole - limit
+        v["limit_gap"] = gap
+        v["limit_text"] = (("%s past the loss limit" % _amt(gap)) if gap >= 0
+                           else ("%s to the loss limit" % _amt(-gap)))
+        scale = max(limit, -whole, 1.0)
+        v["bar_fill"] = round(100.0 * max(0.0, -whole) / scale, 1)
+        v["bar_tick"] = round(100.0 * limit / scale, 1)
+    lv = "the long you paid %s for is worth %s today" % (_amt(long_cost), _amt(long_value)) if long_value is not None else "the long has no mark today"
+    if rent >= 0:
+        v["stand_line"] = "%s; the shorts have paid you %s net." % (lv[0].upper() + lv[1:], _amt(rent))
+    else:
+        v["stand_line"] = "%s; the shorts have cost you %s net." % (lv[0].upper() + lv[1:], _amt(-rent))
+
+    # --- next line to watch ----------------------------------------------------
+    nxt = []
+    if rs and live_short is not None and smark is not None:
+        op = live_short["open_price"]
+        kept = (op - smark) / op * 100.0 if op else None
+        fired = set(rs["firing"])
+        if "harvest50" not in fired:
+            nxt.append({"head": "Harvest at 50%", "text": "the short needs to fall from $%.2f to $%.2f" % (smark, op * 0.5),
+                        "meter": {"kept": max(0.0, min(100.0, kept or 0.0)), "open": op, "half": op * 0.5}})
+        elif "worthless" not in fired:
+            nxt.append({"head": "Worthless", "text": "the short at $%.2f or less (now $%.2f)" % (EF.WORTHLESS_MARK, smark)})
+        bf = buffer_pct([live_short], sp) if sp else None
+        if bf:
+            nxt.append({"head": "Breach", "text": ("%s would have to %s %.1f%% to the $%g strike" %
+                                                    (tk, "rise" if live_short.get("option_type") != "PUT" else "fall",
+                                                     abs(bf[0]), live_short["strike"])) if bf[0] >= 0 else
+                        ("%s is %.1f%% through the $%g strike" % (tk, -bf[0], live_short["strike"]))})
+    elif rs and lmark is not None:
+        nxt.append({"head": "Whole trade turns positive", "text": "when the long sells above $%.2f — %s today's $%.2f"
+                    % (b["effective"], (("%d¢ above" % round(100 * (b["effective"] - lmark))) if b["effective"] - lmark < 1
+                                        else ("$%.2f above" % (b["effective"] - lmark))) if b["effective"] >= lmark
+                                       else "already below", lmark)})
+        nxt.append({"head": "Long stop", "text": "the long at $%.2f (half its $%.2f price)" % (lg["open_price"] * 0.5, lg["open_price"])})
+    v["next"] = nxt
+
+    # --- dates -----------------------------------------------------------------
+    chips = []
+    if not closed:
+        if live_short is not None:
+            chips.append({"text": "Short expires %s · %s days" % (_md(live_short.get("expiration")), _dd(today, live_short.get("expiration")))})
+        else:
+            chips.append({"text": "No short on"})
+        en = str(earnings_next or "")[:10]
+        if en and en >= today:
+            if live_short is not None and en <= str(live_short.get("expiration"))[:10]:
+                dd = _dd(en, live_short.get("expiration"))
+                rel = "the day before the short expires" if dd == 1 else (
+                    "the day the short expires" if dd == 0 else "%d days before the short expires" % dd)
+                chips.append({"text": "Earnings %s · %s" % (_md(en), rel), "warn": True})
+            else:
+                chips.append({"text": "Earnings %s" % _md(en), "warn": True})
+        chips.append({"text": "Long expires %s · %s days" % (_md(lg.get("expiration")), _dd(today, lg.get("expiration")))})
+    v["dates"] = chips
+
+    # --- your moves (facts, not advice) -----------------------------------------
+    moves = []
+    if not closed:
+        if live_short is not None and smark is not None:
+            sc = smark * sh_n(live_short)
+            sa = q.get(live_short["id"], (None, None))[1]
+            moves.append({"head": "Hold", "res": "no change today", "cls": "",
+                          "text": "The short expires %s. If it expires worthless you keep its last %s. The long stays exposed: %s of value."
+                                  % (_md(live_short.get("expiration")), _amt(sc), _amt(long_value))})
+            moves.append({"head": "Buy back the short", "res": "−%s" % _amt(sc), "cls": "neg",
+                          "aside": ("(−%s at the ask)" % _amt(sa * sh_n(live_short))) if sa is not None else "",
+                          "text": "Banks %s on this short. You keep the long, and can sell a new short or treat it as a long call."
+                                  % _d((live_short["open_price"] - smark) * sh_n(live_short))})
+        else:
+            moves.append({"head": "Hold the long", "res": "no change today", "cls": "",
+                          "text": "The long carries the trade alone: %s of value, no rent coming in." % _amt(long_value)})
+            moves.append({"head": "Sell a new short", "res": "+ rent", "cls": "pos",
+                          "text": "Puts the position back to short on. Candidates and prices are on the board's re-sell panel."})
+        if sale is not None:
+            moves.append({"head": "Close everything" if live_short is not None else "Close: sell the long",
+                          "res": "+%s back" % _amt(sale), "cls": "",
+                          "aside": ("(%s realistic)" % _amt(real_sale)) if real_sale is not None else "",
+                          "text": "The whole trade ends at %s%s." % (_d(whole), (" (%s at a realistic fill)" % _d(v["real_whole"]))
+                                                                    if v["real_whole"] is not None else "")})
+    v["moves"] = moves
+
+    # --- the ledger --------------------------------------------------------------
+    led = [("You paid for the long (%d × $%.2f)" % (c, lg["open_price"]), -long_cost)]
+    if not closed:
+        led.append(("Shorts have paid you, net (%d sold, %d closed)" % (n_sold, n_back), rent))
+        if sale is not None:
+            det = "sell long $%.2f" % lmark if lmark is not None else ""
+            if live_short is not None and smark is not None:
+                det += ", buy back short $%.2f" % smark
+            led.append(("Closing today would bring back (%s)" % det, sale))
+    v["ledger"] = led
+
+    # --- closed: the record -------------------------------------------------------
+    if closed:
+        realized = _f(pos.get("realized_pnl"))
+        rec = []
+        for i, s in enumerate(shorts, 1):
+            rec.append(("Short #%d sold %s (%d × $%.2f)" % (i, _md(s.get("open_date")), _f(s.get("contracts")) or 0, s["open_price"]),
+                        s["open_price"] * sh_n(s)))
+            if s.get("close_price") is not None:
+                rec.append(("Short #%d %s %s (%d × $%.2f)" % (i, "expired" if not s["close_price"] else "bought back",
+                                                              _md(s.get("close_date")), _f(s.get("contracts")) or 0, s["close_price"]),
+                            -s["close_price"] * sh_n(s)))
+        if lg.get("close_price") is not None:
+            rec.append(("Long sold %s (%d × $%.2f)" % (_md(lg.get("close_date")), c, lg["close_price"]), lg["close_price"] * c * m))
+        v["ledger"] = led + rec
+        v["realized"] = realized
+        v["exit_reason"] = pos.get("exit_reason")
+        v["closed_at"] = pos.get("closed_at")
+        v["opened_at"] = pos.get("opened_at")
+        v["held_days"] = _dd(pos.get("opened_at"), pos.get("closed_at"))
+        long_gain = ((lg["close_price"] - lg["open_price"]) * c * m) if lg.get("close_price") is not None else None
+        short_gain = (realized - long_gain) if (realized is not None and long_gain is not None) else None
+        v["long_gain"], v["short_gain"] = long_gain, short_gain
+        fin = (str(pos.get("closed_at") or "")[:10], realized, long_gain) if realized is not None else None
+        if fin and fin[0] == pts[-1][0]:
+            fin = None
+        v["chart"] = diag_money_svg([p[:3] for p in pts], limit, events, final=fin)
+        v["flags"] = [{"kind": _DIAG_LABEL.get(f.get("kind"), f.get("kind")), "date": _md(f.get("flag_date")),
+                       "disp": f.get("disposition"), "decided": _md(f.get("decided_date")) if f.get("decided_date") else None,
+                       "reason": f.get("reason")} for f in flags or []]
+        tl = []
+        for l in sorted(opt, key=lambda l: _ts(l.get("created_at")) or str(l.get("open_date"))):
+            tl.append((str(l.get("open_date"))[:10], "%s %s $%g %s at $%.2f" % (
+                "bought" if l is lg else "sold", "long" if l is lg else "short", l["strike"], _md(l.get("expiration")), l["open_price"])))
+            if l.get("close_price") is not None and l.get("close_date"):
+                tl.append((str(l["close_date"])[:10], "%s at $%.2f" % (
+                    "sold the long" if l is lg else ("short expired" if not l["close_price"] else "bought back the short"),
+                    l["close_price"])))
+        for f in flags or []:
+            tl.append((str(f.get("flag_date"))[:10], "flag: %s%s" % (_DIAG_LABEL.get(f.get("kind"), f.get("kind")),
+                       (" → %s %s" % ("kept" if f.get("disposition") == "KEEP" else "acted on", _md(f.get("decided_date"))))
+                       if f.get("disposition") else "")))
+        v["timeline"] = [(_md(d), t) for d, t in sorted(tl)]
+    return v
 
 
 def diag_panel_lines(pn):

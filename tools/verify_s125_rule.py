@@ -20,6 +20,11 @@ Usage: python3 tools/verify_s125_rule.py
        python3 tools/verify_s125_rule.py render HELM_TREE PG_TREE OUT.json COPY   (child)
 Perturbation run 2026-10-01: the state read from the FIRST check instead of the latest -> FAIL.
 """
+import sys as _sys
+if __name__ == "__main__" and (len(_sys.argv) < 2 or _sys.argv[1] == "main"):
+    print("tools/verify_s125_rule.py: SUPERSEDED-s125e -- diagonals render thesis_diag.html since 2026-10-01; this harness checked the old diagonal card (step 3). Run tools/verify_s125_card.py and tools/verify_s125_loss_limit.py instead. Exiting without checking.")
+    _sys.exit(0)
+
 import html, json, os, re, shutil, site, sqlite3, subprocess, sys, tempfile, types
 USERSITE = site.getusersitepackages()
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
