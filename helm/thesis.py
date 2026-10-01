@@ -977,6 +977,139 @@ def position_value(net_premium, mark):
     return (paid - mk) if prem > 0 else (paid + mk)
 
 
+# ── the diagonal's effective basis (review step 2, W180 5.3) ─────────────────
+def _ts(x):
+    return str(x or "").replace(" ", "T")
+
+
+def diag_basis(legs, at=None):
+    """A diagonal's money, from its legs alone, as of `at` (a local ISO timestamp,
+    the same clock as `legs.created_at` and `checks.checked_at`; None = everything
+    booked). Pure; computed, never stored (W180 5.3).
+
+    NET RENT BANKED (Russ, 2026-10-01): every short sale's credit minus every
+    buy-back's cost -- the cash that has actually moved on the short side, losing
+    buy-backs included (AMAT: +22.75 - 39.65 = -16.90). An OPEN short's credit is
+    in it; what that short costs to buy back is in the closing sale instead.
+    A short counts from its booking (`created_at`, else its open day); a buy-back
+    or settlement from its `close_date`.
+
+    EFFECTIVE BASIS = (the long's cost - net rent banked) per share of the long.
+    Display only: the long-only exit rules keep measuring the long against its
+    ORIGINAL debit (standing rule, 2026-09-23). None unless there is exactly one
+    long option leg."""
+    opt = [l for l in legs or [] if l.get("option_type") not in (None, "STOCK")]
+    longs = [l for l in opt if str(l.get("direction") or "").upper() == "LONG"]
+    if len(longs) != 1:
+        return None
+    lg = longs[0]
+    op, c = _f(lg.get("open_price")), _f(lg.get("contracts"))
+    m = _f(lg.get("multiplier")) or 100.0
+    if op is None or not c:
+        return None
+    at = _ts(at) if at else None
+    rent, n_sold, live_shorts = 0.0, 0, []
+    for l in opt:
+        if str(l.get("direction") or "").upper() != "SHORT":
+            continue
+        booked = _ts(l.get("created_at")) or (str(l.get("open_date") or "")[:10])
+        if at and booked and booked > at:
+            continue
+        sp, sc = _f(l.get("open_price")), _f(l.get("contracts")) or 0.0
+        sm = _f(l.get("multiplier")) or 100.0
+        if sp is None:
+            return None
+        rent += sp * sc * sm
+        n_sold += 1
+        cd = _ts(l.get("close_date"))
+        shut = str(l.get("status") or "").upper() != "OPEN" and (not at or (cd and cd <= at))
+        if shut:
+            cp = _f(l.get("close_price"))
+            if cp is None:
+                return None
+            rent -= cp * sc * sm
+        else:
+            live_shorts.append(l)
+    cost = op * c * m
+    eff = (cost - rent) / (c * m)
+    k = _f(lg.get("strike"))
+    be = None
+    if not live_shorts and k is not None:
+        be = round(k + eff, 2) if lg.get("option_type") != "PUT" else round(k - eff, 2)
+    return {"long_cost": round(cost, 2), "rent": round(rent, 2), "n_sold": n_sold,
+            "n_live_shorts": len(live_shorts), "effective": round(eff, 2),
+            "even_sale": round(cost - rent, 2), "free": eff <= 0,
+            "long_debit": op, "strike": k, "expiration": str(lg.get("expiration") or "")[:10],
+            "option_type": lg.get("option_type"), "contracts": c, "multiplier": m,
+            "stock_breakeven": be}
+
+
+def diag_close(pos, legs, checks, closed=False, today=None):
+    """The diagonal's close track, in its own terms. The line is the long's cost
+    plus the whole trade's P&L -- what you would hold if you closed then: the
+    closing sale plus net rent banked -- against the long's cost as the reference,
+    so the line crosses the rule exactly where the whole trade is even. The last
+    point is split into the closing sale and net rent banked as of that check."""
+    last = None
+    for r in reversed(checks or []):
+        if _f(r.get("pnl_unrealized")) is not None and r.get("checked_at"):
+            last = r
+            break
+    if last is None:
+        return None, None
+    b = diag_basis(legs, at=last["checked_at"])
+    if not b:
+        return None, None
+    ct = close_series(dict(pos, net_premium=-b["long_cost"]), checks, closed, today=today)
+    if not ct:
+        return None, b
+    pnl = _f(last.get("pnl_unrealized"))
+    b["pnl"] = pnl
+    b["sale"] = round(pnl + b["long_cost"] - b["rent"], 2)
+    b["asof"] = last["checked_at"]
+    ct.update({"diag": b, "ref_word": "long cost",
+               "caption": "↑ better — closing sale + net rent banked, against what the long cost",
+               "aria": "Closing sale plus net rent banked, on each check day, against the long's cost -- higher is better"})
+    return ct, b
+
+
+def diag_headline(ct, closed=False):
+    b = (ct or {}).get("diag")
+    if not b:
+        return None
+    pnl, sale, rent, cost = b["pnl"], b["sale"], b["rent"], b["long_cost"]
+    return ("%s: the sale %s %s and net rent banked is %s%s%s — %s against the %s the long "
+            "cost, %s %s on the whole trade"
+            % ("at the last check" if closed else "closing today",
+               "would have fetched" if closed else "fetches", _amt(sale),
+               "−" if rent < 0 else "+", _amt(abs(rent)),
+               "" if not b["n_sold"] else
+               (" (%d short%s sold)" % (b["n_sold"], "" if b["n_sold"] == 1 else "s")),
+               _amt(sale + rent), _amt(cost), _amt(abs(pnl)), "up" if pnl >= 0 else "down"))
+
+
+def diag_even_line(b, closed=False):
+    """The what-if: where the whole trade is even, in the trader's terms."""
+    if not b:
+        return None
+    if b["free"]:
+        return ("Net rent banked (%s) has repaid the long's %s cost: any closing sale above "
+                "zero is profit on the whole trade." % (_amt(b["rent"]), _amt(b["long_cost"])))
+    per_rent = b["rent"] / (b["contracts"] * b["multiplier"])
+    word = "less" if per_rent >= 0 else "plus"
+    if b["n_live_shorts"]:
+        return ("Even on the whole trade when the closing sale fetches %s — the long selling "
+                "for $%.2f a share more than the short costs to buy back (its $%.2f cost, %s "
+                "$%.2f of net rent banked a share)."
+                % (_amt(b["even_sale"]), b["effective"], b["long_debit"], word, abs(per_rent)))
+    s = ("Even on the whole trade when the long sells for $%.2f a share (its $%.2f cost, "
+         "%s $%.2f of net rent banked a share)"
+         % (b["effective"], b["long_debit"], word, abs(per_rent)))
+    if b.get("stock_breakeven") is not None and not closed:
+        s += "; held to its %s expiry, that is the stock at $%.2f" % (b["expiration"][5:], b["stock_breakeven"])
+    return s + "."
+
+
 def close_series(pos, checks, closed=False, today=None):
     """What closing the position would have cost — or paid — on every check day.
 
@@ -1063,6 +1196,18 @@ def trend_sentence(track, closed=False):
     if not t["clear"]:
         return ("moved %s vs the prior check day — within the days' own quote spread, "
                 "not a clear move" % _amt(abs(d1)))
+    if track.get("diag"):
+        # Review step 2: a diagonal's line is the whole trade, not a sale price.
+        word = "gaining" if d1 > 0 else "losing"
+        s = ("%s — %s%s on the prior check day"
+             % (("the whole trade was %s into the close" % word) if closed
+                else ("the whole trade is %s" % word), "+" if d1 > 0 else "−", _amt(abs(d1))))
+        if streak >= 2:
+            s += ", %s %d check days running (from %s)" % (
+                "improving" if t["better"] else "worsening", streak, _amt(base))
+        if track.get("provisional") and not closed:
+            s += " · today still has checks to come"
+        return s
     if track["credit"]:
         word = "cheaper" if d1 < 0 else "dearer"
         head = ("was getting %s into the close" % word) if closed else ("getting %s" % word)
@@ -1224,7 +1369,7 @@ def close_svg(track, width=760, height=230, trail=None):
     e.append('<line x1="%.1f" x2="%.1f" y1="%.1f" y2="%.1f" stroke="var(--viz-ink2,#52514e)" stroke-width="1.5" stroke-dasharray="5 4"/>'
              % (ml, ml + pw, yp, yp))
     e.append('<text x="%.1f" y="%.1f" font-size="10.5" fill="var(--viz-ink2,#52514e)">%s %s</text>'
-             % (ml + pw + 8, yp + 3.5, "took in" if track["credit"] else "paid", _amt(paid)))
+             % (ml + pw + 8, yp + 3.5, track.get("ref_word") or ("took in" if track["credit"] else "paid"), _amt(paid)))
     if _tv:
         # A ratchet is a STEP, not a slope: hold each level to the next point,
         # then rise. Drawing it as a straight segment between points would show
@@ -1266,7 +1411,9 @@ def close_svg(track, width=760, height=230, trail=None):
         # for this structure. A bare triangle cannot -- a falling buy-back cost
         # is a down arrow and a good day, and colour alone must never carry it
         # (the card's own icon-plus-words rule).
-        if track["credit"]:
+        if track.get("diag"):
+            _tw = "on the day"
+        elif track["credit"]:
             _tw = "cheaper" if tr["d1"] < 0 else "dearer"
         else:
             _tw = "fetching less" if tr["d1"] < 0 else "fetching more"
@@ -1278,7 +1425,7 @@ def close_svg(track, width=760, height=230, trail=None):
     # says it in colour at 0.15 opacity; a 2px ink line descending says the
     # opposite louder. HELM-146 settled that the NET number leads on the
     # headline -- this is the same settlement applied to the picture.
-    _cap = ("↓ better — costs less to buy back than you took in"
+    _cap = track.get("caption") or ("↓ better — costs less to buy back than you took in"
             if track["credit"] else
             "↑ better — sells back for more than you paid")
     e.append('<text x="%.1f" y="%.1f" font-size="10.5" fill="var(--viz-muted,#898781)">%s</text>'
@@ -1292,7 +1439,7 @@ def close_svg(track, width=760, height=230, trail=None):
                      % (X(i), mt + ph + 16, p["date"][5:]))
     e.append('<line x1="%.1f" x2="%.1f" y1="%.1f" y2="%.1f" stroke="var(--viz-axis,#c3c2b7)" stroke-width="1"/>'
              % (ml, ml + pw, mt + ph, mt + ph))
-    _aria = ("What it would cost to close, on each check day -- lower is better"
+    _aria = track.get("aria") or ("What it would cost to close, on each check day -- lower is better"
              if track["credit"] else
              "What closing would pay, on each check day -- higher is better")
     return ('<svg viewBox="0 0 %d %d" role="img" aria-label="%s" '
@@ -1782,6 +1929,12 @@ def evaluate(pos, legs, checks, entry_snap=None, entry_thesis_row=None,
     # every position with a premium and traces the LAST check of each day. Both
     # read the journal through _day_marks, so they cannot drift on what a day is.
     ct = close_series(pos, checks, closed, today=today)
+    if strat in _DIAG:
+        # Review step 2 (Russ, 2026-10-01): a diagonal's close track is the
+        # closing sale plus net rent banked, against the long's cost.
+        _dct, _dbasis = diag_close(pos, legs, checks, closed, today=today)
+        if _dct:
+            ct = _dct
     if ct and latest is not None and not closed and _expiry_math:
         _xpnl = _pnl_at_expiry(live_legs, latest.get("spot_price"))
         _xcost = position_value(_f(pos.get("net_premium")), _xpnl) if _xpnl is not None else None
@@ -1795,7 +1948,22 @@ def evaluate(pos, legs, checks, entry_snap=None, entry_thesis_row=None,
                               "in-the-money legs quote wide and below true value, so a real "
                               "fill will likely cost nearer the higher number"
                               % (_amt(_xcost), _amt(ct["now"])))
-    ct_head = close_headline(ct, closed)
+    ct_head = diag_headline(ct, closed) if (ct or {}).get("diag") else close_headline(ct, closed)
+    if (ct or {}).get("diag"):
+        ct["even_line"] = diag_even_line(ct["diag"], closed)
+        _b = ct["diag"]
+        if not closed and _b.get("stock_breakeven") is not None and latest is not None:
+            # LONG ONLY: one leg, one expiry -- the expiry value is a fact again.
+            _sp = _f(latest.get("spot_price"))
+            if _sp is not None and _b["strike"] is not None:
+                _intr = (max(0.0, _sp - _b["strike"]) if _b["option_type"] != "PUT"
+                         else max(0.0, _b["strike"] - _sp)) * _b["contracts"] * _b["multiplier"]
+                if _intr - _b["sale"] > max(100.0, 0.02 * _intr):
+                    ct["itm_note"] = ("a caveat on the quotes: at today's spot the long is worth "
+                                      "%s at expiry, more than the %s the mid-quote offers — a "
+                                      "deep in-the-money option quotes below its value, so a "
+                                      "real fill will likely land nearer the higher number"
+                                      % (_amt(_intr), _amt(_b["sale"])))
     ct_trail = trail_series(pos, ct)
     ct_svg = close_svg(ct, trail=ct_trail)
 
@@ -1941,7 +2109,9 @@ def evaluate(pos, legs, checks, entry_snap=None, entry_thesis_row=None,
         "contract": contract_line(pos, live_legs),
         "spot": _f((latest or {}).get("spot_price")),
         "expirations": _exps,
-        "breakevens": breakevens(live_legs) if _expiry_math else [],
+        "breakevens": (breakevens(live_legs) if _expiry_math else
+                       ([ct["diag"]["stock_breakeven"]] if (not closed and (ct or {}).get("diag")
+                        and ct["diag"].get("stock_breakeven") is not None) else [])),
         "strategy": strat, "book": pos.get("book"), "closed": closed,
         "deal": deal_sentence(pos, legs),
         "beliefs": beliefs,

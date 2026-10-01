@@ -64,8 +64,11 @@ def compare(a, b):
         if strat not in diag:
             continue
         h = B[p]["html"]
-        ok("no break-even on diagonal " + p, "<b>Break-even</b>" not in h)
-        ok("no expiry caveat on diagonal " + p, "a caveat on the quotes" not in h)
+        # step 2 (s125b) restores a break-even on LONG-ONLY diagonals, from the basis
+        ok("no break-even on diagonal " + p, "<b>Break-even</b>" not in h or st != "OPEN"
+           or sum(1 for s_, k, e in legs[p] if s_ == "OPEN") == 1)
+        ok("no expiry caveat on diagonal " + p, "a caveat on the quotes" not in h or st != "OPEN"
+           or sum(1 for s_, k, e in legs[p] if s_ == "OPEN") == 1)
         if st != "OPEN":
             continue
         open_exps = {e for s, k, e in legs[p] if s == "OPEN"}
