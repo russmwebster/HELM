@@ -319,8 +319,12 @@ def dispositions_for(conn, position_ids):
 # computed from the legs and the journal's per-leg marks (leg_checks):
 #
 #   SHORT ON, on the live short:
-#     pos_stop     position pnl_pct <= −50 (W180 §3: the v3 backstop on the
-#                  position is a fact whatever the short is doing)
+#     pos_stop     THE LOSS LIMIT (Russ, 2026-10-01): the whole trade's dollar
+#                  P&L at or below −LOSS_LIMIT_FRAC × what the long cost. Fires
+#                  in BOTH states (it watches the money; the long's own rules
+#                  watch the long). Until 2026-10-01 it was pnl_pct <= −50, a %
+#                  of the OPENING net debit, which mixed bases once a short had
+#                  been re-sold (AA −72% "of $3,325" while $3,100 was in it).
 #     breach       spot through the short strike on 2+ consecutive check days,
 #                  worst-of-day -- thesis.py's confirmed-breach construction,
 #                  the best-measured signal HELM has (W180 4.1)
@@ -376,13 +380,17 @@ LONG_DTE_HARD = _LE.DTE_HARD                   # 7
 SHORT_KINDS = ("breach", "worthless", "harvest50", "harvest25")
 LONG_KINDS = ("long_stop", "long_giveback", "long_dte7", "long_dte21", "bare")
 DIAG_KINDS = ("pos_stop",) + SHORT_KINDS + LONG_KINDS
+# The loss limit: half of what the long cost, in dollars, against the whole
+# trade's dollar P&L -- rent counts automatically (Russ, 2026-10-01). The half
+# is v3's own −50% (STOP_PCT), so the two layers share one number.
+LOSS_LIMIT_FRAC = -STOP_PCT / 100.0
 # Kinds a leg close answers. The generic `target`/`dte` are here because
 # diagonals took them before this step -- UNH's 09-18 `dte` is one.
 _LEG_ANSWERED = SHORT_KINDS + ("target", "dte")
 
 KIND_LABEL = {
     "thesis": "thesis broken", "target": "profit target", "dte": "21 DTE",
-    "pos_stop": "position −50%",
+    "pos_stop": "whole trade past its loss limit",
     "breach": "short breached (confirmed)", "worthless": "short ≤ $0.05",
     "harvest50": "short 50% captured", "harvest25": "short 25% captured",
     "long_stop": "long −50% of its debit", "long_giveback": "long gave back 20 pts",
@@ -440,7 +448,7 @@ def diag_series(legs, rows):
     readings they fired on. rows: dicts with checked_at, spot_price, pnl_pct,
     marks {leg_id: price}. Returns [(row, [kinds], info)] -- kinds in
     precedence order (loss causes before calendar causes before harvest)."""
-    from helm.thesis import buffer_pct
+    from helm.thesis import buffer_pct, diag_basis
     opt = [l for l in legs or [] if _is_opt(l)]
     shorts = [l for l in opt if str(l.get("direction") or "").upper() == "SHORT"]
     longs = [l for l in opt if str(l.get("direction") or "").upper() == "LONG"]
@@ -454,6 +462,11 @@ def diag_series(legs, rows):
         ls = [s for s in shorts if s["id"] in marks and _live_at(s, t)]
         ll = [l for l in longs if l["id"] in marks and _live_at(l, t)]
         kinds, info = [], {}
+        # the loss limit, in dollars, both states
+        _b = diag_basis(legs, at=t) if t else None
+        whole = _f(r.get("pnl_unrealized"))
+        limit = (LOSS_LIMIT_FRAC * _b["long_cost"]) if _b else None
+        pos_fire = whole is not None and limit is not None and whole <= -limit
         lg = sorted(ll, key=lambda l: str(l.get("expiration") or ""))[-1] if ll else None
         lpct = None
         if lg is not None:
@@ -475,8 +488,7 @@ def diag_series(legs, rows):
                     streak += 1
                 else:
                     break
-            pp = _f(r.get("pnl_pct"))
-            if pp is not None and pp <= STOP_PCT:
+            if pos_fire:
                 kinds.append("pos_stop")
             if streak >= BREACH_DAYS:
                 kinds.append("breach")
@@ -486,10 +498,12 @@ def diag_series(legs, rows):
                 if cap is not None and cap >= lvl:
                     kinds.append("harvest%d" % lvl)
             info = {"state": "SHORT ON", "leg": s["id"], "captured": cap,
-                    "mark": sm, "streak": streak,
+                    "mark": sm, "streak": streak, "whole": whole, "loss_limit": limit,
                     "dte": _dte_on(s.get("expiration"), day)}
         elif lg is not None:
             ldte = _dte_on(lg.get("expiration"), day)
+            if pos_fire:
+                kinds.append("pos_stop")
             if lpct is not None:
                 trail = max(peak[lg["id"]] - GIVE_BACK_PTS, STOP_PCT)
                 if lpct <= STOP_PCT:
@@ -503,7 +517,8 @@ def diag_series(legs, rows):
             kinds.append("bare")
             info = {"state": "LONG ONLY", "leg": lg["id"], "long_pct": lpct,
                     "peak": peak.get(lg["id"]), "mark": _f(marks.get(lg["id"])),
-                    "debit": _f(lg.get("open_price")), "dte": ldte}
+                    "debit": _f(lg.get("open_price")), "dte": ldte,
+                    "whole": whole, "loss_limit": limit}
         out.append((r, kinds, info))
     return out
 
@@ -599,6 +614,9 @@ def _diag_note(kind, info):
     """The reading the flag fired on, in words. pct_at_flag stays position
     pnl_pct for every kind, so the column means one thing; this carries the
     number the rule actually read."""
+    if kind == "pos_stop" and info.get("loss_limit") is not None and info.get("whole") is not None:
+        return "whole trade %s$%.0f vs loss limit $%.0f" % (
+            "−" if info["whole"] < 0 else "+", abs(info["whole"]), info["loss_limit"])
     if info.get("state") == "SHORT ON":
         c = info.get("captured")
         return "short %s captured, mark %s, %s DTE%s" % (

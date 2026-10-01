@@ -46,8 +46,8 @@ def leg(i, d, k, exp, op, status="OPEN", cd=None, od="2026-09-01"):
             "contracts": 1, "multiplier": 100, "open_price": op, "close_price": None,
             "open_date": od, "close_date": cd, "status": status, "created_at": od}
 
-def row(t, spot, marks, pct=0.0):
-    return {"checked_at": t, "spot_price": spot, "pnl_pct": pct, "pnl_unrealized": 0.0,
+def row(t, spot, marks, pct=0.0, pnl=0.0):
+    return {"checked_at": t, "spot_price": spot, "pnl_pct": pct, "pnl_unrealized": pnl,
             "marks": marks}
 
 def last_kinds(legs, rows):
@@ -71,8 +71,14 @@ case("breach_2days", last_kinds([S, L], two), ["breach"])
 gap = one + [row("2026-09-11T10:00", 49, {"S": 2.0, "L": 8}),
              row("2026-09-12T10:00", 51, {"S": 3.0, "L": 9})]
 case("breach_broken", last_kinds([S, L], gap), [])
-case("pos_stop", last_kinds([S, L], [row("2026-09-10T10:00", 45, {"S": 1.9, "L": 5}, pct=-55)]),
+# s125 (2026-10-01): pos_stop is the LOSS LIMIT -- the whole trade's dollars at or
+# below half of what the long cost (L costs 1 x 100 x its open price), in both
+# states; pnl_pct no longer drives it.
+_lc = L["open_price"] * 100
+case("pos_stop", last_kinds([S, L], [row("2026-09-10T10:00", 45, {"S": 1.9, "L": 5}, pct=-55, pnl=-0.5 * _lc)]),
      ["pos_stop"])
+case("pos_stop_pct_only", last_kinds([S, L], [row("2026-09-10T10:00", 45, {"S": 1.9, "L": 5}, pct=-55, pnl=-0.5 * _lc + 1)]),
+     [])
 
 # --- LONG ONLY --------------------------------------------------------------
 Sc = leg("S", "SHORT", 50.0, "2026-10-16", 2.00, status="CLOSED", cd="2026-09-12T11:00")
