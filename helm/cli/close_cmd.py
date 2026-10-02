@@ -104,6 +104,7 @@ EXIT_REASONS = (
     "EXPIRED",         # expired worthless
     "ROLLED",          # closed as one half of a roll
     "DISCRETIONARY",   # my judgement, no rule fired -- honest, not unrecorded
+    "RENT_NOT_PAYING", # diagonal: the short's rent no longer beat the long's decay (Russ, 2026-10-02)
 )
 DEFAULT_EXIT_REASON = "manual"
 
