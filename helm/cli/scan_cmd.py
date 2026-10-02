@@ -195,7 +195,34 @@ SENTINEL_STRATEGIES = ("NO_BUY_PATH", "NO_EDGE_VOL", "NO_ASSESS_IVR",
 # bias_to_strategy can emit -- DIAGONAL is excluded because it is not a
 # credit structure (HELM-111), and CC/BPS are not scan-routed at all.
 SELL_EARN_VETO_DAYS = 10
-SELL_EARN_GATED = ("CSP", "IRON_CONDOR", "BEAR_CALL_SPREAD")
+# W209 (Russ, 2026-10-02): every route that SELLS a short is gated -- the
+# diagonal family (the short is sold into the print AND the long is bought at
+# pre-earnings IV) and the bull put spread (a CSP's exposure). Covered calls
+# are deliberately NOT gated: the stock is already held and the call reduces
+# risk through the print.
+SELL_EARN_GATED = ("CSP", "IRON_CONDOR", "BEAR_CALL_SPREAD",
+                   "BULL_PUT_SPREAD", "DIAGONAL", "PMCC", "DIAGONAL_PUT")
+
+
+def sell_earn_gate(results):
+    """HELM-136 / W209: demote a premium-selling route inside SELL_EARN_VETO_DAYS
+    of earnings to NO_SELL_EARNINGS, keeping the route in strategy_shadow. A
+    missing or stale (negative) date does not gate. Mutates and returns rows."""
+    for _r in results:
+        if _r.get("error"):
+            continue
+        _strat = _r.get("strategy")
+        if _strat not in SELL_EARN_GATED:
+            continue
+        _d2e = _r.get("days_to_earnings")
+        if _d2e is None or _d2e < 0 or _d2e > SELL_EARN_VETO_DAYS:
+            continue
+        _r["strategy_shadow"] = _strat
+        _r["strategy"] = "NO_SELL_EARNINGS"
+        _r["strategy_rationale"] = (
+            "earnings in %dd -- a short sold inside %dd of a print is vetoed; "
+            "route was %s" % (int(_d2e), SELL_EARN_VETO_DAYS, _strat))
+    return results
 
 SENTINEL_LABELS = {
     "NO_BUY_PATH":   "no buy path",
@@ -1013,20 +1040,7 @@ def run():
     # and a cache bug must not become a silent gate (the W24/W76 lesson). The
     # buy wing G4 fails closed and already carries that cost for its side.
     try:
-        for _r in results:
-            if _r.get("error"):
-                continue
-            _strat = _r.get("strategy")
-            if _strat not in SELL_EARN_GATED:
-                continue
-            _d2e = _r.get("days_to_earnings")
-            if _d2e is None or _d2e < 0 or _d2e > SELL_EARN_VETO_DAYS:
-                continue
-            _r["strategy_shadow"] = _strat
-            _r["strategy"] = "NO_SELL_EARNINGS"
-            _r["strategy_rationale"] = (
-                "earnings in %dd -- credit sale vetoed inside %dd of a print; "
-                "route was %s" % (int(_d2e), SELL_EARN_VETO_DAYS, _strat))
+        sell_earn_gate(results)
     except Exception:
         pass
 
