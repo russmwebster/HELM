@@ -3,7 +3,8 @@
 # helm reconcile -- compare HELM open positions to Fidelity portfolio
 #
 # Read-only diff. No automatic changes.
-# Shows: Match / Fidelity-only / HELM-only
+# Shows: Match / Partial / HELM-only / Check (unmatched option on a HELM ticker)
+# / not HELM's (everything else in the file -- another book's or Russ's; s126)
 # Advises on any discrepancies.
 #
 # Usage:
@@ -184,11 +185,33 @@ def get_helm_positions(account_id: str) -> list:
 def match_positions(helm_positions: list, fidelity_positions: list) -> dict:
     """
     Compare HELM and Fidelity positions.
-    Returns {matched, helm_only, fidelity_only}
+
+    s126 (Russ, 2026-10-03): every trade in the Fidelity account is placed by
+    hand, and HELM, Factor Lab and GATE each only advise and track. HELM owns
+    exactly the positions in its own `positions` table (REAL book). Everything
+    else in the file belongs to another book or to Russ directly, so it is
+    listed as "not HELM's", never as a discrepancy.
+
+    The one exception: an unmatched option on a ticker where HELM HOLDS an open
+    REAL position stays a discrepancy -- the likeliest cause is HELM's own
+    record being wrong (the NOW condor, booked Oct 23 117/122/165/170 and held
+    Oct 30 115/120/170/175), and that is exactly what this command is for.
+
+    A HELM position MATCHES only when EVERY open leg is found. Before s126 one
+    found leg matched the whole position, so a wrongly recorded leg beside a
+    right one passed silently. Matching is still on (ticker, expiry, strike,
+    type) without quantity or direction (W104).
+
+    Returns {matched, partial, helm_only, fidelity_only, not_helms,
+    not_helms_stocks}; `fidelity_only` keeps its old name and now holds only
+    the discrepancies (unmatched options on a HELM-held ticker).
     """
     matched = []
+    partial = []
     helm_only = []
     fidelity_only = []
+    not_helms = []
+    not_helms_stocks = []
 
     # Index Fidelity options by (ticker, expiration, strike, opt_type)
     fid_index = {}
@@ -200,14 +223,17 @@ def match_positions(helm_positions: list, fidelity_positions: list) -> dict:
         else:
             fid_stocks[fp["ticker"]] = fp
 
+    helm_tickers = {hp["position"]["ticker"] for hp in helm_positions}
+
     # Check each HELM position
     matched_fid_keys = set()
+    matched_stock_tickers = set()
     for hp in helm_positions:
         pos = hp["position"]
         legs = hp["legs"]
         ticker = pos["ticker"]
-        strategy = pos["strategy"]
-        found = False
+        found_n = 0
+        missing = []
         fid_pnl = 0.0
         fid_hit = False
 
@@ -215,35 +241,51 @@ def match_positions(helm_positions: list, fidelity_positions: list) -> dict:
             if leg["option_type"] == "STOCK":
                 # Stock leg -- check fid_stocks
                 if ticker in fid_stocks:
-                    found = True
+                    found_n += 1
+                    matched_stock_tickers.add(ticker)
                     _g = fid_stocks[ticker].get("total_gl")
                     if _g is not None:
                         fid_pnl += _g
                         fid_hit = True
+                else:
+                    missing.append(leg)
             else:
                 key = (ticker, leg["expiration"], leg["strike"], leg["option_type"])
                 if key in fid_index:
-                    found = True
-                    matched_fid_keys.add(key)  # Mark ALL option legs as matched
+                    found_n += 1
+                    matched_fid_keys.add(key)
                     _g = fid_index[key].get("total_gl")
                     if _g is not None:
                         fid_pnl += _g
                         fid_hit = True
+                else:
+                    missing.append(leg)
 
-        if found:
-            hp["fid_pnl"] = fid_pnl if fid_hit else None
+        hp["fid_pnl"] = fid_pnl if fid_hit else None
+        hp["missing_legs"] = missing
+        if found_n and not missing:
             matched.append(hp)
+        elif found_n:
+            partial.append(hp)
         else:
             helm_only.append(hp)
 
-    # Fidelity positions not matched to any HELM position
+    # Fidelity holdings not matched to any HELM leg
     for fp in fidelity_positions:
         if fp["type"] == "OPTION":
             key = (fp["ticker"], fp["expiration"], fp["strike"], fp["opt_type"])
-            if key not in matched_fid_keys:
+            if key in matched_fid_keys:
+                continue
+            if fp["ticker"] in helm_tickers:
                 fidelity_only.append(fp)
+            else:
+                not_helms.append(fp)
+        elif fp["ticker"] not in matched_stock_tickers:
+            not_helms_stocks.append(fp)
 
-    return {"matched": matched, "helm_only": helm_only, "fidelity_only": fidelity_only}
+    return {"matched": matched, "partial": partial, "helm_only": helm_only,
+            "fidelity_only": fidelity_only, "not_helms": not_helms,
+            "not_helms_stocks": not_helms_stocks}
 
 
 def parse_fidelity_balances(filepath):
@@ -412,8 +454,18 @@ def run():
     # Compare
     result = match_positions(helm_positions, fidelity_positions)
     matched    = result["matched"]
+    partial    = result["partial"]
     helm_only  = result["helm_only"]
     fid_only   = result["fidelity_only"]
+    not_helms  = result["not_helms"]
+    not_helms_stocks = result["not_helms_stocks"]
+
+    def _legs_str(legs):
+        return "  ".join(
+            f"{l['option_type'][0] if l['option_type'] else 'S'}"
+            f"{l['strike']:.0f} " if l['strike'] else f"stock"
+            for l in legs
+        )
 
     # ── Results table ─────────────────────────────────────────────────────────
     t = Table(box=box.SIMPLE_HEAD, show_header=True, padding=(0,1), width=135)
@@ -427,62 +479,73 @@ def run():
     # Matched
     for hp in matched:
         pos = hp["position"]
-        legs = hp["legs"]
-        legs_str = "  ".join(
-            f"{l['option_type'][0] if l['option_type'] else 'S'}"
-            f"{l['strike']:.0f} " if l['strike'] else f"stock"
-            for l in legs
-        )
         # Auto-promote PENDING to OPEN when matched against Fidelity
         if pos["status"] == "PENDING":
             from helm.db import get_conn as _pgc
             _pgc().execute("UPDATE positions SET status='OPEN' WHERE id=?", (pos["id"],))
             _pgc().commit()
-        status_str = "[green]✓ MATCH[/green]"
-        t.add_row(status_str, pos["ticker"], pos["strategy"], legs_str, "", _fidpnl_cell(hp.get("fid_pnl")))
+        t.add_row("[green]✓ MATCH[/green]", pos["ticker"], pos["strategy"],
+                  _legs_str(hp["legs"]), "", _fidpnl_cell(hp.get("fid_pnl")))
+
+    # Some legs found, some not -- HELM's record of a leg is likely wrong
+    for hp in partial:
+        pos = hp["position"]
+        miss = ", ".join(
+            f"{l['option_type'][0] if l['option_type'] else 'S'}{l['strike']:.0f} "
+            f"{(l['expiration'] or '')[5:]}" if l['strike'] else "stock"
+            for l in hp["missing_legs"])
+        t.add_row("[red]✗ PARTIAL[/red]", pos["ticker"], pos["strategy"],
+                  _legs_str(hp["legs"]), f"[dim]Not in Fidelity: {miss}[/dim]",
+                  _fidpnl_cell(hp.get("fid_pnl")))
 
     # HELM only (not in Fidelity)
     for hp in helm_only:
         pos = hp["position"]
-        legs = hp["legs"]
-        legs_str = "  ".join(
-            f"{l['option_type'][0] if l['option_type'] else 'S'}"
-            f"{l['strike']:.0f} " if l['strike'] else f"stock"
-            for l in legs
-        )
         t.add_row(
-            "[red]✗ HELM ONLY[/red]", pos["ticker"], pos["strategy"], legs_str,
+            "[red]✗ HELM ONLY[/red]", pos["ticker"], pos["strategy"], _legs_str(hp["legs"]),
             "[dim]Not in Fidelity — may be closed. Run helm activity.[/dim]"
         )
 
-    # Fidelity only (not in HELM)
+    # Unmatched options on a ticker HELM holds -- a discrepancy
     for fp in fid_only:
-        contract_str = f"{fp['opt_type'][0]}{fp['strike']:.0f} {fp['expiration'][5:]}" if fp["type"] == "OPTION" else fp["ticker"]
+        contract_str = f"{fp['opt_type'][0]}{fp['strike']:.0f} {fp['expiration'][5:]}"
         t.add_row(
-            "[yellow]⚠ FIDELITY ONLY[/yellow]", fp["ticker"], "--", contract_str,
-            "[dim]Not in HELM — open via helm open --confirm or run helm activity.[/dim]"
+            "[yellow]⚠ CHECK[/yellow]", fp["ticker"], "--", contract_str,
+            f"[dim]HELM holds {fp['ticker']} but not this contract — HELM's record may be wrong.[/dim]"
         )
 
+    # Options on tickers HELM holds nothing in -- another book's, or Russ's
+    for fp in not_helms:
+        contract_str = f"{fp['opt_type'][0]}{fp['strike']:.0f} {fp['expiration'][5:]}"
+        t.add_row("[dim]· not HELM's[/dim]", f"[dim]{fp['ticker']}[/dim]", "[dim]--[/dim]",
+                  f"[dim]{contract_str}[/dim]", "[dim]another book's or yours — not tracked[/dim]")
+
     console.print(t)
+    if not_helms_stocks:
+        _names = ", ".join(sorted({fp["ticker"] for fp in not_helms_stocks}))
+        console.print(f"[dim]  · not HELM's — {len(not_helms_stocks)} stock holding(s), not tracked: {_names}[/dim]")
     console.print()
 
     # Summary
-    total = len(matched) + len(helm_only) + len(fid_only)
-    if not helm_only and not fid_only:
+    _n_not = len(not_helms) + len(not_helms_stocks)
+    _not_line = (f"  [dim]· {_n_not} holding(s) in the file are not HELM's.[/dim]" if _n_not else "")
+    if not helm_only and not fid_only and not partial:
         console.print(Panel.fit(
-            f"[bold green]✓ Fully aligned[/bold green] — {len(matched)} position(s) match between HELM and Fidelity.",
+            f"[bold green]✓ Fully aligned[/bold green] — {len(matched)} HELM position(s) match Fidelity." + _not_line,
             border_style="green"
         ))
     else:
-        lines = [f"[bold]{len(matched)} matched[/bold]  |  "]
+        lines = [f"[bold]{len(matched)} matched[/bold]"]
+        if partial:
+            lines.append(f"[red]{len(partial)} partly matched[/red]")
         if helm_only:
-            lines.append(f"[red]{len(helm_only)} in HELM only[/red]  |  ")
+            lines.append(f"[red]{len(helm_only)} in HELM only[/red]")
         if fid_only:
-            lines.append(f"[yellow]{len(fid_only)} in Fidelity only[/yellow]")
+            lines.append(f"[yellow]{len(fid_only)} to check on HELM tickers[/yellow]")
         console.print(Panel.fit(
-            "".join(lines) + "\n\n" +
-            ("[dim]Run [bold]helm activity[/bold] to sync closes and confirms.[/dim]" if helm_only or fid_only else ""),
-            border_style="yellow" if (helm_only or fid_only) else "green",
+            "  |  ".join(lines) + ("\n" + _not_line if _not_line else "") + "\n\n" +
+            "[dim]Run [bold]helm activity[/bold] to sync closes and confirms, or correct HELM's record.[/dim]",
+            border_style="yellow",
             title="Reconcile Summary"
         ))
     _bal = parse_fidelity_balances(str(filepath))

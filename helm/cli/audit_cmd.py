@@ -690,32 +690,48 @@ class Audit:
         add-path fix cannot. It has already recurred twice by hand in one day
         (the 22 tranche-1 names, then ROST hours later).
 
+        s126 (Russ, 2026-10-03): HELM tracks only positions in its own
+        `positions` table. A watchlist name HELM holds no open position in --
+        either book -- is advice-only, and an ungrouped one cannot misstate
+        HELM's exposure (`helm exposure` reads groups for held names only). So
+        only HELD names are asserted; unheld ungrouped names are named in the
+        evidence, never failed. FRVO (GATE's trade, on the watchlist since
+        10-02) made 2026-10-02 LOST under the old reading.
+
         Reads CURRENT watchlist state -- the table keeps no history -- so on a
         back-dated audit this assertion describes today, not the audited day.
         Said here rather than left to be discovered.
         """
         rows = self.q(
-            "select ticker from watchlist "
-            "where active = 1 and (exposure_group is null or trim(exposure_group) = '') "
-            "order by ticker"
+            "select w.ticker, exists (select 1 from positions p "
+            "where p.ticker = w.ticker and p.status in ('OPEN','PENDING')) as held "
+            "from watchlist w "
+            "where w.active = 1 and (w.exposure_group is null or trim(w.exposure_group) = '') "
+            "order by w.ticker"
         )
         total = self.q("select count(*) as c from watchlist where active = 1")[0]["c"]
         if not total:
             self.add(SKIP, "exposure groups", "no active watchlist names")
             return
-        if not rows:
-            self.add(PASS, "exposure groups",
-                     "every active watchlist name carries an exposure group",
-                     "%d active names checked (current state)" % total)
-            return
+        held = [r["ticker"] for r in rows if r["held"]]
+        unheld = [r["ticker"] for r in rows if not r["held"]]
         CAP = 12  # W119: a capped list must SAY it is capped.
-        named = ", ".join(r["ticker"] for r in rows[:CAP])
-        if len(rows) > CAP:
-            named += "; and %d more" % (len(rows) - CAP)
+
+        def _names(xs):
+            out = ", ".join(xs[:CAP])
+            if len(xs) > CAP:
+                out += "; and %d more" % (len(xs) - CAP)
+            return out
+
+        skipped = ("; not held by HELM, skipped: " + _names(unheld)) if unheld else ""
+        if not held:
+            self.add(PASS, "exposure groups",
+                     "every watchlist name HELM holds carries an exposure group",
+                     "%d active names checked (current state)%s" % (total, skipped))
+            return
         self.add(FAIL, "exposure groups",
-                 "%d of %d active watchlist names carry no exposure group"
-                 % (len(rows), total),
-                 named)
+                 "%d watchlist name(s) HELM holds carry no exposure group" % len(held),
+                 _names(held) + skipped)
 
     def check_closes(self):
         rows = self.q(
