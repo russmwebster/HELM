@@ -1263,6 +1263,130 @@ def _expectation_holds(num_contracts, fill) -> bool:
     return False
 
 
+# s126 (Russ, 2026-10-03): credit verticals and iron condors are booked LEG BY
+# LEG -- strike and fill for each leg, one expiry -- and the net credit is
+# derived from the legs. See helm/leg_entry.py for why (GS, NOW).
+# --legs "115P@2.01,120P@3.02,170C@2.33,175C@1.81" --leg-expiry 2026-10-30
+# names the structure for non-interactive callers (the PG board); without it
+# the confirm flow prompts for each leg, defaulting to HELM's pick.
+_LEGS = {"spec": None, "expiry": None}
+
+
+def _leg_template(strategy, cand):
+    """{(direction, type): {strike, expiration, fill, delta, iv, oi}} from one of
+    HELM's candidates -- the defaults offered, and the only source of entry
+    greeks, used only for a leg whose strike AND expiry match what was booked."""
+    if not cand:
+        return {}
+    e = cand.get("expiration")
+    if strategy == "IRON_CONDOR":
+        return {
+            ("SHORT", "PUT"): {"strike": cand["short_put"], "expiration": e,
+                               "fill": cand.get("short_put_bid"), "delta": cand.get("put_delta"),
+                               "iv": cand.get("put_iv"), "oi": cand.get("put_oi")},
+            ("LONG", "PUT"): {"strike": cand["long_put"], "expiration": e,
+                              "fill": cand.get("long_put_ask")},
+            ("SHORT", "CALL"): {"strike": cand["short_call"], "expiration": e,
+                                "fill": cand.get("short_call_bid"), "delta": cand.get("call_delta"),
+                                "iv": cand.get("call_iv"), "oi": cand.get("call_oi")},
+            ("LONG", "CALL"): {"strike": cand["long_call"], "expiration": e,
+                               "fill": cand.get("long_call_ask")},
+        }
+    ot = cand.get("opt_type")
+    return {
+        ("SHORT", ot): {"strike": cand["short_strike"], "expiration": e,
+                        "fill": cand.get("short_bid"), "delta": cand.get("delta"),
+                        "iv": cand.get("iv"), "oi": cand.get("short_oi")},
+        ("LONG", ot): {"strike": cand["long_strike"], "expiration": e,
+                       "fill": cand.get("long_ask"), "delta": cand.get("long_delta"),
+                       "iv": cand.get("iv"), "oi": cand.get("long_oi")},
+    }
+
+
+def _best_template(strategy, cands, legs_in, expiry):
+    """The candidate sharing the booked expiry and the most strikes, or None."""
+    best, best_n = None, 0
+    for cand in cands or []:
+        t = _leg_template(strategy, cand)
+        n = sum(1 for l in legs_in
+                if (l["direction"], l["opt_type"]) in t
+                and t[(l["direction"], l["opt_type"])]["expiration"] == expiry
+                and abs(float(t[(l["direction"], l["opt_type"])]["strike"]) - l["strike"]) < 1e-6)
+        if n > best_n:
+            best, best_n = cand, n
+    return best
+
+
+def _prompt_legs(strategy, tmpl, expiry_default):
+    """Interactive per-leg entry: expiry, then strike and fill for each leg in
+    structure order, defaulting to HELM's pick. Returns (legs, expiry) or
+    (None, None) after printing why -- refuse, never substitute (W84)."""
+    from rich.prompt import Prompt
+    from helm import leg_entry as _le
+    console.print("[dim]Enter each leg as filled at the broker. Defaults are "
+                  "HELM's pick at its modeled price.[/dim]")
+    exp = Prompt.ask("  Expiry (YYYY-MM-DD)", default=str(expiry_default or "")).strip()
+    try:
+        datetime.strptime(exp, "%Y-%m-%d")
+    except ValueError:
+        console.print("[red]Cannot read the expiry %r. Nothing was recorded.[/red]" % exp)
+        return None, None
+    legs = []
+    for d, o in _le.STRUCTURES[strategy]:
+        t = tmpl.get((d, o), {})
+        lab = "%s %s" % (d.title(), o.lower())
+        ks = Prompt.ask("  %s strike" % lab,
+                        default=("%g" % float(t["strike"])) if t.get("strike") is not None else None)
+        fs = Prompt.ask("  %s fill" % lab,
+                        default=("%.2f" % float(t["fill"])) if t.get("fill") is not None else None)
+        try:
+            k = float(str(ks).replace("$", "").strip())
+            f = float(str(fs).replace("$", "").strip())
+        except (TypeError, ValueError):
+            console.print("[red]Cannot read the %s (%r @ %r). Nothing was "
+                          "recorded.[/red]" % (lab, ks, fs))
+            return None, None
+        legs.append({"direction": d, "opt_type": o, "strike": k, "fill": f})
+    return legs, exp
+
+
+def _named_legs(strategy):
+    """(legs, expiry) from --legs/--leg-expiry, or (None, None) after refusing."""
+    from helm import leg_entry as _le
+    try:
+        legs = _le.parse_spec(strategy, _LEGS["spec"])
+        datetime.strptime(_LEGS["expiry"], "%Y-%m-%d")
+    except ValueError as e:
+        console.print("[red]Cannot book these legs: %s. Nothing was recorded.[/red]" % e)
+        console.print()
+        return None, None
+    return legs, _LEGS["expiry"]
+
+
+def _writer_legs(legs_in, expiry, tmpl, spot):
+    """Leg dicts for open_multileg_with_snapshot. Fills are exactly what was
+    entered. Entry greeks only where the leg is HELM's candidate leg; a leg the
+    trader changed gets None rather than another contract's numbers."""
+    try:
+        dte = (datetime.strptime(expiry, "%Y-%m-%d").date() - datetime.now().date()).days
+    except ValueError:
+        dte = None
+    out = []
+    for l in legs_in:
+        t = tmpl.get((l["direction"], l["opt_type"]), {})
+        same = (t.get("expiration") == expiry and t.get("strike") is not None
+                and abs(float(t["strike"]) - l["strike"]) < 1e-6)
+        d = {"direction": l["direction"], "opt_type": l["opt_type"],
+             "strike": l["strike"], "expiration": expiry,
+             "fill_price": round(l["fill"], 4), "dte": dte, "spot": spot}
+        if same:
+            for k in ("delta", "iv", "oi"):
+                if t.get(k) is not None:
+                    d[k] = t[k]
+        out.append(d)
+    return out
+
+
 def confirm_and_log(ticker: str, strategy: str, contracts: list, config: dict,
                     spot: Optional[float], scan_data: Optional[dict] = None,
                     pin_strike=None, pin_expiry=None):
@@ -1489,23 +1613,21 @@ def confirm_and_log(ticker: str, strategy: str, contracts: list, config: dict,
 def confirm_spread(ticker: str, strategy: str, spreads: list, config: dict,
                    spot: float, args: list, best: dict = None, suggested: int = 1,
                    pin_strike=None, pin_expiry=None, pin_long=None):
-    """Interactive confirm flow for spread positions.
+    """Interactive confirm flow for credit verticals (per-leg since s126).
+
+    s126 (Russ, 2026-10-03): both legs are entered as filled -- one expiry,
+    then strike and fill for each -- and the net credit is derived from them.
+    Before s126 this asked for the net alone, priced the long at the modeled
+    ask and the short at net + ask, and booked HELM's strikes and expiry.
+    `--legs`/`--leg-expiry` name the legs for non-interactive callers.
 
     pin_strike/pin_expiry name the SHORT leg (--strike/--expiry); --long-strike
-    disambiguates when two widths share a short strike. Same reasoning as
-    confirm_and_log: the chain is re-pulled at confirm time, so a rank is not a
-    stable way to say which spread.
+    disambiguates when two widths share a short strike. They choose the
+    STARTING spread whose legs are offered as defaults.
     """
     from rich.prompt import Prompt, Confirm
     from rich.panel import Panel
-    # HELM-038 wired: spread --confirm persists via the proven multi-leg writer
-    # (open_multileg_with_snapshot), mirroring the iron-condor confirm flow:
-    # select rank -> number of contracts -> actual NET credit. Credit verticals
-    # only for now; other spread families get the not-wired notice below.
-    if not spreads:
-        console.print("[yellow]No spreads to open.[/yellow]")
-        console.print()
-        return
+    from helm import leg_entry as _le
     if strategy not in ("BEAR_CALL_SPREAD", "BULL_PUT_SPREAD"):
         console.print()
         console.print(f"[yellow]Note:[/yellow] --confirm logging for {strategy} is not wired yet.")
@@ -1514,46 +1636,61 @@ def confirm_spread(ticker: str, strategy: str, spreads: list, config: dict,
         return
     pretty = strategy.replace("_", " ").title()
 
+    named = _LEGS.get("spec") is not None
     b = None
-    if pin_strike is not None and pin_expiry is not None:
-        b, _err = _pin_pick(spreads, pin_strike, pin_expiry,
-                            strike_key="short_strike", long_key="long_strike",
-                            pin_long=pin_long)
-        if b is None:
-            _pin_refusal("spread", _err, spreads, strike_key="short_strike")
+    if named:
+        legs_in, exp = _named_legs(strategy)
+        if legs_in is None:
             return
-
-    if b is None:
+        b = _best_template(strategy, spreads, legs_in, exp)
         console.print()
-        console.print(f"[bold]Open a {pretty}?[/bold]")
-        console.print("[dim]Enter rank number to select, or 'n' to exit.[/dim]")
+        console.print(Panel.fit(
+            f"[bold]Logging:[/bold] {ticker} {pretty} {exp}\n  "
+            + _le.describe(legs_in).replace(" · ", "\n  ")
+            + f"\n  Net credit from the legs: ${_le.net_credit(legs_in):.2f}/share",
+            border_style="cyan", title=f"Confirm {pretty}"))
         console.print()
-        while True:
-            choice = Prompt.ask("Select spread", default="1", choices=[str(i + 1) for i in range(len(spreads))] + ["n"], show_choices=False)
-            if choice.lower() == "n":
-                console.print("[dim]No position opened.[/dim]")
-                console.print()
+    else:
+        if not spreads:
+            console.print("[yellow]No spreads to open.[/yellow]")
+            console.print("[dim]To log one HELM did not propose, name its legs: "
+                          "--legs 95P@2.40,90P@1.10 --leg-expiry YYYY-MM-DD[/dim]")
+            console.print()
+            return
+        if pin_strike is not None and pin_expiry is not None:
+            b, _err = _pin_pick(spreads, pin_strike, pin_expiry,
+                                strike_key="short_strike", long_key="long_strike",
+                                pin_long=pin_long)
+            if b is None:
+                _pin_refusal("spread", _err, spreads, strike_key="short_strike")
                 return
-            try:
-                idx = int(choice) - 1
-                if 0 <= idx < len(spreads):
-                    b = spreads[idx]
-                    break
-            except ValueError:
-                pass
-            console.print("[yellow]Invalid choice. Enter a rank number or 'n'.[/yellow]")
-    opt_type = b["opt_type"]
-    ss = b["short_strike"]
-    lstk = b["long_strike"]
-    exp = b["expiration"]
-    width = b["width"]
-    nc_model = b["net_credit"]
-    ml_con = b["max_loss"]
-    dte_v = b.get("dte", 0)
-    cwp = b.get("credit_to_width_pct", b.get("cw_pct", 0)) or 0
-    console.print()
-    console.print(Panel.fit(f"[bold]Selected:[/bold] {ticker} {pretty} {exp} ({dte_v}d)\n  Short ${ss:.0f} {opt_type} / Long ${lstk:.0f} {opt_type}\n  Modeled net credit: ${nc_model:.2f}/contract  |  Max loss: ${ml_con:.2f}/contract\n  Width: ${width:.0f}  |  Credit/width: {cwp:.0f}%", border_style="cyan", title=f"Confirm {pretty}"))
-    console.print()
+        if b is None:
+            console.print()
+            console.print(f"[bold]Open a {pretty}?[/bold]")
+            console.print("[dim]Enter rank number to start from, or 'n' to exit. "
+                          "You enter each leg as filled next.[/dim]")
+            console.print()
+            while True:
+                choice = Prompt.ask("Select spread", default="1", choices=[str(i + 1) for i in range(len(spreads))] + ["n"], show_choices=False)
+                if choice.lower() == "n":
+                    console.print("[dim]No position opened.[/dim]")
+                    console.print()
+                    return
+                try:
+                    idx = int(choice) - 1
+                    if 0 <= idx < len(spreads):
+                        b = spreads[idx]
+                        break
+                except ValueError:
+                    pass
+                console.print("[yellow]Invalid choice. Enter a rank number or 'n'.[/yellow]")
+        cwp = b.get("credit_to_width_pct", b.get("cw_pct", 0)) or 0
+        console.print()
+        console.print(Panel.fit(f"[bold]Selected:[/bold] {ticker} {pretty} {b['expiration']} ({b.get('dte', 0)}d)\n  Short ${b['short_strike']:.0f} {b['opt_type']} / Long ${b['long_strike']:.0f} {b['opt_type']}\n  Modeled net credit: ${b['net_credit']:.2f}/contract  |  Max loss: ${b['max_loss']:.2f}/contract\n  Width: ${b['width']:.0f}  |  Credit/width: {cwp:.0f}%", border_style="cyan", title=f"Confirm {pretty}"))
+        console.print()
+
+    tmpl = _leg_template(strategy, b)
+    ml_con = ((_le.width(legs_in) - _le.net_credit(legs_in)) if named else b["max_loss"])
     suggested_n = suggested or 1
     try:
         from helm.db import get_conn as _gcv
@@ -1588,38 +1725,31 @@ def confirm_spread(ticker: str, strategy: str, spreads: list, config: dict,
                       "Nothing was recorded.[/dim]")
         console.print()
         return
-    short_bid = float(b["short_bid"])
-    long_ask = float(b["long_ask"])
-    modeled_net = round(short_bid - long_ask, 2)
-    fill_str = Prompt.ask("  Actual NET credit received", default=f"{modeled_net:.2f}")
-    try:
-        net_credit = float(fill_str.replace("$", "").strip())
-    except ValueError:
-        console.print("[red]Invalid net credit. Aborting.[/red]")
+    if not named:
+        legs_in, exp = _prompt_legs(strategy, tmpl, b["expiration"])
+        if legs_in is None:
+            console.print()
+            return
+    err = _le.validate(strategy, legs_in)
+    if err:
+        console.print("[red]Cannot book this spread: %s. Nothing was recorded.[/red]" % err)
         console.print()
         return
-    # Absorb the net override into the short leg (long stays at ask) so the
-    # writer-derived net_premium equals the actual fill.
-    short_fill = round(net_credit + long_ask, 2)
-    long_fill = round(long_ask, 2)
+    net_credit = round(_le.net_credit(legs_in), 2)
     total_credit_amt = round(net_credit * 100 * num_contracts, 2)
-    max_risk = round((width - net_credit) * 100 * num_contracts, 2)
+    pf = _le.position_fields(legs_in, num_contracts)
+    max_risk = pf["max_loss"]
+    if b is not None:
+        console.print(f"  [dim]Net credit from the legs: ${net_credit:.2f}/share "
+                      f"(HELM modeled ${b['net_credit']:.2f})[/dim]")
     console.print()
     if not _expectation_holds(num_contracts, net_credit):
         return
-    if not Confirm.ask(f"  Open [bold]{num_contracts}x {ticker} {pretty} ${ss:.0f}/${lstk:.0f} {opt_type} {exp}[/bold] @ net ${net_credit:.2f} (collect ${total_credit_amt:.0f})?", default=True):
+    if not Confirm.ask(f"  Open [bold]{num_contracts}x {ticker} {pretty} {exp}[/bold]: {_le.describe(legs_in)} = net ${net_credit:.2f} (collect ${total_credit_amt:.0f})?", default=True):
         console.print("[dim]Cancelled.[/dim]")
         console.print()
         return
-    legs = [
-        {"direction": "SHORT", "opt_type": opt_type, "strike": ss, "expiration": exp, "fill_price": short_fill, "delta": b.get("delta"), "iv": b.get("iv"), "dte": dte_v, "spot": spot, "oi": b.get("short_oi")},
-        {"direction": "LONG", "opt_type": opt_type, "strike": lstk, "expiration": exp, "fill_price": long_fill, "delta": b.get("long_delta"), "iv": b.get("iv"), "dte": dte_v, "spot": spot, "oi": b.get("long_oi")},
-    ]
-    pf = {"spread_width": width, "max_profit": total_credit_amt, "max_loss": max_risk, "credit_to_width_ratio": round(net_credit / width, 3) if width else None}
-    if opt_type == "CALL":
-        pf["breakeven_high"] = round(ss + net_credit, 2)
-    else:
-        pf["breakeven_low"] = round(ss - net_credit, 2)
+    legs = _writer_legs(legs_in, exp, tmpl, spot)
     console.print()
     console.print("[dim]Recording position...[/dim]")
     try:
@@ -1631,7 +1761,8 @@ def confirm_spread(ticker: str, strategy: str, spreads: list, config: dict,
         traceback.print_exc()
         return
     console.print()
-    console.print(Panel(f"[bold green]Position Opened[/bold green]\n\n  Ticker:   [bold cyan]{ticker}[/bold cyan]  {pretty}\n  Legs:     SHORT ${ss:.0f} / LONG ${lstk:.0f} {opt_type}  exp {exp}\n  Net credit: ${net_credit:.2f}/contract  (collected ${total_credit_amt:.0f})\n  Size:     {num_contracts} spread(s)  max risk ${max_risk:.0f}\n  Position: [dim]{pos_id}[/dim]", border_style="green"))
+    console.print(Panel(f"[bold green]Position Opened[/bold green]\n\n  Ticker:   [bold cyan]{ticker}[/bold cyan]  {pretty}\n  Legs:     {_le.describe(legs_in, exp)}\n  Net credit: ${net_credit:.2f}/contract  (collected ${total_credit_amt:.0f})\n  Size:     {num_contracts} spread(s)  max risk ${max_risk:.0f}\n  Position: [dim]{pos_id}[/dim]", border_style="green"))
+    console.print("SPREAD logged %s" % pos_id)
     console.print()
 
 
@@ -1986,67 +2117,93 @@ def evaluate_condors(ticker: str, strategy: str, config: dict,
 def confirm_condor(ticker: str, strategy: str, condors: list, config: dict,
                    spot: float, args: list):
     """
-    Interactive confirm flow for iron condors (HELM-013).
+    Interactive confirm flow for iron condors (HELM-013; per-leg since s126).
 
-    Captures the actual NET credit, assembles the four legs, and writes one
-    Position + 4 legs + one short-leg-anchored snapshot + OPENED event in a
-    single transaction via open_multileg_with_snapshot (atomic -- a partial
-    failure rolls the whole open back). Per-leg fills default to the conservative
-    values modeled by evaluate_condors (short -> bid, long -> ask); on a net
-    override the delta is absorbed into the two short legs so the derived net
-    matches the actual fill while the long legs stay at ask.
+    s126 (Russ, 2026-10-03): the four legs are entered as filled -- one expiry,
+    then strike and fill for each leg -- and the net credit is DERIVED from
+    them. Before s126 this asked for the net alone, scaled the modeled short
+    bids to match it, and took strikes and expiry from HELM's pick, so a condor
+    placed with other strikes or another expiry was booked as HELM's pick (NOW,
+    2026-09-24) and every leg price was manufactured (GS, LRCX). `--legs` /
+    `--leg-expiry` name the legs for non-interactive callers; then no rank is
+    selected and the candidates serve only as the source of entry greeks.
+
+    Writes one Position + 4 legs + snapshot + OPENED event in a single
+    transaction via open_multileg_with_snapshot.
     """
     from rich.prompt import Prompt, Confirm
     from helm.cli.entry_snapshot import open_multileg_with_snapshot
+    from helm import leg_entry as _le
 
-    if not condors:
-        console.print("[yellow]No condors to open.[/yellow]")
+    named = _LEGS.get("spec") is not None
+    c = None
+    if named:
+        legs_in, exp = _named_legs(strategy)
+        if legs_in is None:
+            return
+        c = _best_template(strategy, condors, legs_in, exp)
         console.print()
-        return
-
-    console.print()
-    console.print("[bold]Open an iron condor?[/bold]")
-    console.print("[dim]Enter rank number to select, or 'n' to exit.[/dim]")
-    console.print()
-
-    while True:
-        choice = Prompt.ask(
-            "Select condor",
-            default="1",
-            choices=[str(i + 1) for i in range(len(condors))] + ["n"],
-            show_choices=False,
-        )
-        if choice.lower() == "n":
-            console.print("[dim]No position opened.[/dim]")
+        console.print(Panel.fit(
+            f"[bold]Logging:[/bold] {ticker} Iron Condor {exp}\n  "
+            + _le.describe(legs_in).replace(" · ", "\n  ")
+            + f"\n  Net credit from the legs: ${_le.net_credit(legs_in):.2f}/share",
+            border_style="cyan", title="Confirm Iron Condor"))
+        console.print()
+    else:
+        if not condors:
+            console.print("[yellow]No condors to open.[/yellow]")
+            console.print("[dim]To log one HELM did not propose, name its legs: "
+                          "--legs 115P@2.01,120P@3.02,170C@2.33,175C@1.81 "
+                          "--leg-expiry YYYY-MM-DD[/dim]")
             console.print()
             return
-        try:
-            idx = int(choice) - 1
-            if 0 <= idx < len(condors):
-                c = condors[idx]
-                break
-        except ValueError:
-            pass
-        console.print("[yellow]Invalid choice. Enter a rank number or 'n'.[/yellow]")
+        console.print()
+        console.print("[bold]Open an iron condor?[/bold]")
+        console.print("[dim]Enter rank number to start from, or 'n' to exit. "
+                      "You enter each leg as filled next.[/dim]")
+        console.print()
+        while True:
+            choice = Prompt.ask(
+                "Select condor",
+                default="1",
+                choices=[str(i + 1) for i in range(len(condors))] + ["n"],
+                show_choices=False,
+            )
+            if choice.lower() == "n":
+                console.print("[dim]No position opened.[/dim]")
+                console.print()
+                return
+            try:
+                idx = int(choice) - 1
+                if 0 <= idx < len(condors):
+                    c = condors[idx]
+                    break
+            except ValueError:
+                pass
+            console.print("[yellow]Invalid choice. Enter a rank number or 'n'.[/yellow]")
 
-    width = max(c["put_width"], c["call_width"])
+        width0 = max(c["put_width"], c["call_width"])
+        console.print()
+        console.print(Panel.fit(
+            f"[bold]Selected:[/bold] {ticker} Iron Condor {c['expiration']} ({c['dte']}d)\n"
+            f"  Put spread:  Long ${c['long_put']:.0f} / Short ${c['short_put']:.0f}  "
+            f"(delta {c['put_delta']:.3f})\n"
+            f"  Call spread: Short ${c['short_call']:.0f} / Long ${c['long_call']:.0f}  "
+            f"(delta {c['call_delta']:.3f})\n"
+            f"  Modeled net credit: ${c['total_credit']:.2f}/contract  |  "
+            f"Max loss: ${c['max_loss']:.2f}/contract\n"
+            f"  Width: ${width0:.0f}  |  Credit/width: {c['cw_pct']:.0f}%  |  R/R: {c['rr_ratio']:.2f}",
+            border_style="cyan", title="Confirm Iron Condor",
+        ))
+        console.print()
 
-    console.print()
-    console.print(Panel.fit(
-        f"[bold]Selected:[/bold] {ticker} Iron Condor {c['expiration']} ({c['dte']}d)\n"
-        f"  Put spread:  Long ${c['long_put']:.0f} / Short ${c['short_put']:.0f}  "
-        f"(delta {c['put_delta']:.3f})\n"
-        f"  Call spread: Short ${c['short_call']:.0f} / Long ${c['long_call']:.0f}  "
-        f"(delta {c['call_delta']:.3f})\n"
-        f"  Modeled net credit: ${c['total_credit']:.2f}/contract  |  "
-        f"Max loss: ${c['max_loss']:.2f}/contract\n"
-        f"  Width: ${width:.0f}  |  Credit/width: {c['cw_pct']:.0f}%  |  R/R: {c['rr_ratio']:.2f}",
-        border_style="cyan", title="Confirm Iron Condor",
-    ))
-    console.print()
+    tmpl = _leg_template(strategy, c)
 
     # Number of contracts (W160: max_loss IS the condor's risk figure --
-    # capped at $5,000/trade, the 5% cash ceiling behind it).
+    # capped at $5,000/trade, the 5% cash ceiling behind it). Named legs size
+    # on their own max loss; a rank sizes on the candidate's.
+    ml_share = ((_le.width(legs_in) - _le.net_credit(legs_in)) if named
+                else c["max_loss"])
     suggested = 1
     try:
         from helm.db import get_conn as _gc
@@ -2060,9 +2217,9 @@ def confirm_condor(ticker: str, strategy: str, condors: list, config: dict,
             "SELECT risk_pct_per_trade FROM strategy_settings WHERE account_id=? AND strategy=?",
             (_acct_id, strategy)).fetchone()
         _c.close()
-        if acct and acct[0]:
+        if acct and acct[0] and ml_share:
             _risk_pct = (settings[0] if settings and settings[0] else 0.05)
-            _n, _b = _rc.capped_contracts(c["max_loss"] * 100, portfolio_value=acct[0],
+            _n, _b = _rc.capped_contracts(ml_share * 100, portfolio_value=acct[0],
                                           risk_pct=_risk_pct, ceiling=20)
             suggested = max(_n, 1)
     except Exception:
@@ -2084,65 +2241,36 @@ def confirm_condor(ticker: str, strategy: str, condors: list, config: dict,
         console.print()
         return
 
-    # Conservative per-leg fills (short -> bid, long -> ask); modeled net = signed sum.
-    sp_bid = float(c["short_put_bid"]); lp_ask = float(c["long_put_ask"])
-    sc_bid = float(c["short_call_bid"]); lc_ask = float(c["long_call_ask"])
-    modeled_net = round((sp_bid + sc_bid) - (lp_ask + lc_ask), 2)
+    if not named:
+        legs_in, exp = _prompt_legs(strategy, tmpl, c["expiration"])
+        if legs_in is None:
+            console.print()
+            return
 
-    fill_str = Prompt.ask("  Actual NET credit received", default=f"{modeled_net:.2f}")
-    try:
-        net_credit = float(fill_str.replace("$", "").strip())
-    except ValueError:
-        console.print("[red]Invalid net credit. Aborting.[/red]")
+    err = _le.validate(strategy, legs_in)
+    if err:
+        console.print("[red]Cannot book this condor: %s. Nothing was recorded.[/red]" % err)
         console.print()
         return
-
-    # Absorb any net override into the two short legs (longs stay at ask) so the
-    # writer-derived net_premium equals the actual fill.
-    base_short_sum = sp_bid + sc_bid
-    target_short_sum = net_credit + lp_ask + lc_ask
-    if base_short_sum > 0:
-        scale = target_short_sum / base_short_sum
-        sp_fill = max(0.0, round(sp_bid * scale, 2))
-        sc_fill = max(0.0, round(sc_bid * scale, 2))
-    else:
-        sp_fill, sc_fill = sp_bid, sc_bid
-
+    net_credit = round(_le.net_credit(legs_in), 2)
     total_credit_amt = round(net_credit * 100 * num_contracts, 2)
+    if c is not None:
+        console.print(f"  [dim]Net credit from the legs: ${net_credit:.2f}/share "
+                      f"(HELM modeled ${c['total_credit']:.2f})[/dim]")
     console.print()
     if not _expectation_holds(num_contracts, net_credit):
         return
     if not Confirm.ask(
-        f"  Open [bold]{num_contracts}x {ticker} Iron Condor "
-        f"{c['short_put']:.0f}/{c['long_put']:.0f}P {c['short_call']:.0f}/{c['long_call']:.0f}C "
-        f"{c['expiration']}[/bold] @ net ${net_credit:.2f} (collect ${total_credit_amt:.0f})?",
+        f"  Open [bold]{num_contracts}x {ticker} Iron Condor {exp}[/bold]: "
+        f"{_le.describe(legs_in)} = net ${net_credit:.2f} (collect ${total_credit_amt:.0f})?",
         default=True,
     ):
         console.print("[dim]Cancelled.[/dim]")
         console.print()
         return
 
-    legs = [
-        {"direction": "SHORT", "opt_type": "PUT", "strike": c["short_put"],
-         "expiration": c["expiration"], "fill_price": sp_fill, "delta": c.get("put_delta"),
-         "iv": c.get("put_iv"), "dte": c["dte"], "spot": spot, "oi": c.get("put_oi")},
-        {"direction": "LONG", "opt_type": "PUT", "strike": c["long_put"],
-         "expiration": c["expiration"], "fill_price": lp_ask, "dte": c["dte"], "spot": spot},
-        {"direction": "SHORT", "opt_type": "CALL", "strike": c["short_call"],
-         "expiration": c["expiration"], "fill_price": sc_fill, "delta": c.get("call_delta"),
-         "iv": c.get("call_iv"), "dte": c["dte"], "spot": spot, "oi": c.get("call_oi")},
-        {"direction": "LONG", "opt_type": "CALL", "strike": c["long_call"],
-         "expiration": c["expiration"], "fill_price": lc_ask, "dte": c["dte"], "spot": spot},
-    ]
-
-    position_fields = {
-        "spread_width": width,
-        "max_profit": round(net_credit * 100 * num_contracts, 2),
-        "max_loss": round((width - net_credit) * 100 * num_contracts, 2),
-        "credit_to_width_ratio": round(net_credit / width, 4) if width else None,
-        "breakeven_low": round(c["short_put"] - net_credit, 2),
-        "breakeven_high": round(c["short_call"] + net_credit, 2),
-    }
+    legs = _writer_legs(legs_in, exp, tmpl, spot)
+    position_fields = _le.position_fields(legs_in, num_contracts)
 
     # Live `helm open` sources its chain from IBKR (see "Data: IBKR live" header).
     pricing_source = "ibkr"
@@ -2170,8 +2298,7 @@ def confirm_condor(ticker: str, strategy: str, condors: list, config: dict,
     console.print(Panel(
         f"[bold green]Position Opened[/bold green]\n\n"
         f"  Ticker:      [bold cyan]{ticker}[/bold cyan]  {strategy}\n"
-        f"  Structure:   {c['short_put']:.0f}/{c['long_put']:.0f}P  "
-        f"{c['short_call']:.0f}/{c['long_call']:.0f}C  {c['expiration']}\n"
+        f"  Legs:        {_le.describe(legs_in, exp)}\n"
         f"  Contracts:   {num_contracts}\n"
         f"  Net credit:  [green]${net_credit:.2f}/contract[/green]  (collected ${total_credit_amt:.0f})\n"
         f"  Max loss:    [red]${position_fields['max_loss']:.0f}[/red]\n"
@@ -2179,6 +2306,7 @@ def confirm_condor(ticker: str, strategy: str, condors: list, config: dict,
         f"  Position:    [dim]{pos_id}[/dim]",
         border_style="green", title="Opened",
     ))
+    console.print("CONDOR logged %s" % pos_id)
     console.print()
 
 
@@ -3309,6 +3437,8 @@ def run():
         console.print("               Single-leg: the strike. Spreads: the SHORT strike.")
         console.print("  [cyan]--expiry YYYY-MM-DD[/cyan]  Required alongside --strike.")
         console.print("  [cyan]--long-strike S[/cyan]      Disambiguates two widths sharing a short strike.")
+        console.print("  [cyan]--legs SPEC --leg-expiry YYYY-MM-DD[/cyan]  Spreads and condors: book these legs as")
+        console.print("               filled, e.g. --legs 115P@2.01,120P@3.02,170C@2.33,175C@1.81")
         console.print("  [dim]The chain is re-pulled at confirm time, so a rank can point at a")
         console.print("   different contract than the one displayed. Naming it refuses rather")
         console.print("   than booking something adjacent.[/dim]")
@@ -3339,7 +3469,17 @@ def run():
             _EXPECT["contracts"] = args[i+1]; i += 2
         elif args[i] == "--expect-fill" and i+1 < len(args):
             _EXPECT["fill"] = args[i+1]; i += 2
+        # s126: name a credit vertical's / condor's legs as filled.
+        elif args[i] == "--legs" and i+1 < len(args):        _LEGS["spec"] = args[i+1]; i += 2
+        elif args[i] == "--leg-expiry" and i+1 < len(args):  _LEGS["expiry"] = args[i+1]; i += 2
         else: positional.append(args[i]); i += 1
+
+    if (_LEGS["spec"] is None) != (_LEGS["expiry"] is None):
+        console.print("[red]--legs and --leg-expiry must be given together.[/red]")
+        return
+    if _LEGS["spec"] is not None and pin_strike is not None:
+        console.print("[red]--legs names every leg; do not also pass --strike/--expiry.[/red]")
+        return
 
     # Half a pin is worse than none: it reads as "this exact contract" while
     # still selecting by rank. Refuse rather than silently falling back.
@@ -3525,10 +3665,19 @@ def run():
         try:
             condors = evaluate_condors(ticker, strategy, config, dte_target, top_n)
         except Exception as e:
-            console.print(f"[red]Error:[/red] {e}")
-            return
+            if _LEGS["spec"] is None:
+                console.print(f"[red]Error:[/red] {e}")
+                return
+            # s126: named legs do not need HELM's candidates to be booked.
+            console.print(f"[dim]HELM's candidates are unavailable ({e}); "
+                          f"booking the named legs without entry greeks.[/dim]")
+            condors = []
 
         if not condors:
+            if _LEGS["spec"] is not None and "--confirm" in args:
+                # s126: named legs are an identity, not a candidate.
+                confirm_condor(ticker, strategy, [], config, spot, args)
+                return
             console.print(f"[yellow]No iron condor contracts found matching criteria.[/yellow]")
             console.print(f"[dim]Try --dte with a different target.[/dim]")
             return
@@ -3581,10 +3730,19 @@ def run():
         try:
             spreads = evaluate_spreads(ticker, strategy, config, dte_target, top_n)
         except Exception as e:
-            console.print(f"[red]Error:[/red] {e}")
-            return
+            if _LEGS["spec"] is None:
+                console.print(f"[red]Error:[/red] {e}")
+                return
+            # s126: named legs do not need HELM's candidates to be booked.
+            console.print(f"[dim]HELM's candidates are unavailable ({e}); "
+                          f"booking the named legs without entry greeks.[/dim]")
+            spreads = []
 
         if not spreads:
+            if _LEGS["spec"] is not None and "--confirm" in args:
+                # s126: named legs are an identity, not a candidate.
+                confirm_spread(ticker, strategy, [], config, spot, args)
+                return
             console.print(f"[yellow]No spread contracts found matching criteria.[/yellow]")
             console.print(f"[dim]Try --dte with a different target.[/dim]")
             return
