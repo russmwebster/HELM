@@ -1924,6 +1924,21 @@ def diag_money_svg(points, limit, events=(), final=None, width=760, height=250):
             % (width, height, "".join(e)))
 
 
+def diag_annualized(result, base, days, priced=None):
+    """A diagonal's result as a simple annual rate (Russ, 2026-10-14). Display
+    only. `result`: the whole trade in dollars if every open leg were closed
+    (or the realized result on a closed trade). `base`: the money in the legs
+    still open -- the long's cost, less a live short's credit. Simple, never
+    compounded: compounding a few weeks' result overstates it. None when the
+    base or the days cannot carry a rate."""
+    r, b = _f(result), _f(base)
+    if r is None or not b or b <= 0 or days is None or days < 1:
+        return None
+    pct = 100.0 * r / b
+    return {"result": round(r, 2), "base": round(b, 2), "days": int(days),
+            "pct": round(pct, 1), "ann_pct": round(pct * 365.0 / days, 0), "priced": priced}
+
+
 def diag_view(pos, legs, rows, flags, quotes=None, entry_spot=None, earnings_next=None,
               today=None, panels=None, thetas=None, primary_theta=None, ivs=None):
     """Everything the four-question diagonal card shows, as plain data.
@@ -2066,6 +2081,16 @@ def diag_view(pos, legs, rows, flags, quotes=None, entry_spot=None, earnings_nex
         v["stand_line"] = "%s; the shorts have paid you %s net." % (lv[0].upper() + lv[1:], _amt(rent))
     else:
         v["stand_line"] = "%s; the shorts have cost you %s net." % (lv[0].upper() + lv[1:], _amt(-rent))
+    # --- if closed today, annualized (Russ, 2026-10-14) ------------------------
+    # Base: the legs still open -- the long's cost, less the credit of a live
+    # short. Result: close every open leg -- at the quotes (long at the bid,
+    # short at the ask) when the check has them, else at the midpoint.
+    if not closed:
+        base = long_cost - ((live_short["open_price"] * sh_n(live_short)) if live_short else 0.0)
+        res, how = ((v["real_whole"], "quotes") if v["real_whole"] is not None else (whole, "mid"))
+        v["ann"] = diag_annualized(res, base, _dd(first_day, today), how)
+        if v["ann"]:
+            v["ann"]["has_short"] = live_short is not None
 
     # --- next line to watch ----------------------------------------------------
     nxt = []
@@ -2257,6 +2282,7 @@ def diag_view(pos, legs, rows, flags, quotes=None, entry_spot=None, earnings_nex
         v["closed_at"] = pos.get("closed_at")
         v["opened_at"] = pos.get("opened_at")
         v["held_days"] = _dd(pos.get("opened_at"), pos.get("closed_at"))
+        v["ann"] = diag_annualized(realized, long_cost, v["held_days"], "realized")
         long_gain = ((lg["close_price"] - lg["open_price"]) * c * m) if lg.get("close_price") is not None else None
         short_gain = (realized - long_gain) if (realized is not None and long_gain is not None) else None
         v["long_gain"], v["short_gain"] = long_gain, short_gain
