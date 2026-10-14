@@ -713,7 +713,7 @@ def suggest_contracts(strategy: str, strike: float, mid: float,
 
 def fetch_chain_from_ibkr(ticker, opt_type, target_exps, spot, atr,
                            delta_min, delta_max, delta_sweet,
-                           spread_threshold=0.25):
+                           spread_threshold=0.25, pin=None):
     # Fetch live/frozen options chain from IBKR.
     # Live when market open; frozen (2) when closed (type 1 returns -1 quotes outside RTH).
     # Returns list of contract dicts. Empty list = fallback to yfinance.
@@ -758,6 +758,17 @@ def fetch_chain_from_ibkr(ticker, opt_type, target_exps, spot, atr,
                                if (spot - atr_buf) <= s <= (spot + atr_buf))
             if not filtered:
                 filtered = sorted(all_strikes, key=lambda s: abs(s - spot))[:20]
+            # s130 (2026-10-14): a PINNED strike is always fetched, inside the
+            # window or not. W97 made a pin an identity, not a candidate, but
+            # the 3xATR window still decided what was pulled, so a put sold
+            # further out than 3 ATR could not be recorded (CSCO $105, spot
+            # $114.75, window $106.83-$122.67). Only the pinned expiry; only a
+            # strike the exchange lists (all_strikes), so a typo still refuses.
+            _pin_k = None
+            if pin is not None and exp == pin[1]:
+                _pin_k = next((s for s in all_strikes if abs(s - pin[0]) < 1e-6), None)
+                if _pin_k is not None and _pin_k not in filtered:
+                    filtered = sorted(set(filtered) | {_pin_k})
 
             opt_right = "P" if opt_type == "PUT" else "C"
             raw_opts = [(s, IBOption(ticker, exp_fmt, s, opt_right, "SMART", "", "USD"))
@@ -791,7 +802,8 @@ def fetch_chain_from_ibkr(ticker, opt_type, target_exps, spot, atr,
                     continue
                 mid = round((bid + ask) / 2, 2)
                 spread_pct = round((ask - bid) / mid * 100, 1) if mid > 0 else 99
-                if spread_pct > spread_threshold * 100:
+                _is_pin = _pin_k is not None and abs(strike - _pin_k) < 1e-6
+                if spread_pct > spread_threshold * 100 and not _is_pin:
                     continue
 
                 delta = theta = iv = None
@@ -821,7 +833,10 @@ def fetch_chain_from_ibkr(ticker, opt_type, target_exps, spot, atr,
                 # condor/spread evaluators already do. The MA 585P ITM artifact
                 # (2026-07-29, SELL_GATED) came through this exact line: no
                 # delta, no IV for the fallback, richest premium wins.
-                if delta is None or not (delta_min <= delta <= delta_max):
+                # s130: the pinned contract is recorded as filled, so the delta
+                # band (a selection rule) does not apply to it; it still needs a
+                # two-sided market (above).
+                if (delta is None or not (delta_min <= delta <= delta_max)) and not _is_pin:
                     continue
 
                 oi = 0
@@ -909,7 +924,8 @@ def _entry_dte_floor(strategy, dte_min):
 def evaluate_contracts(ticker: str, strategy: str, config: dict,
                        dte_target: Optional[int] = None,
                        top_n: int = 8,
-                       enforce_long_gates: bool = True) -> list:
+                       enforce_long_gates: bool = True,
+                       pin=None) -> list:
     """
     Fetch options chain and score contracts for the given strategy.
     Returns list of scored contract dicts, sorted by score desc.
@@ -993,6 +1009,7 @@ def evaluate_contracts(ticker: str, strategy: str, config: dict,
         ticker, opt_type, target_exps, spot, atr or (spot * 0.05),
         delta_min, delta_max, delta_sweet,
         spread_threshold=config.get("spread_threshold", 0.25),
+        pin=pin,
     )
     _ibkr_source = len(contracts) > 0
     if not _ibkr_source:
@@ -3759,7 +3776,9 @@ def run():
         contracts = evaluate_contracts(
             ticker, strategy, config, dte_target,
             10000 if _w97_pinned else top_n,
-            enforce_long_gates=not _w97_pinned)
+            enforce_long_gates=not _w97_pinned,
+            # s130: the pinned strike is fetched even outside the 3xATR window
+            pin=((float(pin_strike), str(pin_expiry)[:10]) if _w97_pinned else None))
     except Exception as e:
         console.print(f"[red]Error:[/red] {e}")
         return
