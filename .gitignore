@@ -98,3 +98,4 @@ data/helm.db*mode=ro
 
 # s120 cleanup: ghosts the device VM leaves when a file is deleted under an open handle
 data/.fuse_hidden*
+Claude outputs/
