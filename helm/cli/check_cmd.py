@@ -108,6 +108,12 @@ def _persist_real_leg_marks(conn, check_id, position_id, leg_marks_by_id):
     # transaction owns the commit, so parent + child rows stay atomic.
     import uuid as _uuid
     from datetime import datetime
+    # s132 (W185): a leg the book has already CLOSED is marked at its realized
+    # close price so the position's P&L can net it -- but that is not a reading,
+    # and writing it repeated the close price at every slot and turned the open
+    # legs' rows PARTIAL. Closed legs are dropped here, in the writer only: the
+    # P&L netting, mark confidence and leg_greeks still see the full list.
+    leg_marks_by_id = [_m for _m in (leg_marks_by_id or []) if not _m.get("settled")]
     if not leg_marks_by_id:
         return
     # s116 (W144's stated fix shape): write the legs that HAVE a mark and label
@@ -894,6 +900,8 @@ def check_one(pos: dict, legs: list, deep: bool = False, persist: bool = False) 
                     "leg_id": _lg.get("id"),
                     "current_price": _mid,
                     "is_live": _leg_live,
+                    # s132 (W185): closed by the book -- the writer skips it.
+                    "settled": _lg_closed,
                     "delta": _q.get("delta"), "gamma": _q.get("gamma"),
                     "theta": _q.get("theta"), "vega": _q.get("vega"),
                     "iv": _q.get("iv"), "bid": _q.get("bid"), "ask": _q.get("ask"),
