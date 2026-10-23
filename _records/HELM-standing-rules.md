@@ -7,7 +7,7 @@ future session builds; most sessions add nothing.*
 
 *First cut 2026-09-20, curated from the lessons list and the decisions scattered
 through `claude/HELM-worklist.md` (frozen). Russ reads it once before it is trusted.
-Last updated 2026-10-14 (s130: the device shell never writes the live database). Before that 2026-10-12 (s129: plain language, no rule or task numbers when talking to Russ). Before that 2026-10-12 (s128: explain first, wait for the go-ahead). Before that 2026-10-10 (s127: PG archived as a product; the board is HELM's interface). Before that 2026-10-10 (s126: the handover replaces the live list). Before that 2026-10-01 (s125: net rent banked, the diagonal loss limit, the four-question
+Last updated 2026-10-23 (s133: a named contract is a record, not a selection). Before that 2026-10-14 (s130: the device shell never writes the live database). Before that 2026-10-12 (s129: plain language, no rule or task numbers when talking to Russ). Before that 2026-10-12 (s128: explain first, wait for the go-ahead). Before that 2026-10-10 (s127: PG archived as a product; the board is HELM's interface). Before that 2026-10-10 (s126: the handover replaces the live list). Before that 2026-10-01 (s125: net rent banked, the diagonal loss limit, the four-question
 diagonal card, two keep reasons; one base per percentage; live state in render harnesses). **Kept as a mirror on the Mac at
 `~/Projects/helm/_records/HELM-standing-rules.md` — edit that copy, publish with
 `project_write local_path`.***
@@ -215,6 +215,12 @@ diagonal card, two keep reasons; one base per percentage; live state in render h
   been a no." When a written rule and its source conversation could differ, check the
   archive/study doc — or ask — before choosing the narrower reading. *(2026-09-27.)*
 - **Search the project before recommending a change.** `project_search` first.
+- **A named contract is a record, not a selection.** `helm open --strike/--expiry` books a
+  trade already made, so selection rules (strike window, delta band, entry DTE window) must
+  never hide it; only the exchange listing and the money rules (spread, size, ceiling — each
+  overridable, recorded) apply. Every filter between the chain and the pin is a place it can
+  vanish: test the pin past each one. *(s130 strike window; s133 DTE window — JPM 11/20 at 28
+  DTE was unbookable, 2026-10-23.)*
 - **An insertion point is a decision.** Read the function's exits before choosing
   where to stand.
 - **A `SELECT` with no `ORDER BY` is a decision made by insertion order.**

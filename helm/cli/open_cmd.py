@@ -51,6 +51,15 @@ console = Console()
 # so the open layer can gate contracts without importing the decision core.
 LONG_SINGLE_FAMILY = ("LONG_CALL", "LONG_PUT")
 LONG_SPREAD_PCT_MAX = 5.0    # relative spread is the binding liquidity control
+# s133 (2026-10-23, Russ): `helm open ... --max-spread N` replaces the 5% for ONE
+# CLI run (real-book selection by hand). Set only by run(); the board and the paper
+# booker never set it, so their limit stays LONG_SPREAD_PCT_MAX. A booking made
+# under it carries a SPREAD LIMIT OVERRIDE note so studies can split it out.
+_LONG_SPREAD_OVERRIDE = None
+
+
+def _long_spread_max():
+    return _LONG_SPREAD_OVERRIDE if _LONG_SPREAD_OVERRIDE is not None else LONG_SPREAD_PCT_MAX
 LONG_BE_MOVE_MAX = 1.0       # breakeven may not exceed a 1-sigma move
 LONG_OPTION_TARGET = RISK_CAP_PER_TRADE  # W160 (s122): one shared cap, not a
                                           # second constant that can drift from it
@@ -361,8 +370,8 @@ def _long_reject_reason(c):
     sp = c.get("spread_pct")
     if sp is None:
         return ("spread unmeasurable", "no bid/ask", None)
-    if sp > LONG_SPREAD_PCT_MAX:
-        return (f"spread > {LONG_SPREAD_PCT_MAX:.0f}%", f"{sp:.1f}%", float(sp))
+    if sp > _long_spread_max():
+        return (f"spread > {_long_spread_max():g}%", f"{sp:.1f}%", float(sp))
     if c.get("delta") is None:
         # The delta-band filter upstream only applies when delta is known,
         # so an unpriced contract would otherwise arrive here ungated.
@@ -374,6 +383,19 @@ def _long_reject_reason(c):
         return (f"breakeven > {LONG_BE_MOVE_MAX:.2f}x expected move",
                 f"{br:.2f}x", float(br))
     return None
+
+
+def _with_spread_override_note(note, strategy, selected):
+    """s133: append the --max-spread record to a booking's notes, when one was set."""
+    if _LONG_SPREAD_OVERRIDE is None or strategy not in LONG_SINGLE_FAMILY:
+        return note
+    sp = selected.get("spread_pct")
+    extra = (f"SPREAD LIMIT OVERRIDE (--max-spread): buy-side spread limit "
+             f"{_LONG_SPREAD_OVERRIDE:g}% this run (default {LONG_SPREAD_PCT_MAX:g}%); "
+             f"this contract's spread {sp:.1f}%" if sp is not None else
+             f"SPREAD LIMIT OVERRIDE (--max-spread): buy-side spread limit "
+             f"{_LONG_SPREAD_OVERRIDE:g}% this run (default {LONG_SPREAD_PCT_MAX:g}%)")
+    return f"{note} -- {extra}" if note else extra
 
 
 def gate_longs(contracts, strategy, reset=True, enforce=True):
@@ -1001,6 +1023,17 @@ def evaluate_contracts(ticker: str, strategy: str, config: dict,
         if dte_min <= d <= dte_max:
             target_exps.append((exp, d))
 
+    # s133 (2026-10-23): a PINNED expiry is always fetched, inside the entry DTE
+    # window or not. The window is a rule for CHOOSING a trade; a pin records
+    # one already made. JPM $335P 2026-11-20 sold 10-22 sat at 28 DTE against a
+    # 30-DTE floor and could not be booked. Only an expiry the exchange lists,
+    # so a mistyped date still refuses.
+    if pin is not None:
+        _pin_exp = str(pin[1])[:10]
+        if _pin_exp in tuple(expirations) and all(e != _pin_exp for e, _ in target_exps):
+            target_exps.append(
+                (_pin_exp, (datetime.strptime(_pin_exp, "%Y-%m-%d").date() - today).days))
+
     if not target_exps:
         raise ValueError(f"No expiries found in {dte_min}-{dte_max} DTE range")
 
@@ -1594,7 +1627,7 @@ def confirm_and_log(ticker: str, strategy: str, contracts: list, config: dict,
                 if (pin_strike is not None and pin_expiry is not None)
                 else None
             ),
-            notes_extra=override_note,
+            notes_extra=_with_spread_override_note(override_note, strategy, selected),
         )
 
         net_premium = fill_price * 100 * num_contracts
@@ -3450,6 +3483,8 @@ def run():
         console.print("[dim]Options:[/dim]")
         console.print("  [cyan]--dte N[/cyan]      Target DTE (default: strategy default)")
         console.print("  [cyan]--top N[/cyan]      Show top N contracts (default: 8)")
+        console.print("  [cyan]--max-spread N[/cyan]  Long calls/puts: allow a bid-ask spread up to N% of mid")
+        console.print("               this run (default 5); a booking records it in its notes.")
         console.print("  [cyan]--strike S[/cyan]   With --expiry: book THIS contract, not a rank.")
         console.print("               Single-leg: the strike. Spreads: the SHORT strike.")
         console.print("  [cyan]--expiry YYYY-MM-DD[/cyan]  Required alongside --strike.")
@@ -3472,11 +3507,13 @@ def run():
     pin_strike = None
     pin_expiry = None
     pin_long = None
+    max_spread = None
     positional = []
     i = 0
     while i < len(args):
         if args[i] == "--dte" and i+1 < len(args):   dte_target = int(args[i+1]); i += 2
         elif args[i] == "--top" and i+1 < len(args):  top_n = int(args[i+1]); i += 2
+        elif args[i] == "--max-spread" and i+1 < len(args): max_spread = args[i+1]; i += 2
         elif args[i] == "--strike" and i+1 < len(args):      pin_strike = args[i+1]; i += 2
         elif args[i] == "--expiry" and i+1 < len(args):      pin_expiry = args[i+1]; i += 2
         elif args[i] == "--long-strike" and i+1 < len(args): pin_long = args[i+1]; i += 2
@@ -3523,6 +3560,23 @@ def run():
         console.print(f"[red]Unknown strategy:[/red] {strategy}")
         console.print(f"[dim]Supported: {', '.join(STRATEGY_CONFIG.keys())}[/dim]")
         return
+
+    # s133: --max-spread N -- this run's buy-side spread limit (long calls/puts only)
+    global _LONG_SPREAD_OVERRIDE
+    if max_spread is not None:
+        if strategy not in LONG_SINGLE_FAMILY:
+            console.print("[red]--max-spread applies to LONG_CALL and LONG_PUT only.[/red]")
+            return
+        try:
+            _ms = float(str(max_spread).rstrip("%"))
+        except ValueError:
+            _ms = None
+        if _ms is None or not (0 < _ms <= 50):
+            console.print("[red]--max-spread takes a percent of mid between 0 and 50, e.g. --max-spread 8[/red]")
+            return
+        _LONG_SPREAD_OVERRIDE = _ms
+        console.print(f"[yellow]Spread limit this run: {_ms:g}% of mid "
+                      f"(default {LONG_SPREAD_PCT_MAX:g}%) -- a booking records it in its notes.[/yellow]")
 
     config = STRATEGY_CONFIG[strategy]
     account_id = get_active_account()
