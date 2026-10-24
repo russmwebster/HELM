@@ -7,7 +7,7 @@ future session builds; most sessions add nothing.*
 
 *First cut 2026-09-20, curated from the lessons list and the decisions scattered
 through `claude/HELM-worklist.md` (frozen). Russ reads it once before it is trusted.
-Last updated 2026-10-24 (s135: paper book frozen, paper exit agent retired; how `helm settle --date` reads its date). Before that 2026-10-24 (s134: the revision — rulebook v0.2 approved: strategy set, sleeve limits, paper book retired, universe, net P&L, no double entry). Before that 2026-10-23 (s133: a named contract is a record, not a selection). Before that 2026-10-14 (s130: the device shell never writes the live database). Before that 2026-10-12 (s129: plain language, no rule or task numbers when talking to Russ). Before that 2026-10-12 (s128: explain first, wait for the go-ahead). Before that 2026-10-10 (s127: PG archived as a product; the board is HELM's interface). Before that 2026-10-10 (s126: the handover replaces the live list). Before that 2026-10-01 (s125: net rent banked, the diagonal loss limit, the four-question
+Last updated 2026-10-24 (s135: HELM advises in plain words; paper book frozen, paper exit agent retired; how `helm settle --date` reads its date). Before that 2026-10-24 (s134: the revision — rulebook v0.2 approved: strategy set, sleeve limits, paper book retired, universe, net P&L, no double entry). Before that 2026-10-23 (s133: a named contract is a record, not a selection). Before that 2026-10-14 (s130: the device shell never writes the live database). Before that 2026-10-12 (s129: plain language, no rule or task numbers when talking to Russ). Before that 2026-10-12 (s128: explain first, wait for the go-ahead). Before that 2026-10-10 (s127: PG archived as a product; the board is HELM's interface). Before that 2026-10-10 (s126: the handover replaces the live list). Before that 2026-10-01 (s125: net rent banked, the diagonal loss limit, the four-question
 diagonal card, two keep reasons; one base per percentage; live state in render harnesses). **Kept as a mirror on the Mac at
 `~/Projects/helm/_records/HELM-standing-rules.md` — edit that copy, publish with
 `project_write local_path`.***
@@ -22,8 +22,14 @@ diagonal card, two keep reasons; one base per percentage; live state in render h
   paper positions were closed at their last marks with exit reason `RUN_OFF` (tag
   `paper_run_off_20261024`; never a rule result) and the paper exit agent retired. *(Russ,
   2026-10-24 — the 11/20 run-off was dropped once 40 paper diagonals were found to run to
-  January.)* Anything
-  reading as an instruction on a real-book surface is a defect.
+  January.)*
+- **HELM advises in plain words: each real position gets one recommendation (hold, take
+  the profit, close or roll, decide on assignment, heads-up), with its reason and the
+  number behind it. Russ decides and places every trade; HELM never acts. A
+  recommendation without its reason is a defect.** *(Russ, 2026-10-24, s135 — replaces
+  "anything reading as an instruction on a real-book surface is a defect" and "exit flags
+  are review triggers, not sell signals". The recommendation is computed in the engine,
+  one function; the board only shows it.)*
 - `book` is therefore also the actor field: a real close was a human, a paper close
   was a rule. The two books share an `exit_reason` vocabulary so they can be pooled —
   **but the same word means different things in each.**
@@ -188,8 +194,9 @@ diagonal card, two keep reasons; one base per percentage; live state in render h
   so targets and the paper record are somewhat optimistic. *(s115.)*
 - **A `.bak` lives until its change is committed AND its first unattended run is
   clean; then it goes. Keep the newest three database backups.** *(s120.)*
-- **Exit flags are review triggers, not sell signals.** The disposition is a logged
-  yes/no, never an auto-exit. *(s114/s115.)*
+- *(Superseded 2026-10-24 by "HELM advises in plain words" above.)* Exit flags were review
+  triggers, not sell signals; the disposition is still a logged yes/no, never an
+  auto-exit. *(s114/s115.)*
 - **A breached diagonal may be closed WHOLE rather than re-sold.** *(Russ, 2026-09-23,
   on TSLA.)*
 - **A control belongs on a surface that shows what the control acts on.** *(Russ +
