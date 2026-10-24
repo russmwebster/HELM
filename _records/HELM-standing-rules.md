@@ -7,7 +7,7 @@ future session builds; most sessions add nothing.*
 
 *First cut 2026-09-20, curated from the lessons list and the decisions scattered
 through `claude/HELM-worklist.md` (frozen). Russ reads it once before it is trusted.
-Last updated 2026-10-23 (s133: a named contract is a record, not a selection). Before that 2026-10-14 (s130: the device shell never writes the live database). Before that 2026-10-12 (s129: plain language, no rule or task numbers when talking to Russ). Before that 2026-10-12 (s128: explain first, wait for the go-ahead). Before that 2026-10-10 (s127: PG archived as a product; the board is HELM's interface). Before that 2026-10-10 (s126: the handover replaces the live list). Before that 2026-10-01 (s125: net rent banked, the diagonal loss limit, the four-question
+Last updated 2026-10-24 (s134: the revision — rulebook v0.2 approved: strategy set, sleeve limits, paper book retired, universe, net P&L, no double entry). Before that 2026-10-23 (s133: a named contract is a record, not a selection). Before that 2026-10-14 (s130: the device shell never writes the live database). Before that 2026-10-12 (s129: plain language, no rule or task numbers when talking to Russ). Before that 2026-10-12 (s128: explain first, wait for the go-ahead). Before that 2026-10-10 (s127: PG archived as a product; the board is HELM's interface). Before that 2026-10-10 (s126: the handover replaces the live list). Before that 2026-10-01 (s125: net rent banked, the diagonal loss limit, the four-question
 diagonal card, two keep reasons; one base per percentage; live state in render harnesses). **Kept as a mirror on the Mac at
 `~/Projects/helm/_records/HELM-standing-rules.md` — edit that copy, publish with
 `project_write local_path`.***
@@ -16,13 +16,16 @@ diagonal card, two keep reasons; one base per percentage; live state in render h
 
 ## Who does what
 
-- **Russ trades the REAL book by hand — entry and exit. Rules trade the PAPER book.
-  On the real book HELM informs; it never acts.** *(Russ, s107; HELM-193.)* Anything
+- **Russ trades the REAL book by hand — entry and exit, and sizes every trade. On the
+  real book HELM informs; it never acts.** *(Russ, s107; HELM-193.)* **The PAPER book is
+  retired** — no new paper entries from 2026-10-24; open paper positions run off to the
+  11/20 expiries, then are marked run off and the paper agents parked. *(Russ, 2026-10-24.)* Anything
   reading as an instruction on a real-book surface is a defect.
 - `book` is therefore also the actor field: a real close was a human, a paper close
   was a rule. The two books share an `exit_reason` vocabulary so they can be pooled —
   **but the same word means different things in each.**
-- Rule-precedence questions are paper-book questions, not decisions Russ owes.
+- Rule-precedence questions were paper-book questions; with the paper book retired, a
+  rule change is a change to what HELM TELLS Russ.
 - Rule work has two possible products: a change to what the paper agent DOES, or a
   change to what HELM TELLS Russ. **Say which before building.**
 - Russ commits and pushes. Sessions stage files by name and write the message.
@@ -36,6 +39,56 @@ diagonal card, two keep reasons; one base per percentage; live state in render h
 
 ## Settled decisions
 
+### The revision (Russ, 2026-10-24) — `claude/HELM-rulebook-v0.2.md` is the spec
+
+- **Purpose and strategy set:** HELM generates cash in the Rollover IRA by selling
+  premium — **cash-secured puts, covered calls on HELM-held shares, and PMCCs** (a LEAPS
+  long with short calls). Iron condors, credit and debit spreads, standalone long calls
+  and puts, and the short-dated DIAGONAL route are **out**; open positions in them finish
+  under the rules they were opened under. Nothing is force-closed.
+- **No double entry: trades enter HELM only from Fidelity downloads.** Russ enters
+  trades in Fidelity; HELM books every entry and exit (opens, closes, leg closes,
+  re-sells, expiries, assignments) from his downloads. `helm open` / `helm close` are the
+  fallback only until the import works. *(Russ, 2026-10-24.)*
+- **The HELM sleeve and the only size limits:** sleeve = **$300,000 + the realized result
+  of every REAL leg closed from 2026-10-24** (each leg as it closes; gross until the
+  import, then net; dividends on HELM-held shares count; collateral interest does not).
+  **In use** = CSP collateral + diagonal/PMCC longs at cost (the run-off diagonals
+  included) + assigned shares at cost. **In use ≤ sleeve; one name ≤ 20%; one sector ≤
+  30% of the sleeve.** A fund's sector is its `approved_funds` bucket. A trade over a
+  limit is **declined with the reason**; a typed count overrides, recorded "OVER-LIMIT
+  OVERRIDE (sleeve|name|sector)" — also when typed above a non-zero suggestion. **The
+  $5,000 per-trade cap, the 5% cash ceiling and the 5% long-premium limit are gone** for
+  CSPs, covered calls and the diagonal family. Built `helm/sleeve.py`; reported by
+  `helm sleeve` / `helm book` and the board's Book page. No beta-weighted delta band yet.
+- **Universe:** offered only when the name's latest ownership grade is **A, B or C**, or
+  it is an **approved fund (grade FUND)**. Ungraded, D, F and N ("can't grade") are not
+  offered. Refresh monthly plus a fresh grade before a name's first trade. The always-on
+  `willing_to_own` flag is retired. Trend, support and IV-vs-realized are **shown, not
+  gates** (the records point against them). Grader fixes (s134): negative equity fails
+  only with interest cover < 3× or negative FCF; the runway test only for unprofitable
+  companies; missing data lowers confidence, not the grade; a bank method for banks and
+  capital-markets firms.
+- **CSPs:** 0.25–0.30 delta, 30–45 DTE, IV rank ≥ 50, spread < 10% of mid; no entry within
+  10 days of earnings, earnings later in the trade allowed and shown; the contract is
+  chosen (highest annualized return on collateral); the daily list is the **top 5**, one
+  per name. **50% profit-take as a resting order Russ places at entry** (the Book page
+  shows the price); 21 DTE; no stop. Tested → a flag showing both roll and assignment.
+  **Assignment accepted by default while the name grades A–C.**
+- **Covered calls:** strike ≥ the **effective basis** (strike paid − put premium); 0.20–
+  0.35 Δ, 30–45 DTE; **no earnings inside the trade**; ex-dividend flag; 50% resting order;
+  **21 DTE** (was 7).
+- **PMCC:** long 270–730 DTE, 0.75–0.85 Δ, mostly intrinsic; short 30–45 DTE, 0.20–0.30 Δ;
+  **the width test on every short, re-sells included** (strike gap > what the long has
+  cost net of rent banked); review the long at 90 days left; loss limit half the long's
+  cost; one contract per name until there is a record.
+- **Measurement:** **net of fees is the P&L of record** (gross beside it; trades before
+  7/13 stay gross, labelled "fees not recorded"); capital-weighted annualized return on
+  capital at risk; benchmarks the money-market yield on the same cash and days and Cboe's
+  PUT index; sample size and rule version beside every figure.
+
+### Earlier settled decisions (in force unless marked superseded)
+
 - **HELM is one track. HELM PG as a product to sell is archived; `helm-pg` is HELM's
   web board.** It holds no model (every threshold, gate and verdict is imported or read
   from the engine) and **changes anything only by calling HELM's own commands, never by
@@ -44,9 +97,10 @@ diagonal card, two keep reasons; one base per percentage; live state in render h
   **Archived, history only — never orient from them:** `claude/HELM-product-vision-and-status.md`,
   `HELM-product-development-plan.md`, `HELM-PG-wiring-pickup.md`, `HELM-trial-free-data.md`,
   `HELM-PG-where-the-product-stands.md`. Their status blocks describe July–August.
-- **Commissions and fees are not tracked. P&L stays gross.** *(Russ, 2026-08-26.)*
-  The spec that said otherwise was implemented as though it were the decision, and
-  broke `helm close`. It was reversed the same day.
+- *(Superseded 2026-10-24: net of fees is now the P&L of record, from the Fidelity
+  import — see the revision above. History: on 2026-08-26 a spec implemented fee capture
+  as though decided and broke `helm close`; build net P&L from the import's fills, not by
+  editing `helm close`.)*
 - **PAPER settles expiries by inference** from the last good expiry-day spot — OTM →
   0.00, ITM → intrinsic, within 1% of the strike or no mark → flagged. **REAL is
   asked, never inferred.** *(Russ, s110.)*
@@ -55,10 +109,15 @@ diagonal card, two keep reasons; one base per percentage; live state in render h
   guard cases settle the same way. *(Russ, 2026-09-20 — W177.)* **The guard that keeps
   W167 intact: the fallback WRITES `close_price`, and `settled_mark` keeps reading
   `close_price` first — so a settled leg still has exactly one value.**
+- *(The paper rules in this list — inference settlement, the official-close fallback,
+  hand-fired settlement, the paper exit agent — hold only for the paper run-off to the
+  11/20 expiries; then the paper book is marked run off and its agents parked.)*
 - **Paper settlement stays hand-fired.** No agent, no tripwire. *(Russ, 2026-09-20.)*
   **Accepted consequence: every paper expiry Friday loses readings until a session
   runs `helm settle`, and the audit grades those days DEGRADED with the cause named.**
-- **Diagonals stay in the model, as a rented long.** The long call is the asset; a
+- **Diagonals stay in the model, as a rented long** — *for the three run-off real
+  diagonals only (EQT, IBM, JPM; longs 12/18). New diagonal-family trades are PMCCs under
+  the revision's rules (2026-10-24).* The long call is the asset; a
   short is sold against it, harvested, and the long waits as a plain long until the
   next short. *(Russ, 2026-09-21. Spec: W180.)* **A diagonal with no live short leg is
   a long call, and the long-call rules govern it.**
@@ -75,58 +134,13 @@ diagonal card, two keep reasons; one base per percentage; live state in render h
   No bid AND no ask marks nothing. *(W179, 2026-09-21.)*
 - **Gate on facts, display judgments.** The stored IV-rank ceiling stays a warning,
   not a gate. *(Russ, s92.)*
-- **Sizing: $5,000 of risk per trade, every strategy** — CSP: one-sigma move over the
-  hold (spot × entry IV × √(DTE/365) × 100) × contracts; spread/condor: max loss; long
-  call: debit; diagonal: the long leg's debit. The 5% cash ceiling stays behind it.
-  *(Russ, 2026-09-26 — W160; supersedes s100's $8,000 level, which sat above
-  three-quarters of the book's trades and would have stopped almost nothing.)*
-  **When ONE contract is already over the cap, the trade is declined, never floored
-  to 1 — for CSPs (W160) and for long calls and diagonals, including PMCC and put
-  diagonals (W201).** **Real book:** the CLI and the board show the one-contract figure
-  ("one contract is $X, over the $5,000 cap" — a CSP's figure is its one-sigma move, a
-  diagonal's its long leg); Enter records nothing; **a typed count overrides, and the
-  override is recorded in the position's notes** ("OVER-CAP OVERRIDE (W160|W201): …").
-  A CSP whose one contract's collateral is over the 5% ceiling is declined and
-  overridable the same way. *(Real CSP override: Russ, 2026-09-27 — CSPs now match
-  long calls and diagonals.)* **Paper book:** refused — **a CSP when one contract's
-  one-sigma risk exceeds $5,000** — and **every refused candidate is logged, one row in
-  `paper_refusals` reading "refused by W160: …"** ("refused by W201: …" for a long
-  call or diagonal), not dropped. *(Paper CSP: Russ, 2026-09-27.)* **A paper CSP with
-  no IV (or DTE) is refused and logged as exactly "refused: no IV, cap couldn't run"**
-  so its frequency can be counted. *(Russ, 2026-09-27.)* **Not declined — floored to 1
-  and labelled "floored", never "sized by the cap":** long puts (not decided), spreads,
-  condors, straddles. s123 had floored every non-CSP strategy to 1 under the label
-  "sized by the $5,000 cap", which let a $16k LLY-style one-lot through looking
-  compliant *(W201)*. **Built in `helm/risk_cap.py`** (the one source of every sizing
-  line); committed `afaefd1`. See `HELM-archive-2026-09-27-s123.md`.
-- **Long-premium sleeve ≤ 5% of account value**, counted as the ORIGINAL COST of every
-  open long option — long calls at their debit, diagonals at their long leg's debit,
-  index calls at their debit; rent collected never reduces it. **Long puts are not in
-  the sleeve** (Russ confirmed 2026-09-27). **While over the cap, no new longs; nothing
-  is force-closed.** Index calls may be up to **one-third** of the sleeve, after a cost
-  check (W196). *(Russ, 2026-09-27.)* *(Supersedes s115's "the long-call pause is
-  retired; the constraint is size" — the constraint is now size per trade AND sleeve
-  share.)* Built s123 (`afaefd1`).
-- **Long-call entry (W195, Russ 2026-09-27) — `lc-screen-v2`:** S&P 500 above its
-  200-day, read at scan time (unreadable → no new longs); G1 trend (bias + MA stack)
-  **recorded, not a gate**; rank = **50% calmness** (HV252: 1 at ≤ 20%, 0 at 40%) **+
-  50% cheapness** (IV ÷ HV90), **no RSI penalty**; a pass needs **rank ≥ 0.72 —
-  PROVISIONAL, review after a month of paper results (~2026-10-27)**; G3/G4/G5
-  unchanged; **at most 2 new long calls a day; one long call per name.** **Paper
-  enforces; real flags.** The **paper** 5% sleeve counts **only long calls the W195
-  screen booked** — paper diagonals and v1 long calls are not in it *(Russ's option
-  (a): the paper test measures the screen)*; one-per-name on paper means any open paper
-  long call. On the **real** book a long call is declined like W201 (typed count
-  overrides, recorded) while the real sleeve is ≥ 5% or the name already holds a long
-  call or a call diagonal. **While the real sleeve is ≥ 5%, a real call diagonal or
-  PMCC is declined the same way** — Enter records nothing, a typed count overrides,
-  recorded as "OVER-CAP OVERRIDE (W194)". *(Russ, 2026-09-27, on commit: they are in
-  the sleeve, and the decision was to shrink it including diagonals.)* The seven build
-  calls in `HELM-archive-2026-09-27-s123b.md` are approved as built. The verdict
-  (suggest / held / 2-a-day / sleeve) has one source, `risk_cap.w195_real_verdicts`,
-  shown in the scan footer and on the PG board's candidate list. *(Why the shape: on the 9-year test no price-chart
-  direction rule beat picking any calm watchlist stock.)*
-- **The 20-point give-back line is the default exit on real long calls.** *(Russ,
+- *(Superseded 2026-10-24 by the sleeve limits above: the $5,000 per-trade cap and its
+  one-contract decline (W160/W201), the 5% cash ceiling, the 5% long-premium sleeve
+  (W194) and the long-call entry screen (W195, `lc-screen-v2`). Their code stays in
+  `helm/risk_cap.py` / `helm/lc_screen.py` for the retired structures — long calls and
+  puts, spreads, condors still size the old way until they are parked. Full text: this
+  file's git history (`_records/`, before s134) and `HELM-archive-2026-09-27-s123*.md`.)*
+- **The 20-point give-back line is the default exit on real long calls** (any that remain open). *(Russ,
   2026-09-27. Replayed on the real book: −$6,540 vs −$27,056 actual, 23 better / 6
   worse, consistent before and after the 25 Jul switch.)*
 - **The 21-DTE deadline stays for CSPs and condors — as insurance, not edge.** The
