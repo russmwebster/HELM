@@ -24,7 +24,18 @@ from helm import ownership
 
 console = Console()
 
-_GRADE_COLOR = {"A": "bold green", "B": "green", "C": "yellow", "D": "red", "F": "bold red"}
+_GRADE_COLOR = {"A": "bold green", "B": "green", "C": "yellow", "D": "red", "F": "bold red",
+                "FUND": "cyan", "N": "dim"}   # s134: FUND = approved fund; N = can't grade
+
+
+def _comp(r):
+    """s134: composite for display/sort; FUND and some N rows have none."""
+    c = r.get("composite")
+    return "—" if c is None else f"{c:.0f}"
+
+
+def _method(r):
+    return {"standard": "", "bank": "bank", "fund": "fund", "fund-approved": "fund"}.get(r.get("method"), "")
 
 
 def _open_real_tickers() -> list:
@@ -92,7 +103,8 @@ def _render_detail(res: dict) -> None:
     name = res.get("name") or ""
     console.print(f"\n[bold]{res['ticker']}[/bold] {name}  "
                   f"[{col}]{g}[/{col}] "
-                  f"[dim]({res['composite']}/100 · conf {res['confidence']})[/dim]")
+                  f"[dim]({_comp(res)}/100 · conf {res['confidence']}"
+                  f"{' · ' + _method(res) + ' method' if _method(res) else ''})[/dim]")
     console.print(f"  [{col}]{res['lean']}[/{col}]")
     if res["gates_failed"]:
         console.print(f"  [red]gate failed:[/red] {', '.join(res['gates_failed'])}")
@@ -102,6 +114,9 @@ def _render_detail(res: dict) -> None:
     t.add_column("detail")
     for theme, d in res["themes"].items():
         score = d["score"]
+        if score is None:   # s134: not scored (missing data)
+            t.add_row(theme, "[dim]—[/dim]", str({k: v for k, v in d.items() if k not in ("score", "gate")}))
+            continue
         sc = "green" if score >= 70 else "yellow" if score >= 45 else "red"
         gate = d.get("gate")
         gate_s = " [red]\\[fail][/red]" if gate == "fail" else (
@@ -112,12 +127,16 @@ def _render_detail(res: dict) -> None:
 
 
 def _render_summary(results: list) -> None:
-    results = sorted(results, key=lambda r: r["composite"])  # worst first
+    # worst first; s134: N and FUND (no letter grade) sort last
+    order = {"N": 1, "FUND": 2}
+    results = sorted(results, key=lambda r: (order.get(r["grade"], 0),
+                                             r["composite"] if r.get("composite") is not None else 0))
     t = Table(box=box.SIMPLE_HEAD, show_header=True, padding=(0, 2))
     t.add_column("Ticker", style="bold cyan", no_wrap=True)
     t.add_column("OQ", justify="center")
     t.add_column("Score", justify="right")
     t.add_column("Conf")
+    t.add_column("Method")
     t.add_column("Gate", no_wrap=True)
     t.add_column("Verdict")
     for r in results:
@@ -125,8 +144,8 @@ def _render_summary(results: list) -> None:
         col = _GRADE_COLOR.get(g, "white")
         gates = ", ".join(r["gates_failed"]) if r["gates_failed"] else "—"
         gcol = "red" if r["gates_failed"] else "dim"
-        t.add_row(r["ticker"], f"[{col}]{g}[/{col}]", f"{r['composite']:.0f}",
-                  r["confidence"], f"[{gcol}]{gates}[/{gcol}]",
+        t.add_row(r["ticker"], f"[{col}]{g}[/{col}]", _comp(r),
+                  r["confidence"], _method(r), f"[{gcol}]{gates}[/{gcol}]",
                   f"[{col}]{_verdict(r)}[/{col}]")
     console.print(t)
 
@@ -182,8 +201,9 @@ def run() -> None:
             _render_detail(r)
     else:
         _render_summary(good)
-        console.print(f"[dim]{len(good)} underlyings graded from the open real book "
-                      f"— worst first.[/dim]")
+        src = "the active watchlist" if watchlist else "the open real book"   # s134: was always "open real book"
+        console.print(f"[dim]{len(good)} underlyings graded from {src} — worst first; "
+                      f"FUND = approved fund, N = can't grade (not offered).[/dim]")
 
 
 if __name__ == "__main__":

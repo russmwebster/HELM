@@ -19,3 +19,13 @@ print("refresh date:", day, "| active names:", len(active), "| graded that day:"
 print("not graded that day (%d):" % len(missed), ", ".join("%s(%s)" % (t, latest.get(t, ("never", ""))[0]) for t in missed) or "none")
 cnt = Counter(latest[t][1] if t in latest else "none" for t in active)
 print("latest grade, active names:", dict(sorted(cnt.items())), "| A-C:", sum(cnt[g] for g in "ABC"))
+
+# s134: what moved since each name's previous grade (before this refresh date)
+prev = {}
+for t, d, g in c.execute("select ticker,date,grade from ownership_quality where date < ? order by date", (day,)):
+    prev[t] = g
+moves = [(t, prev.get(t, "none"), latest[t][1]) for t in active if t in latest and latest[t][0] == day
+         and prev.get(t, "none") != latest[t][1]]
+print("changed since the previous grade (%d):" % len(moves))
+for t, a, b in sorted(moves, key=lambda m: (m[2], m[0])):
+    print("  %-5s %4s -> %s" % (t, a, b))
