@@ -83,6 +83,19 @@ POST_SNAPSHOT_CUTOFF = "15:00"     # no post-snapshot pass from here on: 15:35 c
 LOCK_PATH = Path(os.environ.get("HELM_PAPER_EXITS_LOCK") or (ROOT / "logs" / ".paper_exits.lock"))
 LOCK_WAIT_S = 600
 
+# s135 (Russ, 2026-10-24): the paper book is retired and its open positions were
+# frozen at their last marks (_s135/freeze_paper.py, exit_reason RUN_OFF). This
+# agent no longer acts: the scheduled run and the post-snapshot pass both return
+# at once, write nothing and leave no ledger row. HELM_PAPER_EXITS_ON=1 lets an
+# old harness run it on a database copy.
+PAPER_EXITS_RETIRED = True
+PAPER_EXITS_RETIRED_MSG = ("paper exits: retired 2026-10-24 -- the paper book "
+                           "is frozen; nothing evaluated, nothing closed")
+
+
+def _retired():
+    return PAPER_EXITS_RETIRED and os.environ.get("HELM_PAPER_EXITS_ON") != "1"
+
 
 def _acquire_lock(wait_s=LOCK_WAIT_S):
     """An exclusive flock, waited for up to wait_s. Returns the open file (keep
@@ -112,6 +125,9 @@ def run_after_snapshot(snapshot_started):
     connection the snapshot already holds is reused, not duplicated).
     Returns a one-line reason when it declines to run, else None.
     """
+    if _retired():
+        print(PAPER_EXITS_RETIRED_MSG)
+        return "retired"
     if os.environ.get("HELM_W198_OFF") == "1":
         print("paper exits after snapshot: off (HELM_W198_OFF=1)")
         return "off"
@@ -162,6 +178,9 @@ def leg_mid(tk, leg):
 def main(trigger=None):
     """One pass over the PAPER book. `trigger` is None for the scheduled run,
     or "after snapshot HH:MM" (W198) -- it leads the ledger note."""
+    if _retired():
+        print(PAPER_EXITS_RETIRED_MSG)
+        return
     _started = datetime.now().isoformat()
     mode = "DRY RUN" if DRY else "ACTING"
     print(f"[{datetime.now().isoformat(timespec='seconds')}] paper_exit_agent "

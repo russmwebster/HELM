@@ -7,7 +7,7 @@ future session builds; most sessions add nothing.*
 
 *First cut 2026-09-20, curated from the lessons list and the decisions scattered
 through `claude/HELM-worklist.md` (frozen). Russ reads it once before it is trusted.
-Last updated 2026-10-24 (s134: the revision — rulebook v0.2 approved: strategy set, sleeve limits, paper book retired, universe, net P&L, no double entry). Before that 2026-10-23 (s133: a named contract is a record, not a selection). Before that 2026-10-14 (s130: the device shell never writes the live database). Before that 2026-10-12 (s129: plain language, no rule or task numbers when talking to Russ). Before that 2026-10-12 (s128: explain first, wait for the go-ahead). Before that 2026-10-10 (s127: PG archived as a product; the board is HELM's interface). Before that 2026-10-10 (s126: the handover replaces the live list). Before that 2026-10-01 (s125: net rent banked, the diagonal loss limit, the four-question
+Last updated 2026-10-24 (s135: paper book frozen, paper exit agent retired; how `helm settle --date` reads its date). Before that 2026-10-24 (s134: the revision — rulebook v0.2 approved: strategy set, sleeve limits, paper book retired, universe, net P&L, no double entry). Before that 2026-10-23 (s133: a named contract is a record, not a selection). Before that 2026-10-14 (s130: the device shell never writes the live database). Before that 2026-10-12 (s129: plain language, no rule or task numbers when talking to Russ). Before that 2026-10-12 (s128: explain first, wait for the go-ahead). Before that 2026-10-10 (s127: PG archived as a product; the board is HELM's interface). Before that 2026-10-10 (s126: the handover replaces the live list). Before that 2026-10-01 (s125: net rent banked, the diagonal loss limit, the four-question
 diagonal card, two keep reasons; one base per percentage; live state in render harnesses). **Kept as a mirror on the Mac at
 `~/Projects/helm/_records/HELM-standing-rules.md` — edit that copy, publish with
 `project_write local_path`.***
@@ -18,8 +18,11 @@ diagonal card, two keep reasons; one base per percentage; live state in render h
 
 - **Russ trades the REAL book by hand — entry and exit, and sizes every trade. On the
   real book HELM informs; it never acts.** *(Russ, s107; HELM-193.)* **The PAPER book is
-  retired** — no new paper entries from 2026-10-24; open paper positions run off to the
-  11/20 expiries, then are marked run off and the paper agents parked. *(Russ, 2026-10-24.)* Anything
+  retired** — no new paper entries from 2026-10-24, and **frozen the same day**: the 77 open
+  paper positions were closed at their last marks with exit reason `RUN_OFF` (tag
+  `paper_run_off_20261024`; never a rule result) and the paper exit agent retired. *(Russ,
+  2026-10-24 — the 11/20 run-off was dropped once 40 paper diagonals were found to run to
+  January.)* Anything
   reading as an instruction on a real-book surface is a defect.
 - `book` is therefore also the actor field: a real close was a human, a paper close
   was a rule. The two books share an `exit_reason` vocabulary so they can be pooled —
@@ -110,8 +113,8 @@ diagonal card, two keep reasons; one base per percentage; live state in render h
   W167 intact: the fallback WRITES `close_price`, and `settled_mark` keeps reading
   `close_price` first — so a settled leg still has exactly one value.**
 - *(The paper rules in this list — inference settlement, the official-close fallback,
-  hand-fired settlement, the paper exit agent — hold only for the paper run-off to the
-  11/20 expiries; then the paper book is marked run off and its agents parked.)*
+  hand-fired settlement, the paper exit agent — are history: the paper book was frozen on
+  2026-10-24 and has no open positions. Their code stays.)*
 - **Paper settlement stays hand-fired.** No agent, no tripwire. *(Russ, 2026-09-20.)*
   **Accepted consequence: every paper expiry Friday loses readings until a session
   runs `helm settle`, and the audit grades those days DEGRADED with the cause named.**
@@ -162,7 +165,8 @@ diagonal card, two keep reasons; one base per percentage; live state in render h
   real** like W160 (Enter records nothing; a typed count overrides, recorded "RULE
   OVERRIDE (W189)"). *(W189, built 2026-09-27; decline-with-override follows the W195
   pattern Russ approved.)*
-- **The paper exit agent decides after every snapshot, not once a day.** *(Russ,
+- *(Retired 2026-10-24 with the paper book: `PAPER_EXITS_RETIRED` in `paper_exit_agent.py`;
+  the launchd job unloaded and its plist parked.)* **The paper exit agent decides after every snapshot, not once a day.** *(Russ,
   2026-09-27 — W198.)* **As built:** inside the snapshot process after the 10:00 and
   12:30 slots (any snapshot starting before 15:00 that covers PAPER); the scheduled
   15:35 run is the after-15:15 pass; a lock keeps two passes from overlapping; ledger
@@ -358,7 +362,10 @@ diagonal card, two keep reasons; one base per percentage; live state in render h
 - **Save the script, or the re-run becomes a re-derivation.** Any study meant to be
   repeated needs a frozen `--selftest`, not a memory. *(s122 scripts are saved but not
   yet frozen with a self-test; `helm/risk_cap.py` ships with one from day one — s123.)*
-- **`helm settle` prints every proposal and applies the batch on one `y/N`.**
+- **`helm settle` prints every proposal and applies the batch on one `y/N`.** **`--date=D`
+  settles legs that expired BEFORE D**, so one run dated the day after the latest expiry
+  covers every earlier one; an expiry on D itself is not included. *(s135: the handover's
+  "10-16, then 10-23" was two runs where one dated 10-24 was needed.)*
 - **Bridge rules:** `python3`, `git`, `helm` only · 45s timeout · responses truncate
   near 1,000 chars · **send plain readable `python3 -c`, and have the page JS return
   only `j.output`** · reading repo SOURCE is refused · a failed `open(path,'wb')` has

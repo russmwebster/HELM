@@ -41,7 +41,8 @@ EXPECTED_AGENTS = [
     "com.helm.gwwatch",
     "com.helm.ivr.refresh",
     "com.helm.mktsampler",
-    "com.helm.paper.exits",
+    # com.helm.paper.exits retired 2026-10-24 (s135): the paper book is frozen.
+    # Still loaded, it reports as `unexpected` -- the reminder to unload it.
     "com.helm.pg",
     "com.helm.server",
     "com.helm.snapshot.daily",
@@ -61,7 +62,7 @@ PENDING_AGENTS = [
 EXPECTED_RUNS = [
     ("ivr", ["09:35"], "ivr refresh"),
     ("snapshot", ["10:00", "12:30", "15:15"], "snapshot"),
-    ("exits", ["15:35"], "paper exits"),
+    # ("exits", ["15:35"], "paper exits") -- retired 2026-10-24 (s135)
 ]
 
 # How far from its nominal time a run may start before it is a catch-up, not a run.
@@ -533,11 +534,6 @@ class Audit:
         anyfail = [r for r in snaps if (r["failed"] or 0) > 0]
         if anyfail:
             self.add(FAIL, "snapshot errors", f"{len(anyfail)} run(s) recorded failed > 0", detail)
-        self.blind_spot(
-            "paper.exits is EXCLUDED from this assertion. Its record_run call passes "
-            "(evaluated, closed, skipped), so 'attempted > journaled' means it correctly HELD "
-            "positions. Its SHORTFALL and EMPTY statuses carry no information. (W102)"
-        )
 
     # ---------- A6: marks on the book ----------
 
@@ -902,8 +898,6 @@ class Audit:
          "Refreshes IV rank across the watchlist", "agent_runs"),
         ("com.helm.snapshot.daily", "snapshot", ["10:00", "12:30", "15:15"],
          "Journals a mark for every open position", "agent_runs"),
-        ("com.helm.paper.exits", "exits", ["15:35"],
-         "Applies the exit doctrine to the paper book", "agent_runs"),
         ("com.helm.mktsampler", None, [],
          "Samples the market every 10 minutes; the liveness witness",
          "sampler_csv"),
@@ -1457,7 +1451,7 @@ def run():
         a.results.insert(0, {
             "status": WARN, "name": "audit timing",
             "detail": f"run at {now.strftime('%H:%M')}, before the day's last scheduled writer "
-                      "(paper exits 15:35). Slots that have not come round yet are reported "
+                      "(the 15:15 snapshot). Slots that have not come round yet are reported "
                       "as missing. Re-run after 15:40, or pass --date for a finished day.",
             "evidence": "",
         })
