@@ -170,6 +170,13 @@ W195_SLEEVE = "w195_sleeve"
 W195_HELD = "w195_held"
 # W189 (Russ, 2026-09-26): a CSP whose bid-ask spread is >= 10% of mid at entry.
 W189_SPREAD = "w189_spread"
+# s134 (Russ, 2026-10-24): the three book limits replace the $5,000 cap, the 5%
+# cash ceiling and the long-premium sleeve for CSPs and the diagonal family.
+# Computed in helm/sleeve.py; named here so every decline/override line has
+# one wording source.
+SLEEVE_BINDINGS = ("sleeve_total", "sleeve_name", "sleeve_sector")
+_SLEEVE_WHAT = {"sleeve_total": "the HELM sleeve", "sleeve_name": "the 20% name limit",
+                "sleeve_sector": "the 30% sector limit"}
 
 
 def rule_for(strategy, binding=None):
@@ -181,6 +188,8 @@ def rule_for(strategy, binding=None):
         return "W195"
     if binding == W189_SPREAD:
         return "W189"
+    if binding in SLEEVE_BINDINGS:
+        return {"sleeve_total": "sleeve", "sleeve_name": "name", "sleeve_sector": "sector"}[binding]
     return "W160" if (strategy or "").upper() == "CSP" else "W201"
 
 
@@ -193,6 +202,8 @@ def override_line(strategy, binding, n):
         what = "in a name that already has an open long call"
     elif b == W189_SPREAD:
         what = "with the bid-ask spread at or over 10% of mid"
+    elif b in SLEEVE_BINDINGS:
+        what = "over " + _SLEEVE_WHAT[b]
     else:
         what = "over " + ("the 5% cash ceiling" if b.startswith("cash_ceiling")
                           else "the $5,000 cap")
@@ -206,6 +217,7 @@ def override_note(strategy, binding, n, size_note):
     A cap (W160/W201/W194) is 'OVER-CAP OVERRIDE'; W195's one-per-name and
     W189's spread gate are not caps, so they say 'RULE OVERRIDE'."""
     prefix = ("RULE OVERRIDE" if binding in (W195_HELD, W189_SPREAD)
+              else "OVER-LIMIT OVERRIDE" if binding in SLEEVE_BINDINGS
               else "OVER-CAP OVERRIDE")
     return "%s (%s): %s; booked %d contract(s) as typed" % (
         prefix, rule_for(strategy, binding), size_note, n)

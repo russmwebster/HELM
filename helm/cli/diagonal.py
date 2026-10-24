@@ -406,7 +406,7 @@ def display_diagonal(ticker: str, spot: float, diagonals: list, args: list, labe
     _confirm_diagonal(ticker, spot, diagonals, args)
 
 
-def _diag_contracts_prompt(strategy: str, long_leg: dict):
+def _diag_contracts_prompt(strategy: str, long_leg: dict, ticker: str = None):
     """W160/W201 sizing and the contracts prompt, shared by both diagonal
     flows. Sizing comes from open_cmd.suggest_contracts on the LONG leg's mid
     (the diagonal's W160 risk -- rent from the short is not netted).
@@ -426,7 +426,8 @@ def _diag_contracts_prompt(strategy: str, long_leg: dict):
     # W195 (Russ, 2026-09-27): a real call diagonal / PMCC is also declined
     # while the real long-premium sleeve is at or over 5% -- the same 0, the
     # same typed override, recorded as "OVER-CAP OVERRIDE (W194)".
-    n, _binding, note = suggest_contracts(strategy, None, mid, get_active_account())
+    # s134: the ticker lets the book limits (sleeve / name / sector) run.
+    n, _binding, note = suggest_contracts(strategy, None, mid, get_active_account(), ticker=ticker)
     declined = n <= 0
     if declined:
         console.print(f"  [red]Declined:[/red] {note}.")
@@ -451,7 +452,8 @@ def _diag_contracts_prompt(strategy: str, long_leg: dict):
                          if declined else " -- zero contracts.")
                       + "[/dim]")
         return None, None
-    if declined:
+    over_room = (not declined and _binding in _rc0.SLEEVE_BINDINGS and contracts > n)
+    if declined or over_room:
         from helm import risk_cap as _rc
         console.print(f"  [yellow]Override:[/yellow] "
                       f"{_rc.override_line(strategy, _binding, contracts)}.")
@@ -547,7 +549,7 @@ def _confirm_diagonal(ticker: str, spot: float, diagonals: list, args: list = No
 
     # W160/W201: sized on the long leg's debit through the one shared
     # sizing function; a long leg over $5,000 at one contract is declined.
-    contracts, override_note = _diag_contracts_prompt("DIAGONAL", l)
+    contracts, override_note = _diag_contracts_prompt("DIAGONAL", l, ticker)
     if contracts is None:
         return
 
@@ -738,7 +740,7 @@ def _confirm_diagonal_put(ticker, spot, diagonals):
     s, l = d['short'], d['long']
 
     # W160/W201: same rule and the same function as the call diagonal.
-    contracts, override_note = _diag_contracts_prompt("DIAGONAL_PUT", l)
+    contracts, override_note = _diag_contracts_prompt("DIAGONAL_PUT", l, ticker)
     if contracts is None:
         return
     short_fill = float(Prompt.ask(f"  Short fill price (mid ${s['mid']:.2f})", default=str(s['mid'])))

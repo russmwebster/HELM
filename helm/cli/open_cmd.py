@@ -653,7 +653,22 @@ def suggest_contracts(strategy: str, strike: float, mid: float,
             shares = int(sp["shares"] or 0) if sp else 0
             return shares // 100, "covered_shares", None
 
+        if strategy in risk_cap.DIAGONAL_FAMILY:
+            # s134 (Russ, 2026-10-24): no $5,000 cap and no long-premium sleeve.
+            # A diagonal / PMCC is sized against the book limits -- the HELM
+            # sleeve, 20% per name, 30% per sector -- on the LONG leg's cost
+            # (helm/sleeve.py). 0 is a decline; a typed count overrides.
+            if not mid or mid <= 0:
+                return 1, None, None
+            from helm import sleeve
+            n, b, note = sleeve.size(strategy, ticker, mid * 100, account_id)
+            if n is None:
+                return 1, None, "the sleeve limits could not run (no ticker)"
+            return n, b, note
+
         if strategy in LONG_SINGLE_FAMILY or strategy in risk_cap.DIAGONAL_FAMILY:
+            # (s134: only LONG_CALL / LONG_PUT reach here now -- retired
+            # structures, sized as before until they are parked.)
             # W160: a long's risk is its FULL debit (a diagonal's: the long
             # leg's) against $5,000. The cash ceiling sits behind it: for a
             # long call/put the HELM-101 stop-adjusted budget (debit x
@@ -683,30 +698,16 @@ def suggest_contracts(strategy: str, strike: float, mid: float,
                 risk_cap.size_decision(strategy, raw, binding, debit_1))
 
         if strategy == "CSP":
-            # W160: one-sigma $ per contract against $5,000; collateral
-            # (strike x 100) against risk_pct of portfolio behind it. The
-            # smaller wins; a 0 from either is "not taken as a CSP".
-            sigma_1 = risk_cap.csp_one_sigma_risk(spot, iv, dte, 1)
+            # s134 (Russ, 2026-10-24): the $5,000 one-sigma cap and the 5% cash
+            # ceiling are gone. A CSP is sized against the book limits on its
+            # collateral (strike x 100): the HELM sleeve, 20% per name, 30% per
+            # sector (helm/sleeve.py). The W189 spread flag still applies.
+            from helm import sleeve
             collateral_1 = (strike * 100) if strike else None
-            by_cash = (int((portfolio_value * risk_pct) / collateral_1)
-                       if collateral_1 else None)
-            if sigma_1:
-                by_cap = int(RISK_CAP_PER_TRADE / sigma_1)
-                if by_cash is None or by_cap <= by_cash:
-                    raw, binding, amount = by_cap, "risk_cap", sigma_1
-                else:
-                    raw, binding, amount = by_cash, "cash_ceiling", collateral_1
-            else:
-                # No iv/dte/spot -- the $5,000 check cannot run. Collateral
-                # alone, labelled; 0 is still a decline.
-                raw, binding, amount = (by_cash or 0), "cash_ceiling_only_no_iv", collateral_1
-            if raw > 20:
-                raw, binding = 20, "ceiling"
-            # W189 (Russ, 2026-09-26): spread >= 10% of mid at entry -> the
-            # real book is told no, like W160; a typed count overrides.
-            return risk_cap.apply_w189_flag(
-                strategy, spread_pct,
-                risk_cap.size_decision(strategy, raw, binding, amount))
+            n, b, note = sleeve.size("CSP", ticker, collateral_1, account_id)
+            if n is None:
+                return 1, None, "the sleeve limits could not run (no ticker or strike)"
+            return risk_cap.apply_w189_flag(strategy, spread_pct, (n, b, note))
 
         # Anything else (IRON_CONDOR / spreads / straddles passed here with a
         # strike as a collateral proxy): the pre-W160 cash rule, floored to 1
@@ -1545,6 +1546,8 @@ def confirm_and_log(ticker: str, strategy: str, contracts: list, config: dict,
         if binding == _rc_sp.W189_SPREAD:
             console.print("[dim]Another strike or expiry with a tighter market, or skip "
                           "it.[/dim]")
+        elif binding in _rc_sp.SLEEVE_BINDINGS:
+            console.print("[dim]Room comes back as positions close; or skip it.[/dim]")
         elif strategy == "CSP":
             console.print("[dim]A put spread takes this with the $5,000 as its max "
                           "loss, or skip it.[/dim]")
@@ -1579,7 +1582,10 @@ def confirm_and_log(ticker: str, strategy: str, contracts: list, config: dict,
         console.print()
         return
     override_note = None
-    if declined_over_cap:
+    # s134: typing MORE than a sleeve-limited suggestion is also an override.
+    over_room = (not declined_over_cap and binding in _rc_ov.SLEEVE_BINDINGS
+                 and num_contracts > suggested)
+    if declined_over_cap or over_room:
         console.print(f"  [yellow]Override:[/yellow] "
                       f"{_rc_ov.override_line(strategy, binding, num_contracts)}.")
         override_note = _rc_ov.override_note(strategy, binding, num_contracts, size_note)
