@@ -55,6 +55,16 @@ from helm.models.position import Position
 # still without a booker (PERM,
 # straddle) live in STRATEGY_CONFIG too and must never slip
 # through: anything absent from this map is skipped.
+# s134 (Russ, 2026-10-24): the paper book is retired -- no new paper entries.
+# Open paper positions run off under the paper exit agent until the 11/20
+# expiries settle, then the rest are marked run off. PARKED, not deleted: set
+# this False to bring paper entries back. HELM_PAPER_ENTRIES_ON=1 overrides it
+# for one process (old harnesses that drive paper_generate on a database copy).
+PAPER_ENTRIES_RETIRED = True
+PAPER_RETIRED_MSG = ("Paper book retired 2026-10-24 — no new paper entries "
+                     "(open paper positions run off to 11/20).")
+
+
 _PAPER_BOOKERS = {
     "CSP": paper_open_one,
     "COVERED_CALL": paper_open_one,
@@ -352,6 +362,12 @@ def paper_generate() -> dict:
     """Open HELM's paper picks for the latest run's passed-on, single-leg field.
     Returns a summary dict; prints a visible summary."""
     console = Console()
+
+    import os as _os
+    if PAPER_ENTRIES_RETIRED and _os.environ.get("HELM_PAPER_ENTRIES_ON") != "1":
+        console.print("[yellow]%s[/yellow]" % PAPER_RETIRED_MSG)
+        return {"status": "retired", "field": 0, "booked": [], "skipped": [],
+                "message": PAPER_RETIRED_MSG}
 
     if not is_market_open():
         console.print(
