@@ -7,7 +7,7 @@ future session builds; most sessions add nothing.*
 
 *First cut 2026-09-20, curated from the lessons list and the decisions scattered
 through `claude/HELM-worklist.md` (frozen). Russ reads it once before it is trusted.
-Last updated 2026-10-24 (s135: HELM advises in plain words; paper book frozen, paper exit agent retired; how `helm settle --date` reads its date). Before that 2026-10-24 (s134: the revision — rulebook v0.2 approved: strategy set, sleeve limits, paper book retired, universe, net P&L, no double entry). Before that 2026-10-23 (s133: a named contract is a record, not a selection). Before that 2026-10-14 (s130: the device shell never writes the live database). Before that 2026-10-12 (s129: plain language, no rule or task numbers when talking to Russ). Before that 2026-10-12 (s128: explain first, wait for the go-ahead). Before that 2026-10-10 (s127: PG archived as a product; the board is HELM's interface). Before that 2026-10-10 (s126: the handover replaces the live list). Before that 2026-10-01 (s125: net rent banked, the diagonal loss limit, the four-question
+Last updated 2026-10-25 (s135: HELM advises in plain words and flags every rule overstepped; paper book frozen, paper exit agent retired; how `helm settle --date` reads its date). Before that 2026-10-24 (s134: the revision — rulebook v0.2 approved: strategy set, sleeve limits, paper book retired, universe, net P&L, no double entry). Before that 2026-10-23 (s133: a named contract is a record, not a selection). Before that 2026-10-14 (s130: the device shell never writes the live database). Before that 2026-10-12 (s129: plain language, no rule or task numbers when talking to Russ). Before that 2026-10-12 (s128: explain first, wait for the go-ahead). Before that 2026-10-10 (s127: PG archived as a product; the board is HELM's interface). Before that 2026-10-10 (s126: the handover replaces the live list). Before that 2026-10-01 (s125: net rent banked, the diagonal loss limit, the four-question
 diagonal card, two keep reasons; one base per percentage; live state in render harnesses). **Kept as a mirror on the Mac at
 `~/Projects/helm/_records/HELM-standing-rules.md` — edit that copy, publish with
 `project_write local_path`.***
@@ -30,6 +30,12 @@ diagonal card, two keep reasons; one base per percentage; live state in render h
   "anything reading as an instruction on a real-book surface is a defect" and "exit flags
   are review triggers, not sell signals". The recommendation is computed in the engine,
   one function; the board only shows it.)*
+- **Whenever a position, the book or a proposed trade oversteps one of Russ's rules, HELM
+  flags it for him to decide** — the rule, the number and the choices; HELM never resolves
+  it. Flagged today (`helm/advice.py`): the sleeve over its share, a name over 20%, a sector
+  over 30%, a held name graded below C or ungraded, earnings inside a covered call. **Earnings
+  on a put or a diagonal are a mark on the holding line** (highlighted inside 7 days), not a
+  "Needs you" item — no rule asks for anything then. *(Russ, 2026-10-25, s135.)*
 - `book` is therefore also the actor field: a real close was a human, a paper close
   was a rule. The two books share an `exit_reason` vocabulary so they can be pooled —
   **but the same word means different things in each.**

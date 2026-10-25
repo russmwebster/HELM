@@ -38,6 +38,7 @@ COMMANDS = {
     'risk':      ('helm.cli.risk_cmd',     'run', 'W160/W194 -- per-trade risk cap breaches and the long-premium sleeve %'),
     'sleeve':    ('helm.sleeve',           'run', 'HELM sleeve -- share, in use, free; each name and sector against its limit'),
     'book':      ('helm.bookview',         'run', 'The book on one screen -- sleeve, limits, Greeks, what-ifs, expiries, resting orders'),
+    'advise':    ('helm.advice',           'run', 'One plain recommendation per real position, with its reason (s135)'),
     'resell':    ('helm.cli.resell_cmd',    'run', 'Sell the next short against a diagonal\'s long (W180 step 6)'),
     'pending':   ('helm.cli.pending_cmd',   'run', 'Exit flags awaiting a decision — act, or log why you are holding'),
     'status':    ('helm.cli.status_cmd',    'run', 'Portfolio dashboard — positions, P&L, activity'),

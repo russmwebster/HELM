@@ -2,7 +2,13 @@
 
 *Russ's ask: the board is overbuilt and takes too long to work. He wants it to advise
 plainly what to do with each trade, on one page. Approved in s135: this layout, the
-panel sort below, the rule wording, and the build order. Nothing here is built yet.*
+panel sort below, the rule wording, and the build order.*
+
+**Status 2026-10-25 (s135): built, ahead of the import at Russ's request** — `helm/advice.py` (`helm advise`) and the
+board's Today page. Changes from the plan below, by Russ's decisions of 10-25: earnings on puts and diagonals are a
+mark on the holding line (highlighted inside 7 days), not a Needs-you item; **every rule overstepped is flagged for
+Russ to decide** (sleeve, name, sector, a held name below C, earnings inside a covered call) in its own "Over your
+rules" group above Needs you.*
 
 ## The rule (in the standing rules)
 HELM advises in plain words: each real position gets one recommendation (hold, take the
