@@ -86,22 +86,29 @@ class Leg:
         finally:
             conn.close()
 
+    # s135 (2026-10-25): CRITICAL -- legs use INSERT OR IGNORE + UPDATE, never
+    # INSERT OR REPLACE. REPLACE deletes the row first, and leg_checks references
+    # legs(id) ON DELETE CASCADE, so every leg close (helm close, close --leg,
+    # settle, the paper agent, the s135 freeze) silently deleted that leg's whole
+    # reading history -- 5,612 rows in the freeze alone. Position.save carries the
+    # same warning for the same reason. Do not collapse this to REPLACE.
+    _COLS = ("id", "position_id", "leg_role", "option_type", "direction",
+             "strike", "expiration", "contracts", "multiplier",
+             "open_price", "close_price", "open_date", "close_date",
+             "status", "notes", "created_at", "entry_delta")
+    _IMMUTABLE = ("id", "created_at")
+
     def save(self, conn=None) -> Leg:
+        vals = {c: getattr(self, c) for c in self._COLS}
+        upd = [c for c in self._COLS if c not in self._IMMUTABLE]
         with (transaction() if conn is None else nullcontext(conn)) as conn:
-            conn.execute("""
-                INSERT OR REPLACE INTO legs (
-                    id, position_id, leg_role, option_type, direction,
-                    strike, expiration, contracts, multiplier,
-                    open_price, close_price, open_date, close_date,
-                    status, notes, created_at, entry_delta
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-            """, (
-                self.id, self.position_id, self.leg_role, self.option_type,
-                self.direction, self.strike, self.expiration, self.contracts,
-                self.multiplier, self.open_price, self.close_price,
-                self.open_date, self.close_date, self.status,
-                self.notes, self.created_at, self.entry_delta
-            ))
+            conn.execute(
+                "INSERT OR IGNORE INTO legs (%s) VALUES (%s)"
+                % (", ".join(self._COLS), ",".join("?" * len(self._COLS))),
+                tuple(vals[c] for c in self._COLS))
+            conn.execute(
+                "UPDATE legs SET %s WHERE id=?" % ", ".join("%s=?" % c for c in upd),
+                tuple(vals[c] for c in upd) + (self.id,))
         return self
 
     def close(self, close_price: float, close_date: Optional[str] = None) -> Leg:

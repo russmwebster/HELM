@@ -7,7 +7,7 @@ future session builds; most sessions add nothing.*
 
 *First cut 2026-09-20, curated from the lessons list and the decisions scattered
 through `claude/HELM-worklist.md` (frozen). Russ reads it once before it is trusted.
-Last updated 2026-10-25 (s135: HELM advises in plain words and flags every rule overstepped; paper book frozen, paper exit agent retired; how `helm settle --date` reads its date). Before that 2026-10-24 (s134: the revision — rulebook v0.2 approved: strategy set, sleeve limits, paper book retired, universe, net P&L, no double entry). Before that 2026-10-23 (s133: a named contract is a record, not a selection). Before that 2026-10-14 (s130: the device shell never writes the live database). Before that 2026-10-12 (s129: plain language, no rule or task numbers when talking to Russ). Before that 2026-10-12 (s128: explain first, wait for the go-ahead). Before that 2026-10-10 (s127: PG archived as a product; the board is HELM's interface). Before that 2026-10-10 (s126: the handover replaces the live list). Before that 2026-10-01 (s125: net rent banked, the diagonal loss limit, the four-question
+Last updated 2026-10-25 (s135: never REPLACE a cascading parent; a write test compares every table; HELM advises in plain words and flags every rule overstepped; paper book frozen, paper exit agent retired; how `helm settle --date` reads its date). Before that 2026-10-24 (s134: the revision — rulebook v0.2 approved: strategy set, sleeve limits, paper book retired, universe, net P&L, no double entry). Before that 2026-10-23 (s133: a named contract is a record, not a selection). Before that 2026-10-14 (s130: the device shell never writes the live database). Before that 2026-10-12 (s129: plain language, no rule or task numbers when talking to Russ). Before that 2026-10-12 (s128: explain first, wait for the go-ahead). Before that 2026-10-10 (s127: PG archived as a product; the board is HELM's interface). Before that 2026-10-10 (s126: the handover replaces the live list). Before that 2026-10-01 (s125: net rent banked, the diagonal loss limit, the four-question
 diagonal card, two keep reasons; one base per percentage; live state in render harnesses). **Kept as a mirror on the Mac at
 `~/Projects/helm/_records/HELM-standing-rules.md` — edit that copy, publish with
 `project_write local_path`.***
@@ -234,6 +234,13 @@ diagonal card, two keep reasons; one base per percentage; live state in render h
   the 50% an item assumed; that turned 8 flags into 11.
 - **Find every reader of the thing you change** — the table, not the commands you
   happen to be thinking of.
+- **Never save with `INSERT OR REPLACE` into a table other tables CASCADE from** (`positions`,
+  `legs`, `checks`, `themes`). REPLACE deletes the row first, and the cascade deletes the
+  children. `Leg.save` did this, so **every leg close wiped that leg's `leg_checks`**: 5,612
+  rows in the s135 freeze (restored from its backup), and 161 of the 179 real option legs
+  closed since 7/16 have no readings left. Fixed s135 to INSERT OR IGNORE + UPDATE, as
+  `Position.save` already was. `Check.save` still REPLACEs; it is safe only because a check
+  is never re-saved under the same id. *(2026-10-25.)*
 - **Ten models map `SELECT *` into a constructor: `checks`, `entry_snapshots`,
   `iv_history`, `legs`, `lifecycle_events`, `pathways`, `settings`, `signals`,
   `themes`.** A new column on any of them breaks every path that builds the model.
@@ -282,6 +289,9 @@ diagonal card, two keep reasons; one base per percentage; live state in render h
 
 ## While verifying
 
+- **A write test compares EVERY table's rows, not only the ones the change is meant to touch.**
+  The s135 freeze was tested on a copy against positions and legs and passed; it had deleted
+  5,612 `leg_checks` rows. *(2026-10-25.)*
 - **A command that has never been run has not been verified.** `VACUUM INTO` a copy,
   `HELM_DB=` the copy, run the real CLI, dump the rows.
 - **Verify both ways.** Perturb the defect you most fear, confirm the suite fails;
