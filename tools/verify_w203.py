@@ -55,7 +55,7 @@ OLD = SourceFileLoader("rule_read_old", baks[-1]).load_module()
 
 print("\n-- 1. rule_read.explain")
 d = NEW.explain(None, "DIAGONAL", 0.12, 20, target_pct=0.5, dte_exit=21)
-ok("diagonal no-fire headline", d["headline"] == "No paper rule for diagonals yet — this is not a hold signal.", d["headline"])
+ok("diagonal no-fire headline", d["headline"] == "No rule for diagonals yet — this is not a hold signal.", d["headline"])
 ok("diagonal no-fire does not fire", d["fires"] is False)
 ok("diagonal lines name W180 step 7 and the 21-DTE calendar",
    any("W180 step 7" in l and "21 DTE" in l for l in d["lines"]), d["lines"])
@@ -88,14 +88,14 @@ cpid = db.execute("select id from positions where book='REAL' and status='OPEN' 
 if dpid:
     rr = cl.get("/thesis/" + dpid[0]); h = rr.get_data(as_text=True)
     ok("diagonal card returns 200 with a body", rr.status_code == 200 and len(h) > 2000, (rr.status_code, len(h)))
-    ok("diagonal card (%s) shows the W203 headline" % dpid[0], "No paper rule for diagonals yet" in h)
-    ok("diagonal card no longer says 'would hold this'", "The paper rule would hold this." not in h)
+    ok("diagonal card (%s) shows the W203 headline" % dpid[0], "No rule for diagonals yet" in h)
+    ok("diagonal card no longer says 'would hold this'", "The rule would hold this." not in h)
 else:
     ok("an open real diagonal exists to test", False)
 if cpid:
     rr = cl.get("/thesis/" + cpid[0]); h = rr.get_data(as_text=True)
     ok("control: CSP card returns 200", rr.status_code == 200 and len(h) > 2000, (rr.status_code, len(h)))
-    ok("control: CSP card still has its rule box", "paper rule" in h)
+    ok("control: CSP card still has its rule box", ">rule</span>" in h)
     ok("control: CSP card (%s) has no diagonal wording" % cpid[0], "No paper rule for diagonals" not in h)
 
 print("\n-- 3. PG positions page")

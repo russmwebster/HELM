@@ -120,10 +120,10 @@ def explain(reason, strategy, pnl_pct=None, dte_now=None, arms=None,
             lines.append("Holding.")
     return {"fires": fires, "reason": reason,
             "label": LABEL.get(reason, "hold"),
-            "headline": ("The paper rule would CLOSE this now — %s." % LABEL[reason]) if fires
-                        else ("No paper rule for diagonals yet — this is not a hold signal."
+            "headline": ("The rule would CLOSE this now — %s." % LABEL[reason]) if fires
+                        else ("No rule for diagonals yet — this is not a hold signal."
                               if fam == D.DIAGONAL_FAMILY
-                              else "The paper rule would hold this."),
+                              else "The rule would hold this."),
             "lines": lines,
             "doctrine": ("It would not close YOUR position: on the real book the rule "
                          "informs and never acts (HELM-193)."),
