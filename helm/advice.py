@@ -442,14 +442,70 @@ def advise(db=None, today=None, account_id=None):
         conn.close()
 
 
+SNAPSHOT_SLOTS = ("10:00", "12:30", "15:15")   # com.helm.snapshot.daily (audit_cmd.EXPECTED_RUNS)
+SLOT_WINDOW_MIN = 40                           # a slot's readings land within this many minutes of its start
+
+
+def _day_label(d):
+    return date.fromisoformat(d).strftime("%a %m-%d")
+
+
+def coverage(conn, day=None):
+    """Did every real position get a reading at every snapshot slot on `day`?
+    `day` defaults to the latest day with a reading on a real position. A
+    position is expected only at slots after it was BOOKED in HELM (created_at):
+    a fill typed in later and backdated (JPM's put, sold 10-22, booked 10-23
+    11:03) could not have been read before it existed.
+    Returns {day, n, missed: [(ticker, slot)]}."""
+    if day is None:
+        r = conn.execute("SELECT MAX(substr(k.checked_at,1,10)) FROM checks k JOIN positions p "
+                         "ON p.id=k.position_id WHERE p.book='REAL'").fetchone()
+        day = r[0] if r else None
+    if not day:
+        return None
+    pos = conn.execute("SELECT id, ticker, opened_at, created_at, closed_at FROM positions WHERE book='REAL' "
+                       "AND substr(opened_at,1,10) <= ? AND (closed_at IS NULL OR substr(closed_at,1,10) >= ?) "
+                       "ORDER BY ticker", (day, day)).fetchall()
+    from datetime import timedelta
+    missed = []
+    for p in pos:
+        known = max(str(p["opened_at"] or ""), str(p["created_at"] or ""))
+        for slot in SNAPSHOT_SLOTS:
+            start = datetime.fromisoformat("%sT%s" % (day, slot))
+            if known[:10] > day or (known[:10] == day and len(known) > 10 and known[11:16] > slot):
+                continue
+            gone = str(p["closed_at"] or "")
+            if gone[:10] == day and (len(gone) <= 10 or gone[11:16] <= slot):
+                continue          # closed before this slot (a date-only close counts as before every slot)
+            end = start + timedelta(minutes=SLOT_WINDOW_MIN)
+            hit = conn.execute("SELECT 1 FROM checks WHERE position_id=? AND checked_at >= ? AND checked_at < ? LIMIT 1",
+                               (p["id"], start.isoformat(), end.isoformat())).fetchone()
+            if not hit:
+                missed.append((p["ticker"], slot))
+    return {"day": day, "n": len(pos), "missed": missed}
+
+
+def coverage_text(cov):
+    if not cov:
+        return "no readings stored yet"
+    day = date.fromisoformat(cov["day"]).strftime("%A")
+    if not cov["missed"]:
+        return "%s's check: all %d positions read at every snapshot" % (day, cov["n"])
+    by = {}
+    for t, slot in cov["missed"]:
+        by.setdefault(t, []).append(slot)
+    return "%s's check: %s" % (day, "; ".join("%s missed %s" % (t, ", ".join(v)) for t, v in sorted(by.items())))
+
+
 def status(db=None, account_id=None, root=None):
-    """The page's one status line: sleeve, freshness, and the latest audit verdict."""
+    """The page's one status line: sleeve, freshness, snapshot coverage, the latest audit verdict."""
     b = S.book(account_id, db)
     conn = S._conn(db)
     try:
         r = conn.execute("SELECT MAX(k.checked_at) FROM checks k JOIN positions p ON p.id=k.position_id "
                          "WHERE p.book='REAL' AND p.status='OPEN'").fetchone()
         marks_at = r[0][:16].replace("T", " ") if r and r[0] else None
+        cov = coverage(conn)
     finally:
         conn.close()
     verdict = None
@@ -465,7 +521,68 @@ def status(db=None, account_id=None, root=None):
     except Exception:
         verdict = None
     return {"sleeve": b["share"], "in_use": b["used"], "free": b["share"] - b["used"],
-            "marks_at": marks_at, "audit": verdict, "gross": True}
+            "marks_at": marks_at, "audit": verdict, "gross": True,
+            "prices_as_of": ("%s, %s" % (_day_label(marks_at[:10]), marks_at[11:16])) if marks_at else None,
+            "coverage": cov, "coverage_text": coverage_text(cov)}
+
+
+_JOB_NAME = {"ivr refresh": "Volatility refresh", "snapshot": "Snapshots"}
+
+
+def health(brief, db=None):
+    """Health page, in plain words, from `helm audit eod --json` (the audit is the one
+    implementation of "did the day collect"; this only says what it found). Returns
+    {sentence, todo: [..], jobs: [..], other: n}."""
+    res = brief.get("results") or []
+    day = brief.get("date")
+    conn = S._conn(db)
+    try:
+        cov = coverage(conn, day)
+    finally:
+        conn.close()
+    todo, handled = [], set()
+    for r in res:
+        n, st, det = r.get("name", ""), r.get("status"), r.get("detail") or ""
+        if n.startswith("retry: ivr") and "still failing:" in det:
+            names = det.split("still failing:")[1].strip()
+            todo.append("The volatility refresh keeps failing on %s. If it's a junk watchlist row, remove it "
+                        "(helm watchlist remove %s)." % (names, names.split(",")[0].strip()))
+            handled.add(n)
+        elif n.startswith("slot:") and st == "FAIL":
+            todo.append("%s didn't run on time (%s)." % (n[6:].capitalize(), det))
+            handled.add(n)
+        elif n == "broker reachable" and st != "PASS":
+            todo.append("The broker connection was down: %s. Check IB Gateway is logged in." % det)
+            handled.add(n)
+        elif n == "machine awake" and st != "PASS":
+            todo.append("The Mac was asleep or off during market hours: %s." % det)
+            handled.add(n)
+        elif n == "agent roster" and st == "FAIL":
+            todo.append("The scheduled jobs aren't what HELM expects: %s." % det)
+            handled.add(n)
+    jobs = []
+    slots = {}
+    for r in res:
+        n = r.get("name", "")
+        if n.startswith("slot: "):
+            label, t = n[6:].rsplit(" ", 1)
+            slots.setdefault(label, []).append((t, r.get("status") == "PASS"))
+    for label, ts in slots.items():
+        ok = all(x[1] for x in ts)
+        jobs.append("%s: %s -- %s" % (_JOB_NAME.get(label, label.capitalize()), ", ".join(x[0] for x in ts),
+                                      "all on time" if ok and len(ts) > 1 else ("on time" if ok else "not all on time")))
+    for r in res:
+        if r.get("name") == "broker reachable":
+            jobs.append("Broker connection: %s" % (r.get("detail") or ""))
+    other = sum(1 for r in res if r.get("status") in ("FAIL", "WARN") and r.get("name") not in handled)
+    if cov and cov.get("day") == day:
+        lead = "%s: %s." % (_day_label(day), coverage_text(cov).split(": ", 1)[1].replace(
+            "all %d positions" % cov["n"], "all %d of your positions" % cov["n"]))
+    else:
+        lead = "%s: no readings of your positions that day." % (_day_label(day) if day else "--")
+    sentence = lead + (" Nothing for you to do." if not todo else
+                       " %s for you:" % ("One thing" if len(todo) == 1 else "%d things" % len(todo)))
+    return {"sentence": sentence, "todo": todo, "jobs": jobs, "other": other}
 
 
 def _report():
@@ -633,7 +750,26 @@ def _selftest():
     ok(all(R[t]["reason"] for t in R), "every recommendation carries a reason")
     pr = sorted(R.values(), key=lambda r: (r["priority"], r["ticker"]))
     ok(pr[0]["verb"] == "STALE" and pr[-1]["verb"] == "HOLD", "sorted most urgent first")
-    print("advice selftest:", "PASS (%d checks)" % 19 if not fails else "%d FAIL" % len(fails))
+    # coverage: a backdated booking and an early close are not misses; a real gap is
+    db2 = os.path.join(d, "c.db")
+    c = sqlite3.connect(db2)
+    c.executescript("""
+      CREATE TABLE positions (id TEXT, ticker TEXT, book TEXT, opened_at TEXT, created_at TEXT, closed_at TEXT);
+      CREATE TABLE checks (position_id TEXT, checked_at TEXT);
+      INSERT INTO positions VALUES ('a','AAA','REAL','2026-10-01','2026-10-01',NULL),
+        ('b','BBB','REAL','2026-10-22T12:30:00','2026-10-23T11:03:00',NULL),
+        ('x','XXX','REAL','2026-10-01','2026-10-01','2026-10-23T11:00:00'),
+        ('p','PPP','PAPER','2026-10-01','2026-10-01',NULL);
+      INSERT INTO checks VALUES ('a','2026-10-23T10:04:00'),('a','2026-10-23T15:19:00'),
+        ('b','2026-10-23T12:31:00'),('b','2026-10-23T15:16:00'),('x','2026-10-23T10:05:00');
+    """)
+    c.commit(); c.row_factory = sqlite3.Row
+    cv = coverage(c, "2026-10-23")
+    ok(cv["missed"] == [("AAA", "12:30")] and cv["n"] == 3,
+       "coverage: backdated booking and early close skipped, real gap found: %s" % cv)
+    ok(coverage_text(cv) == "Friday's check: AAA missed 12:30", "coverage text: %s" % coverage_text(cv))
+    c.close()
+    print("advice selftest:", "PASS (%d checks)" % 21 if not fails else "%d FAIL" % len(fails))
     return 1 if fails else 0
 
 
