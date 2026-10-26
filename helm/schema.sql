@@ -1129,3 +1129,24 @@ CREATE TABLE IF NOT EXISTS paper_refusals (
     signal_id         TEXT,
     origin_screen     TEXT
 );
+
+-- s136 (2026-10-26): every Fidelity fill row the import has booked, matched or used
+-- for a correction, by its key; commission and fees per row (net P&L is stage 3).
+CREATE TABLE IF NOT EXISTS broker_fills (
+    fill_key     TEXT PRIMARY KEY,        -- brokerfills._fill_keys: row content + occurrence
+    source       TEXT NOT NULL,           -- HISTORY_FOR_ACCOUNT | ACCOUNTS_HISTORY
+    as_of        TEXT NOT NULL,           -- the trade date (as-of text preferred over Run Date)
+    run_date     TEXT,
+    action       TEXT NOT NULL,           -- the row's Action text (no account number in it)
+    symbol       TEXT NOT NULL,
+    qty          INTEGER,
+    price        REAL,
+    commission   REAL,
+    fees         REAL,
+    amount       REAL,
+    outcome      TEXT NOT NULL CHECK (outcome IN ('BOOKED','MATCHED','CORRECTED')),
+    position_id  TEXT,                    -- no foreign key: a fill record must never cascade
+    leg_id       TEXT,
+    imported_at  TEXT NOT NULL,
+    note         TEXT
+);

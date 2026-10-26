@@ -123,7 +123,7 @@ LEG_EXIT_REASONS = (
 DEFAULT_LEG_EXIT_REASON = "DISCRETIONARY"
 
 
-def _finalize_close(pos, legs, close_prices, reason="manual"):
+def _finalize_close(pos, legs, close_prices, reason="manual", when=None):
     """Write a close: net P&L across legs, close legs + position, snapshot.
     Pure persistence -- no prompts, no confirm. Shared by interactive close
     and the paper auto-manager. Returns {ok, realized_pnl, close_prices}."""
@@ -148,7 +148,9 @@ def _finalize_close(pos, legs, close_prices, reason="manual"):
             total_pnl += (leg.open_price - cp) * leg.contracts * leg.multiplier
         else:
             total_pnl += (cp - leg.open_price) * leg.contracts * leg.multiplier
-    now = datetime.now().isoformat()
+    # s136: `when` -- the Fidelity import books the trade date (16:00, date
+    # only); every other caller leaves it None and gets now, as before.
+    now = when or datetime.now().isoformat()
     for leg in _open:
         leg.close(close_prices[leg.id], close_date=now)
     pos.close(total_pnl, closed_at=now, exit_reason=reason)
@@ -179,7 +181,7 @@ def _finalize_close(pos, legs, close_prices, reason="manual"):
     return {"ok": True, "realized_pnl": total_pnl, "close_prices": close_prices}
 
 
-def close_leg(pos, legs, leg, close_price, reason=DEFAULT_LEG_EXIT_REASON, spot=None):
+def close_leg(pos, legs, leg, close_price, reason=DEFAULT_LEG_EXIT_REASON, spot=None, when=None):
     """W180 step 3: close ONE leg at a fill and leave the position OPEN.
 
     The diagonal as a rented long (Russ, 2026-09-21): the short is bought back
@@ -213,7 +215,7 @@ def close_leg(pos, legs, leg, close_price, reason=DEFAULT_LEG_EXIT_REASON, spot=
         pnl = (leg.open_price - close_price) * leg.contracts * leg.multiplier
     else:
         pnl = (close_price - leg.open_price) * leg.contracts * leg.multiplier
-    now = datetime.now().isoformat()
+    now = when or datetime.now().isoformat()   # s136: see _finalize_close
     leg.close(close_price, close_date=now)
     try:
         LifecycleEvent.record(

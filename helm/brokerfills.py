@@ -168,13 +168,24 @@ def _classify(raw_action, is_option):
     return text[:40], "SHARE", None, None
 
 
-def parse_activity_text(raw):
-    """Parse the export. Returns Parsed(fills, skipped, fieldnames)."""
-    body = raw.lstrip("﻿").lstrip("\r\n")
+def parse_activity_text(raw, keep_account=None):
+    """Parse the export. Returns Parsed(fills, skipped, fieldnames).
+
+    s136: keep_account -- when the export carries an Account column (the
+    multi-account Accounts_History format), rows for any other account name
+    are skipped (counted in `skipped`). The single-account
+    History_for_Account_<n> format has no such column; read_export() decides
+    whether the whole file is the account.
+    """
+    body = raw.lstrip("\ufeff").lstrip("\r\n")
     reader = csv.DictReader(io.StringIO(body))
     fills = []
     skipped = 0
     for index, row in enumerate(reader):
+        if keep_account is not None and "Account" in row and \
+                (row.get("Account") or "").strip() != keep_account:
+            skipped += 1
+            continue
         run_date = _date(row.get("Run Date"))
         symbol = (row.get("Symbol") or "").strip()
         # Fidelity appends a multi-line disclaimer after the data. A row with
@@ -216,3 +227,138 @@ def parse_activity_text(raw):
 def parse_activity_csv(path):
     with open(path, newline="", encoding="utf-8-sig") as handle:
         return parse_activity_text(handle.read())
+
+
+# ---------------------------------------------------------------------------
+# s136 (2026-10-26): the Fidelity import's reader -- both export formats, the
+# account kept to the Rollover IRA, the account number never stored or shown,
+# split fills merged, and a stable key per row so an overlapping download is
+# never booked twice. Read-only, like everything above.
+#
+#   Accounts_History*.csv           many accounts; "Account" (name) and
+#                                   "Account Number" columns on every row
+#   History_for_Account_<n>*.csv    one account; the number is in the file
+#                                   name, and no row names the account
+#
+# The account is identified by a SHA-256 of its number (helm_meta key
+# ACCOUNT_HASH_KEY). HELM learns it from any download that pairs the number
+# with the name "Rollover IRA" (Accounts_History, Portfolio_Positions).
+# ---------------------------------------------------------------------------
+import hashlib
+import os
+
+IRA_NAME = "Rollover IRA"
+ACCOUNT_HASH_KEY = "fidelity_ira_account_sha256"
+_HISTORY_FOR = re.compile(r"History_for_Account_(\d+)", re.I)
+
+
+def account_hash(number):
+    return hashlib.sha256(str(number).strip().encode()).hexdigest()
+
+
+def export_format(path):
+    name = os.path.basename(path)
+    if _HISTORY_FOR.search(name):
+        return "HISTORY_FOR_ACCOUNT"
+    if name.lower().startswith("accounts_history"):
+        return "ACCOUNTS_HISTORY"
+    if name.lower().startswith("portfolio_positions"):
+        return "PORTFOLIO_POSITIONS"
+    return None
+
+
+def learn_ira_hash(path):
+    """The SHA-256 of the account number that a download labels "Rollover IRA",
+    or None. Reads Accounts_History ("Account"/"Account Number") and
+    Portfolio_Positions ("Account name"/"Account number"). Never returns the
+    number itself."""
+    fmt = export_format(path)
+    if fmt not in ("ACCOUNTS_HISTORY", "PORTFOLIO_POSITIONS"):
+        return None
+    with open(path, newline="", encoding="utf-8-sig") as handle:
+        body = handle.read().lstrip("\ufeff").lstrip("\r\n")
+    found = set()
+    for row in csv.DictReader(io.StringIO(body)):
+        name = (row.get("Account") or row.get("Account name") or "").strip()
+        num = (row.get("Account Number") or row.get("Account number") or "").strip()
+        if name == IRA_NAME and num.isdigit():
+            found.add(account_hash(num))
+    return found.pop() if len(found) == 1 else None
+
+
+@dataclass
+class Export:
+    path: str
+    fmt: str
+    fills: list          # Rollover IRA rows only
+    keys: list           # one stable key per fill, same order
+    skipped: int         # disclaimer lines, other accounts
+    other_account: bool  # a History_for_Account file for some other account
+    hash_unknown: bool   # a History_for_Account file and HELM has no IRA hash yet
+
+
+def _fill_keys(fills):
+    """A key per row from what the row says, plus its occurrence number among
+    identical rows -- two real 1-lot fills at the same price on the same day
+    stay two, and the same row in two overlapping downloads is one."""
+    seen = {}
+    keys = []
+    for f in fills:
+        base = "|".join(str(x) for x in (f.run_date, f.as_of, f.raw_action, f.symbol.strip(),
+                                          f.qty, f.price, f.commission, f.fees, f.amount))
+        n = seen.get(base, 0)
+        seen[base] = n + 1
+        keys.append(hashlib.sha256(("%s|#%d" % (base, n)).encode()).hexdigest()[:24])
+    return keys
+
+
+def read_export(path, ira_hash=None):
+    """Read one Fidelity activity download, Rollover IRA rows only."""
+    fmt = export_format(path)
+    if fmt not in ("HISTORY_FOR_ACCOUNT", "ACCOUNTS_HISTORY"):
+        raise ValueError("not a Fidelity activity download: %s" % os.path.basename(path))
+    with open(path, newline="", encoding="utf-8-sig") as handle:
+        raw = handle.read()
+    if fmt == "ACCOUNTS_HISTORY":
+        parsed = parse_activity_text(raw, keep_account=IRA_NAME)
+        fills = parsed.fills
+        return Export(path, fmt, fills, _fill_keys(fills), parsed.skipped, False, False)
+    num = _HISTORY_FOR.search(os.path.basename(path)).group(1)
+    if ira_hash is None:
+        return Export(path, fmt, [], [], 0, False, True)
+    if account_hash(num) != ira_hash:
+        return Export(path, fmt, [], [], 0, True, False)
+    parsed = parse_activity_text(raw)
+    return Export(path, fmt, parsed.fills, _fill_keys(parsed.fills), parsed.skipped, False, False)
+
+
+def merge_key(f):
+    """Split fills of one order: same day, contract, leg direction, event."""
+    return (f.event, f.as_of, f.ticker, f.expiration, f.option_type, f.strike, f.leg_direction)
+
+
+def merge_option_fills(fills, keys):
+    """Group option rows by merge_key. Returns {merge_key: dict} with total
+    contracts, the contract-weighted price, commission, fees, amount and the
+    row keys. Expiries and assignments merge the same way (price None)."""
+    out = {}
+    for f, k in zip(fills, keys):
+        if not f.is_option:
+            continue
+        g = out.setdefault(merge_key(f), {"contracts": 0, "px_sum": 0.0, "priced": True,
+                                          "commission": 0.0, "fees": 0.0, "amount": 0.0,
+                                          "rows": [], "keys": [], "symbol": f.symbol.strip()})
+        q = abs(f.qty)
+        g["contracts"] += q
+        if f.price is None:
+            g["priced"] = False
+        else:
+            g["px_sum"] += q * f.price
+        g["commission"] += f.commission or 0.0
+        g["fees"] += f.fees or 0.0
+        g["amount"] += f.amount or 0.0
+        g["rows"].append(f)
+        g["keys"].append(k)
+    for g in out.values():
+        g["price"] = (g["px_sum"] / g["contracts"]) if (g["priced"] and g["contracts"]) else None
+    return out

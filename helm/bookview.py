@@ -23,6 +23,7 @@ import os
 import sqlite3
 
 from helm import sleeve as S
+from helm import advice as A   # s136: the grade, read the one way advice reads it
 
 STRESS_MARKET = (-0.05, -0.10)
 STRESS_VOL_POINTS = 10.0
@@ -107,6 +108,7 @@ def view(account_id=None, db=None):
             usd_delta = g["delta_sh"] * spot if spot is not None else None
             rows.append({
                 "position_id": p["id"], "ticker": p["ticker"], "strategy": p["strategy"],
+                "grade": A._grade(conn, p["ticker"]),   # s136: latest ownership grade, or FUND
                 "spot": spot, "beta": beta, "beta_assumed": assumed,
                 "delta_sh": g["delta_sh"], "usd_delta": usd_delta,
                 "bw_delta": usd_delta * beta if usd_delta is not None else None,
@@ -220,6 +222,10 @@ def _selftest():
       CREATE TABLE checks (position_id TEXT, checked_at TEXT, spot_price REAL, delta REAL, gamma REAL, theta REAL, vega REAL, current_price REAL, data_quality TEXT);
       CREATE TABLE watchlist (ticker TEXT, sector TEXT, beta REAL);
       CREATE TABLE stock_positions (account_id TEXT, ticker TEXT, shares INT, cost_basis REAL);
+      CREATE TABLE ownership_quality (ticker TEXT, date TEXT, updated_at TEXT, grade TEXT);
+      CREATE TABLE approved_funds (ticker TEXT, bucket TEXT);
+      INSERT INTO ownership_quality VALUES ('AMZN','2026-09-01','x','C'),('AMZN','2026-10-24','x','B');
+      INSERT INTO approved_funds VALUES ('SPY','US equity index');
       INSERT INTO watchlist VALUES ('AMZN','Consumer Cyclical',1.46),('JPM','Financial Services',0.98),('SPY',NULL,NULL);
       INSERT INTO positions VALUES ('p1','a','CSP','AMZN','OPEN','REAL',NULL),('p2','a','DIAGONAL','JPM','OPEN','REAL',NULL),
                                    ('p3','a','CSP','SPY','OPEN','REAL',NULL),('pp','a','CSP','AMZN','OPEN','PAPER',NULL);
@@ -259,8 +265,10 @@ def _selftest():
     ok(e["2026-11-20"]["frees"] == 49000 + 60000 and abs(e["2026-12-18"]["frees"] - 4939) < 1e-6, "expiries free collateral and long cost")
     o = {x["ticker"]: x for x in v["orders"]}
     ok(set(o) == {"AMZN", "SPY"} and o["AMZN"]["buy_to_close"] == 3.25, "resting orders: CSP shorts at half the credit; diagonal left out")
+    ok(P["AMZN"]["grade"] == "B" and P["SPY"]["grade"] == "FUND" and P["JPM"]["grade"] is None,
+       "grade: latest wins, fund reads FUND, ungraded is None: %s %s %s" % (P["AMZN"]["grade"], P["SPY"]["grade"], P["JPM"]["grade"]))
     ok(_half_up(4.35 * 0.5) == 2.18 and _half_up(2.27 * 0.5) == 1.14, "half-cent rounds up")
-    print("bookview selftest:", "PASS (10 checks)" if not fails else "%d FAIL" % len(fails))
+    print("bookview selftest:", "PASS (11 checks)" if not fails else "%d FAIL" % len(fails))
     return 1 if fails else 0
 
 
