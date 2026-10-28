@@ -1150,3 +1150,42 @@ CREATE TABLE IF NOT EXISTS broker_fills (
     imported_at  TEXT NOT NULL,
     note         TEXT
 );
+
+-- s138 (2026-10-28): the put tool's record (helm/puttool.py writes these; nothing reads them with SELECT *).
+CREATE TABLE IF NOT EXISTS put_runs (
+    id            TEXT PRIMARY KEY,
+    run_at        TEXT NOT NULL,              -- local time
+    rule_version  TEXT NOT NULL,
+    ivr_date      TEXT,                       -- the iv_history date the run read
+    market_open   INTEGER,                    -- 0 = frozen (last) quotes
+    n_universe    INTEGER,                    -- graded A-C or FUND
+    n_checked     INTEGER,                    -- passed grade, IV rank and earnings
+    n_found       INTEGER,                    -- had a contract inside every rule
+    sleeve_free   REAL,
+    rejects_json  TEXT,                       -- {ticker: reason} for every name left off
+    note          TEXT
+);
+CREATE TABLE IF NOT EXISTS put_candidates (
+    run_id        TEXT NOT NULL REFERENCES put_runs(id),
+    ticker        TEXT NOT NULL,
+    rank          INTEGER NOT NULL,           -- 1 = best; the list shows the top 5
+    grade         TEXT,
+    sector        TEXT,
+    expiry        TEXT NOT NULL,
+    dte           INTEGER,
+    strike        REAL NOT NULL,
+    spot          REAL,
+    bid REAL, ask REAL, mid REAL,
+    spread_pct    REAL,
+    delta REAL, gamma REAL, theta REAL, vega REAL,
+    iv            REAL,
+    iv_rank       REAL,
+    ann_return    REAL,                       -- fraction per year on collateral
+    collateral    REAL,                       -- strike x 100, one contract
+    earnings      TEXT,                       -- plain-words earnings line
+    rest_price    REAL,                       -- the 50% buy-to-close price
+    size_n        INTEGER,                    -- contracts the limits allow (0 = declined)
+    size_binding  TEXT,
+    size_note     TEXT,
+    PRIMARY KEY (run_id, ticker)
+);

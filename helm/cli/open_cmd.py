@@ -829,7 +829,7 @@ def fetch_chain_from_ibkr(ticker, opt_type, target_exps, spot, atr,
                 if spread_pct > spread_threshold * 100 and not _is_pin:
                     continue
 
-                delta = theta = iv = None
+                delta = theta = iv = gamma = vega = None
                 for gattr in ("modelGreeks", "lastGreeks"):
                     g = getattr(t, gattr, None)
                     if g:
@@ -837,6 +837,13 @@ def fetch_chain_from_ibkr(ticker, opt_type, target_exps, spot, atr,
                             delta = abs(float(g.delta))
                         if vld(getattr(g, "theta", None)):
                             theta = abs(float(g.theta))
+                        # s138: keep gamma and vega -- entry_snapshot.py already
+                        # stores contract["gamma"]/["vega"], but this reader dropped
+                        # them (2 of 73 closed real CSPs had gamma, none vega).
+                        if vld(getattr(g, "gamma", None)):
+                            gamma = abs(float(g.gamma))
+                        if vld(getattr(g, "vega", None)):
+                            vega = abs(float(g.vega))
                         if vld(getattr(g, "impliedVol", None)):
                             iv = round(float(g.impliedVol) * 100, 1)
                         break
@@ -877,6 +884,8 @@ def fetch_chain_from_ibkr(ticker, opt_type, target_exps, spot, atr,
                     "spread": round(ask - bid, 2), "spread_pct": spread_pct,
                     "delta": round(delta, 3) if delta else None,
                     "theta": round(theta, 3) if theta else None,
+                    "gamma": round(gamma, 5) if gamma else None,
+                    "vega": round(vega, 4) if vega else None,
                     "iv": iv, "oi": oi, "volume": 0,
                     "source": "ibkr",
                 })
