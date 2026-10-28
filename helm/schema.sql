@@ -776,6 +776,7 @@ CREATE TABLE IF NOT EXISTS stock_positions (
     ticker      TEXT NOT NULL,
     shares      INTEGER NOT NULL,
     cost_basis  REAL,
+    effective_basis REAL,               -- s138: strike less put premium, per share (the covered-call floor)
     acquired_at TEXT,
     notes       TEXT,
     created_at  TEXT NOT NULL DEFAULT (datetime('now')),
@@ -1188,4 +1189,32 @@ CREATE TABLE IF NOT EXISTS put_candidates (
     size_binding  TEXT,
     size_note     TEXT,
     PRIMARY KEY (run_id, ticker)
+);
+
+-- s138 (2026-10-28): the covered-call tool's record (helm/calltool.py writes these).
+CREATE TABLE IF NOT EXISTS call_runs (
+    id            TEXT PRIMARY KEY,
+    run_at        TEXT NOT NULL,
+    rule_version  TEXT NOT NULL,
+    market_open   INTEGER,
+    n_holdings    INTEGER,                    -- holdings looked at (real or if-assigned)
+    hypothetical  INTEGER NOT NULL DEFAULT 0, -- 1 = an --if-assigned run
+    rejects_json  TEXT,                       -- {ticker: reason} for a holding with no call
+    note          TEXT
+);
+CREATE TABLE IF NOT EXISTS call_candidates (
+    run_id          TEXT NOT NULL REFERENCES call_runs(id),
+    ticker          TEXT NOT NULL,
+    choice          INTEGER NOT NULL,         -- 1..3 within the holding
+    hypothetical    INTEGER NOT NULL DEFAULT 0,
+    shares          INTEGER, contracts INTEGER,
+    cost_basis      REAL, effective_basis REAL,
+    expiry          TEXT NOT NULL, dte INTEGER, strike REAL NOT NULL, spot REAL,
+    bid REAL, ask REAL, mid REAL, spread_pct REAL,
+    delta REAL, gamma REAL, theta REAL, vega REAL, iv REAL,
+    ann_return      REAL,                     -- fraction per year on the shares' value
+    if_called       REAL,                     -- dollars if called: (strike - effective basis) x shares + premium
+    earnings        TEXT, exdiv TEXT,
+    rest_price      REAL,
+    PRIMARY KEY (run_id, ticker, choice)
 );

@@ -7,8 +7,10 @@ Rulebook v0.2 section 12.1, as Russ decided it on 10-26:
   * OPEN positions get their entry prices corrected to Fidelity's fills (shown
     first, written on the one confirm); CLOSED positions are never corrected.
 
-Stage 1 books closes, leg closes and expiries. It REPORTS, and does not book,
-new opens, assignments and exercises (stage 2), and share/dividend rows.
+Stage 1 books closes, leg closes and expiries; s138 adds ASSIGNED short puts
+(the option row and its "YOU BOUGHT ASSIGNED PUTS" share row, booked by
+helm/assignment.py). It REPORTS, and does not book, new opens, called-away
+shares, exercises (stage 2), and share/dividend rows.
 
     plan(conn, exports, ...)  -> Plan        read-only
     apply(plan, db_path)      -> list[str]   writes; the CLI takes the backup
@@ -71,7 +73,7 @@ def stored_ira_hash(conn):
 
 @dataclass
 class Item:
-    kind: str                 # LEG_CLOSE | POSITION_CLOSE | PRICE_FIX | MATCHED | REPORT
+    kind: str                 # LEG_CLOSE | POSITION_CLOSE | PRICE_FIX | MATCHED | ASSIGN | REPORT
     text: str                 # one plain line for the trader
     position_id: str = None
     ticker: str = None
@@ -93,7 +95,7 @@ class Plan:
 
     @property
     def writes(self):
-        return [i for i in self.items if i.kind in ("LEG_CLOSE", "POSITION_CLOSE", "PRICE_FIX", "MATCHED")]
+        return [i for i in self.items if i.kind in ("LEG_CLOSE", "POSITION_CLOSE", "PRICE_FIX", "MATCHED", "ASSIGN")]
 
 
 def _otype(leg):
@@ -135,6 +137,44 @@ def _position_reason(strategy, closing, all_expired):
         if leg["direction"] == "SHORT" and price <= 0.5 * leg["open_price"] + 1e-9:
             return "PROFIT_TARGET"
     return "DISCRETIONARY"
+
+
+def _assign_item(conn, rows, row_keys, src_of, seen, label, tk, as_of, exp, strike, q, cands, fl):
+    """s138: a short put ASSIGNED. Needs its share row -- "YOU BOUGHT ASSIGNED PUTS AS OF ..."
+    on the same date, 100 x contracts shares at the strike -- and exactly one open real
+    CSP leg that matches. Booked by helm/assignment.py; anything else is a REPORT."""
+    shares = [(f, k) for f, k in zip(rows, row_keys)
+              if not f.is_option and f.ticker == tk and f.as_of == as_of and k not in seen
+              and "ASSIGNED PUTS" in (f.raw_action or "").upper()]
+    n_sh = sum(int(f.qty or 0) for f, _ in shares)
+    if not shares or n_sh != 100 * q:
+        return Item("REPORT", "%s short put assigned -- its share row (%d shares expected, %d found) isn't in "
+                    "this download; not booked" % (label, 100 * q, n_sh), ticker=tk)
+    bad = [f for f, _ in shares if f.price is None or abs(f.price - float(strike)) >= PRICE_TOL]
+    if bad:
+        return Item("REPORT", "%s short put assigned -- the shares came in at %s, not the %g strike; not booked"
+                    % (label, _fmt(bad[0].price), strike), ticker=tk)
+    allf = fl + [(f, k, src_of[k]) for f, k in shares]
+    done = [l for l in cands if l["status"] == "CLOSED" and (l["close_date"] or "")[:10] == as_of
+            and l["strategy"] == "CSP"]
+    if done and sum(l["contracts"] for l in done) == q:
+        return Item("MATCHED", "%s assigned -- already booked in HELM" % label, ticker=tk,
+                    position_id=done[0]["position_id"], fills=allf, as_of=as_of)
+    live = [l for l in cands if l["status"] == "OPEN" and l["pstatus"] == "OPEN" and l["strategy"] == "CSP"]
+    if len(live) != 1 or live[0]["contracts"] != q:
+        return Item("REPORT", "%s short put assigned -- %d open HELM puts match (%s contracts); refused, "
+                    "book by hand with `helm assign`" % (label, len(live), "/".join(str(l["contracts"]) for l in live)
+                                                          or "none"), ticker=tk)
+    from helm import assignment as A
+    try:
+        v = A.preview(conn, live[0]["position_id"])
+    except ValueError as e:
+        return Item("REPORT", "%s short put assigned -- %s; not booked" % (label, e), ticker=tk)
+    return Item("ASSIGN", "%s ASSIGNED: put closes at 0.00 (premium $%s kept); %d %s shares in at %g; "
+                "effective basis $%.2f a share" % (label, "{:,.2f}".format(v["premium"]), v["shares"], tk,
+                                                    float(strike), v["effective_basis"]),
+                position_id=live[0]["position_id"], ticker=tk, pnl=v["premium"], as_of=as_of, fills=allf,
+                legs=[(live[0]["id"], 0.0, "ASSIGNED")])
 
 
 def plan(conn, exports, cutoff=CUTOFF, reasons=None):
@@ -184,9 +224,14 @@ def plan(conn, exports, cutoff=CUTOFF, reasons=None):
         cands = by_contract.get((tk, exp, otype, float(strike), direction), [])
         fl = [(f, k, src_of[k]) for f, k in fresh]
 
+        if event == "ASSIGNED" and otype == "PUT" and direction == "SHORT":
+            items.append(_assign_item(conn, rows, row_keys, src_of, seen, label, tk, as_of, exp, strike, q,
+                                      cands, fl))
+            continue
         if event in ("ASSIGNED", "EXERCISED"):
-            items.append(Item("REPORT", "%s %s -- %s; assignments are booked in stage 2 "
-                              "(for now `helm assign`)" % (label, direction.lower(), event.lower()), ticker=tk))
+            items.append(Item("REPORT", "%s %s -- %s; %s booked in stage 2" % (
+                label, direction.lower(), event.lower(),
+                "called-away shares are" if otype == "CALL" else "exercises are"), ticker=tk))
             continue
 
         if event == "OPEN":
@@ -400,6 +445,16 @@ def apply(p, db_path=None, ira_hash=None):
                 leg = Leg.get(lid)
                 leg.notes = ((leg.notes + " | ") if leg.notes else "") + label
                 leg.save()
+        elif it.kind == "ASSIGN":
+            from helm import assignment as A
+            c2 = get_conn(db_path) if db_path else get_conn()
+            try:
+                lid = it.legs[0][0]
+                if c2.execute("SELECT status FROM legs WHERE id=?", (lid,)).fetchone()[0] != "OPEN":
+                    raise RuntimeError("%s: the put is no longer open -- stopped; nothing more written" % it.ticker)
+                A.book(c2, it.position_id, when, label)
+            finally:
+                c2.close()
         elif it.kind == "PRICE_FIX":
             fx = it.fix
             leg = Leg.get(fx["leg_id"])

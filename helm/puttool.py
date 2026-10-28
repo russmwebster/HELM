@@ -213,6 +213,13 @@ def _next_report(conn, ticker, today):
     return min(cands) if cands else None      # the nearer of two disagreeing dates
 
 
+def _ivr_text(ivr):
+    """Whole number, unless rounding would hide which side of the 50 bar it is on
+    (QQQ 49.5 printed "50, below 50", 2026-10-28)."""
+    w = "%.0f" % ivr
+    return w if (float(w) >= IVR_MIN) == (ivr >= IVR_MIN) else "%.1f" % ivr
+
+
 def screen(conn, today, tickers=None):
     """(checked, rejects, ivr_date, n_universe). No network.
     checked: [{ticker, grade, iv_rank, earn_line, upcoming}]."""
@@ -243,7 +250,7 @@ def screen(conn, today, tickers=None):
             rejects[t] = "no IV rank on %s" % ivr_date
             continue
         if ivr < IVR_MIN:
-            rejects[t] = "IV rank %.0f, below 50" % ivr
+            rejects[t] = "IV rank %s, below 50" % _ivr_text(ivr)
             continue
         ok, line, upcoming = earnings_check(g == "FUND", _next_report(conn, t, today),
                                             _last_report(conn, t, today), today)
@@ -512,6 +519,8 @@ def _selftest():
     ok(earnings_short("earnings 2026-12-02 (35 days) -- inside the trade") == "12-02 (35d) in trade"
        and earnings_short("last reported 2026-10-27; next not known (about 2027-01-26)") == "reported 10-27"
        and earnings_short("fund -- no earnings") == "fund", "the compact earnings column")
+    ok(_ivr_text(49.5) == "49.5" and _ivr_text(49.4) == "49" and _ivr_text(38.0) == "38",
+       "an IV rank that rounds up to the bar keeps its decimal (49.5, not 50)")
     print("\n%d failed" % len(fails) if fails else "\nall passed")
     return not fails
 

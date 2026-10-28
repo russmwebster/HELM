@@ -11,8 +11,9 @@ Reads both download formats -- History_for_Account_<n>.csv and Accounts_History.
 keeps the Rollover IRA's rows only, and never stores or prints the account number
 (HELM keeps a fingerprint of it). Fills from 2026-10-24 are booked; earlier ones are
 compared and reported. OPEN positions get their entry prices corrected to the fill;
-closed positions are never changed. New opens, assignments and dividends are reported
-and booked in stage 2. The planner and writer are helm/fillimport.py.
+closed positions are never changed. Assigned short puts are booked (s138: the put
+closes at 0.00, the shares go in at the strike). New opens, called-away shares and
+dividends are reported and booked in stage 2. The planner and writer are helm/fillimport.py.
 
 (`helm import` is HELM's original positions-onboarding import -- a different job.)
 """
@@ -124,13 +125,14 @@ def run():
 
     opts = sum(1 for f in exp.fills if f.is_option)
     console.print("[dim]Rollover IRA: %d rows (%d option fills), %s to %s; booking from %s. "
-                  "Share, cash and dividend rows are not read yet.[/dim]" % (
+                  "Share rows are read only to book an assignment; cash and dividend rows aren't read yet.[/dim]" % (
                       len(exp.fills), opts, min((f.as_of for f in exp.fills), default="—"),
                       max((f.as_of for f in exp.fills), default="—"), FI.CUTOFF))
     for n in p.notes:
         console.print("[dim]%s[/dim]" % n)
 
     sections = (("POSITION_CLOSE", "To book -- positions closed"), ("LEG_CLOSE", "To book -- legs closed"),
+                ("ASSIGN", "To book -- puts assigned (shares into HELM)"),
                 ("PRICE_FIX", "To correct -- entry prices on open positions"),
                 ("MATCHED", "Already in HELM (recorded so they aren't checked again)"),
                 ("REPORT", "Not booked -- for you to look at"))
