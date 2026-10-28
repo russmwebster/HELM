@@ -431,7 +431,7 @@ def apply(p, db_path=None, ira_hash=None):
     try:
         conn.execute("INSERT INTO helm_events (id, event_type, entity_name, occurred_at, notes) VALUES (?,?,?,?,?)",
                      ("import-" + now.replace(":", ""), "IMPORT_RUN", "fidelity", now,
-                      "%d written from %s" % (len(done), ", ".join(x.split("/")[-1] for x in p.files))))
+                      "%d written from %s" % (len(done), ", ".join(B.mask_name(x.split("/")[-1]) for x in p.files))))
         conn.commit()
     finally:
         conn.close()

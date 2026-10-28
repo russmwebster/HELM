@@ -86,7 +86,7 @@ def run():
             return 1
         i += 1
 
-    path, others = _pick(path)
+    path, others = _pick(path)  # s136b: every printed file name goes through mask_name
     if not path or not os.path.exists(path):
         console.print("[red]No Fidelity activity download found in %s.[/red] Download Activity & Orders "
                       "(History) as CSV, or give --file." % _downloads())
@@ -104,8 +104,9 @@ def run():
             ira = learned
         exp = B.read_export(path, ira)
         console.print("\n[bold]helm fills[/bold] -- %s  [dim](%s%s)[/dim]" % (
-            os.path.basename(path), exp.fmt.lower().replace("_", " "),
-            ("; also in Downloads: " + ", ".join(os.path.basename(o) for o in others[:3])) if others else ""))
+            B.mask_name(os.path.basename(path)), exp.fmt.lower().replace("_", " "),
+            ("; also in Downloads: " + ", ".join(B.mask_name(os.path.basename(o)) for o in others[:3]))
+            if others else ""))
         if exp.hash_unknown:
             console.print("[red]HELM doesn't know which account is the Rollover IRA yet.[/red] Put a "
                           "Portfolio_Positions or Accounts_History download in Downloads (it names the account), "
@@ -116,7 +117,7 @@ def run():
             return 1
         if learned and have is None:
             console.print("[dim]Rollover IRA identified from %s; HELM will keep a fingerprint of its number, "
-                          "never the number.[/dim]" % learned_from)
+                          "never the number.[/dim]" % B.mask_name(learned_from))
         p = FI.plan(conn, [exp], reasons=reasons)
     finally:
         conn.close()

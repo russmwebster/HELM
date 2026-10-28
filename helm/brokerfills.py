@@ -252,6 +252,15 @@ ACCOUNT_HASH_KEY = "fidelity_ira_account_sha256"
 _HISTORY_FOR = re.compile(r"History_for_Account_(\d+)", re.I)
 
 
+_LONG_DIGITS = re.compile(r"\d{5,}")
+
+
+def mask_name(name):
+    """A download's file name with any account number cut to its last three
+    digits -- History_for_Account_<n>.csv carries the number in its name."""
+    return _LONG_DIGITS.sub(lambda m: "\u2026" + m.group()[-3:], name or "")
+
+
 def account_hash(number):
     return hashlib.sha256(str(number).strip().encode()).hexdigest()
 
@@ -316,7 +325,7 @@ def read_export(path, ira_hash=None):
     """Read one Fidelity activity download, Rollover IRA rows only."""
     fmt = export_format(path)
     if fmt not in ("HISTORY_FOR_ACCOUNT", "ACCOUNTS_HISTORY"):
-        raise ValueError("not a Fidelity activity download: %s" % os.path.basename(path))
+        raise ValueError("not a Fidelity activity download: %s" % mask_name(os.path.basename(path)))
     with open(path, newline="", encoding="utf-8-sig") as handle:
         raw = handle.read()
     if fmt == "ACCOUNTS_HISTORY":
