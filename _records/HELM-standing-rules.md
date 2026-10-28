@@ -7,7 +7,7 @@ future session builds; most sessions add nothing.*
 
 *First cut 2026-09-20, curated from the lessons list and the decisions scattered
 through `claude/HELM-worklist.md` (frozen). Russ reads it once before it is trusted.
-Last updated 2026-10-27 (rank-bar review: real trades only; CSP band 0.30 included; long-call bar review closed). Before that 2026-10-25 (s135: never REPLACE a cascading parent; a write test compares every table; HELM advises in plain words and flags every rule overstepped; paper book frozen, paper exit agent retired; how `helm settle --date` reads its date). Before that 2026-10-24 (s134: the revision — rulebook v0.2 approved: strategy set, sleeve limits, paper book retired, universe, net P&L, no double entry). Before that 2026-10-23 (s133: a named contract is a record, not a selection). Before that 2026-10-14 (s130: the device shell never writes the live database). Before that 2026-10-12 (s129: plain language, no rule or task numbers when talking to Russ). Before that 2026-10-12 (s128: explain first, wait for the go-ahead). Before that 2026-10-10 (s127: PG archived as a product; the board is HELM's interface). Before that 2026-10-10 (s126: the handover replaces the live list). Before that 2026-10-01 (s125: net rent banked, the diagonal loss limit, the four-question
+Last updated 2026-10-27 (s137: Greeks follow trader practice; quality is the main risk control; the book's theta range and delta limit). Before that 2026-10-27 (rank-bar review: real trades only; CSP band 0.30 included; long-call bar review closed). Before that 2026-10-25 (s135: never REPLACE a cascading parent; a write test compares every table; HELM advises in plain words and flags every rule overstepped; paper book frozen, paper exit agent retired; how `helm settle --date` reads its date). Before that 2026-10-24 (s134: the revision — rulebook v0.2 approved: strategy set, sleeve limits, paper book retired, universe, net P&L, no double entry). Before that 2026-10-23 (s133: a named contract is a record, not a selection). Before that 2026-10-14 (s130: the device shell never writes the live database). Before that 2026-10-12 (s129: plain language, no rule or task numbers when talking to Russ). Before that 2026-10-12 (s128: explain first, wait for the go-ahead). Before that 2026-10-10 (s127: PG archived as a product; the board is HELM's interface). Before that 2026-10-10 (s126: the handover replaces the live list). Before that 2026-10-01 (s125: net rent banked, the diagonal loss limit, the four-question
 diagonal card, two keep reasons; one base per percentage; live state in render harnesses). **Kept as a mirror on the Mac at
 `~/Projects/helm/_records/HELM-standing-rules.md` — edit that copy, publish with
 `project_write local_path`.***
@@ -104,6 +104,20 @@ diagonal card, two keep reasons; one base per percentage; live state in render h
   7/13 stay gross, labelled "fees not recorded"); capital-weighted annualized return on
   capital at risk; benchmarks the money-market yield on the same cash and days and Cboe's
   PUT index; sample size and rule version beside every figure.
+
+- **Greeks (Russ, 2026-10-27, s137) — from trader practice, not from HELM's own trades.**
+  Per trade: **delta** picks the strike (the CSP band above); **vega** is the per-name
+  "are its options rich" decision (IV rank ≥ 50) plus the size limits; **gamma** is handled
+  by the 30–45 DTE entry and the 21-DTE exit; **theta** is the ranking (annualized return on
+  collateral). No other per-trade Greek rule. **The ownership grade is the main risk
+  control: rank by annualized return only among names graded A–C or approved funds** —
+  ranked across all names, premium steers to the weak, high-volatility names that made
+  the May–June losses. **Whole book:** daily **theta 0.05–0.12% of the sleeve** (the top
+  is the warning: premium that rich means more risk; the bottom means the sleeve is idle)
+  and **beta-weighted delta ≤ half the sleeve ($150,000 of S&P 500)**; outside either →
+  a flag for Russ, like the sleeve, name and sector limits. Starting limits, reasoned not
+  tested — review after a couple of months of readings. **Record gamma and vega on every
+  new trade's entry snapshot.**
 
 ### Earlier settled decisions (in force unless marked superseded)
 
