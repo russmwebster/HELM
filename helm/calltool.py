@@ -122,7 +122,12 @@ def choose(contracts, eff_basis, latest_expiry, spot, n=CHOICES):
         return [], "IBKR returned no two-sided call quotes near 0.20-0.35 delta"
     order = ("strike below the effective basis", "earnings inside the trade", "delta outside 0.20-0.35",
              "spread 10% of mid or wider", "outside 30-45 days", "no two-sided market", "no live IBKR quote")
-    seen = {contract_reason(c, eff_basis, latest_expiry) for c in contracts}
+    why = {id(c): contract_reason(c, eff_basis, latest_expiry) for c in contracts}
+    # spread is checked last, so a contract failing only on spread met every other rule
+    wide = [c for c in contracts if why[id(c)] == "spread 10% of mid or wider" and c.get("spread_pct") is not None]
+    if wide:
+        return [], "spread 10%% of mid or wider (narrowest in the band %.0f%%)" % min(c["spread_pct"] for c in wide)
+    seen = set(why.values())
     return [], "no call passes: " + "; ".join(r for r in order if r in seen)
 
 
@@ -343,6 +348,9 @@ def _selftest():
     ok([x["strike"] for x in picks] == [340.0, 350.0, 355.0],
        "three choices by return; out-of-band and below-basis strikes skipped: %s" % [x["strike"] for x in picks])
     ok(abs(ann_return(a, 345.0) - 3.0 / 345 * 365 / 35) < 1e-12, "annualized on the shares' value")
+    _, why = choose([{**b, "spread_pct": 14.1}, {**c, "spread_pct": 18.0}, {**d, "spread_pct": 5.0}, e], 326.62, L, 345.0)
+    ok(why == "spread 10% of mid or wider (narrowest in the band 14%)",
+       "too-wide holdings name the narrowest spread among calls meeting every other rule: %s" % why)
     _, why = choose([e], 326.62, L, 345.0)
     ok(why == "no call passes: strike below the effective basis", "a holding with no call says why: %s" % why)
 
