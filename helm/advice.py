@@ -416,9 +416,45 @@ def rule_flags(conn, b, today):
     return out
 
 
+def book_limit_flags(account_id=None, db=None, today=None, view=None):
+    """s138 (Russ, 2026-10-27): the whole-book theta range and beta-weighted delta
+    limit -- outside either is a flag for Russ, like the sleeve, name and sector
+    limits. From helm.bookview (stored readings only); never resolves anything."""
+    from helm import bookview as V      # lazy: bookview imports this module
+    v = view or V.view(account_id, db)
+    L = v["limits"]
+    rows = v["positions"]
+    stale = (" Readings: %s -- check before acting." % "; ".join(L["stale"])) if L["stale"] else ""
+    nums = {k: L[k] for k in ("theta", "theta_pct", "theta_lo", "theta_hi", "bw_delta", "delta_cap")}
+
+    def top(key, n=3):
+        rs = sorted((r for r in rows if r.get(key)), key=lambda r: -(r[key] or 0))[:n]
+        return ", ".join("%s %s %s" % (r["ticker"], {"SHARES": "shares"}.get(r["strategy"], _PLAIN.get(r["strategy"], r["strategy"].lower())),
+                                      _m(r[key], sign=True)) for r in rs)
+    out = []
+    if L["theta_state"] == "high":
+        out.append(_flag("THETA", "Premium is running rich: %s a day" % _m(L["theta"]),
+                         "Theta is %.3f%% of the sleeve a day, above your 0.12%% (%s). Premium that rich means "
+                         "more risk -- it came with the May-June losses. Largest: %s.%s" % (
+                             100 * L["theta_pct"], _m(L["theta_hi"]), top("theta"), stale),
+                         "hold, or close or skip the richest positions", nums))
+    elif L["theta_state"] == "low" and rows:
+        out.append(_flag("THETA", "The sleeve is idle: %s a day" % _m(L["theta"]),
+                         "Theta is %.3f%% of the sleeve a day, below your 0.05%% (%s).%s" % (
+                             100 * L["theta_pct"], _m(L["theta_lo"]), stale),
+                         "look at the new puts, or leave it idle", nums))
+    if L["delta_state"] == "over":
+        out.append(_flag("DELTA", "The book moves like %s of the S&P 500" % _m(abs(L["bw_delta"])),
+                         "Beta-weighted delta is %s, %s over your limit of half the sleeve (%s). Largest: %s.%s" % (
+                             _m(L["bw_delta"], sign=True), _m(abs(L["bw_delta"]) - L["delta_cap"]),
+                             _m(L["delta_cap"]), top("bw_delta"), stale),
+                         "hold, or reduce the largest; new puts add to it", nums))
+    return out
+
+
 # ---------------------------------------------------------------- the book
 
-def advise(db=None, today=None, account_id=None):
+def advise(db=None, today=None, account_id=None, book_limits=True):
     today = today or date.today()
     conn = S._conn(db)
     try:
@@ -436,6 +472,12 @@ def advise(db=None, today=None, account_id=None):
                                 "HELM no longer advises on %s; it finishes under the rules it was opened under."
                                 % p["strategy"]))
         out.extend(rule_flags(conn, S.book(account_id, db), today))
+        if book_limits:
+            try:
+                out.extend(book_limit_flags(account_id, db, today))
+            except Exception as exc:      # noqa: BLE001 -- a failed check must not take the advice down
+                out.append(_flag("LIMITS", "The book's theta and delta limits couldn't be checked",
+                                 "%s: %s" % (type(exc).__name__, exc), "look at Details, or ask a session"))
         out.sort(key=lambda r: (r["priority"], r["ticker"]))
         return out
     finally:
@@ -715,7 +757,7 @@ def _selftest():
     EF.diag_firing_now = lambda conn, pid: set()          # the diagonal rule's own tests live in exit_flags
     EF.pending = lambda conn, as_of=None, ensure=True: []
     try:
-        ALL = advise(db=db, today=date(2026, 10, 24))
+        ALL = advise(db=db, today=date(2026, 10, 24), book_limits=False)   # s138: tested below on their own
         R = {r["ticker"]: r for r in ALL if r["verb"] != "OVER_RULE"}
         F = [r for r in ALL if r["verb"] == "OVER_RULE"]
     finally:
@@ -769,7 +811,29 @@ def _selftest():
        "coverage: backdated booking and early close skipped, real gap found: %s" % cv)
     ok(coverage_text(cv) == "Friday's check: AAA missed 12:30", "coverage text: %s" % coverage_text(cv))
     c.close()
-    print("advice selftest:", "PASS (%d checks)" % 21 if not fails else "%d FAIL" % len(fails))
+    # s138: the book's theta range and delta limit, from a view (no database)
+    def fv(theta, bw, stale=()):
+        sh = 300000.0
+        rows = [{"ticker": "AAA", "strategy": "CSP", "theta": theta * 0.6, "bw_delta": bw * 0.7},
+                {"ticker": "BBB", "strategy": "SHARES", "theta": 0.0, "bw_delta": bw * 0.3},
+                {"ticker": "CCC", "strategy": "CSP", "theta": theta * 0.4, "bw_delta": 0.0}]
+        from helm import bookview as V
+        L = V.limits({"theta": theta, "bw_delta": bw}, sh, [])
+        L["stale"] = list(stale)
+        return {"limits": L, "positions": rows}
+    ok(book_limit_flags(view=fv(230, 131986)) == [], "inside both limits: no flag (today's book)")
+    f = book_limit_flags(view=fv(400, 100000))
+    ok(len(f) == 1 and f[0]["ticker"] == "THETA" and "rich" in f[0]["headline"] and "AAA put +$240" in f[0]["reason"]
+       and f[0]["verb"] == "OVER_RULE", "theta above 0.12%%: a rule flag naming the largest: %s" % (f and f[0]["reason"]))
+    f = book_limit_flags(view=fv(100, 100000))
+    ok(len(f) == 1 and "idle" in f[0]["headline"], "theta below 0.05%: the sleeve is idle")
+    f = book_limit_flags(view=fv(230, 160000, ["no reading on AAA"]))
+    ok(len(f) == 1 and f[0]["ticker"] == "DELTA" and "$10,000 over" in f[0]["reason"]
+       and "AAA put +$112,000, BBB shares +$48,000" in f[0]["reason"] and "no reading on AAA" in f[0]["reason"],
+       "delta over half the sleeve: flagged with the excess, the largest and the stale readings: %s" % (f and f[0]["reason"]))
+    ok(book_limit_flags(view={"limits": fv(0, 0)["limits"], "positions": []}) == [],
+       "an empty book is not called idle")
+    print("advice selftest:", "PASS (%d checks)" % 26 if not fails else "%d FAIL" % len(fails))
     return 1 if fails else 0
 
 

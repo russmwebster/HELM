@@ -30,6 +30,14 @@ STRESS_VOL_POINTS = 10.0
 ORDER_STRATEGIES = ("CSP", "COVERED_CALL", "PMCC")
 PROFIT_TAKE = 0.50
 
+# s138 (Russ, 2026-10-27): the whole-book limits, as fractions of the sleeve so they
+# move with it. Starting limits, reasoned from practice, not tested -- review after a
+# couple of months of readings. Outside either -> a flag for Russ (helm/advice.py).
+THETA_LO = 0.0005            # 0.05% of the sleeve a day -- below: the sleeve is idle
+THETA_HI = 0.0012            # 0.12% -- above: premium is running rich (more risk)
+DELTA_FRAC = 0.50            # beta-weighted delta at most half the sleeve
+STALE_DAYS = 3               # newest reading older than this (calendar days) -> stale
+
 
 def _latest_leg_reading(conn, leg_id):
     r = conn.execute("SELECT checked_at, delta, gamma, theta, vega, current_price, data_quality "
@@ -77,6 +85,71 @@ def position_greeks(conn, p):
     return out
 
 
+def share_rows(conn, account_id=None, beta_assumed=None):
+    """s138: HELM-held shares (stock_positions) in the book's Greeks -- delta = shares,
+    no theta or vega. Shares already carried as an open stock leg on a real position
+    are not counted twice. Price: the newest stored price for the name from any real
+    position's check; otherwise the cost basis, labelled."""
+    if not S._has_table(conn, "stock_positions"):
+        return []
+    out = []
+    q = "SELECT * FROM stock_positions" + (" WHERE account_id=?" if account_id else "")
+    for r in conn.execute(q, ((account_id,) if account_id else ())).fetchall():
+        t, sh = r["ticker"], int(r["shares"] or 0)
+        legged = conn.execute(
+            "SELECT COALESCE(SUM(CASE WHEN l.direction='LONG' THEN l.contracts ELSE -l.contracts END),0) "
+            "FROM legs l JOIN positions p ON p.id=l.position_id WHERE p.book='REAL' AND p.status='OPEN' "
+            "AND p.ticker=? AND l.status='OPEN' AND l.leg_role IN ('LONG_STOCK','SHORT_STOCK')", (t,)).fetchone()[0]
+        sh -= int(legged or 0)
+        if sh == 0:
+            continue
+        px = conn.execute("SELECT c.spot_price, c.checked_at FROM checks c JOIN positions p ON p.id=c.position_id "
+                          "WHERE p.book='REAL' AND p.ticker=? AND c.spot_price IS NOT NULL "
+                          "ORDER BY c.checked_at DESC LIMIT 1", (t,)).fetchone()
+        spot, as_of, note = (px[0], px[1], None) if px else (r["cost_basis"], None, "price at cost, no reading")
+        beta, assumed = _beta(conn, t)
+        if assumed and beta_assumed is not None:
+            beta_assumed.append(t)
+        usd = sh * spot if spot is not None else None
+        out.append({"position_id": None, "ticker": t, "strategy": "SHARES", "grade": A._grade(conn, t),
+                    "spot": spot, "beta": beta, "beta_assumed": assumed, "delta_sh": float(sh),
+                    "usd_delta": usd, "bw_delta": usd * beta if usd is not None else None,
+                    "theta": 0.0, "vega": 0.0, "gamma_sh": 0.0,
+                    "stress": {str(m): stress_pnl(float(sh), 0.0, spot, beta, m) for m in STRESS_MARKET},
+                    "vol_up": 0.0, "as_of": as_of, "missing_legs": [], "price_note": note})
+    return out
+
+
+def limits(totals, share, rows, today=None):
+    """s138: the book's theta range and beta-weighted delta limit, with whether the
+    readings can be trusted. Pure."""
+    from datetime import date
+    today = today or date.today()
+    th, bw = totals.get("theta") or 0.0, totals.get("bw_delta") or 0.0
+    lo, hi, cap = THETA_LO * share, THETA_HI * share, DELTA_FRAC * share
+    stale = []
+    miss = sorted({r["ticker"] for r in rows if r.get("missing_legs")})
+    if miss:
+        stale.append("no reading on %s" % ", ".join(miss))
+    cost = sorted({r["ticker"] for r in rows if r.get("price_note")})
+    if cost:
+        stale.append("%s priced at cost" % ", ".join(cost))
+    times = [r["as_of"] for r in rows if r.get("as_of")]
+    if rows and not times:
+        stale.append("no readings at all")
+    elif times:
+        newest = date.fromisoformat(max(times)[:10])
+        if (today - newest).days > STALE_DAYS:
+            stale.append("newest reading %s" % newest)
+        oldest = date.fromisoformat(min(times)[:10])
+        if (newest - oldest).days >= 1:
+            stale.append("readings span %s to %s" % (oldest, newest))
+    return {"theta": th, "theta_pct": th / share if share else None, "theta_lo": lo, "theta_hi": hi,
+            "theta_state": "low" if th < lo - 1e-6 else ("high" if th > hi + 1e-6 else "ok"),
+            "bw_delta": bw, "delta_cap": cap, "delta_state": "over" if abs(bw) > cap + 1e-6 else "ok",
+            "stale": stale}
+
+
 def _half_up(x):
     """To the cent, halves rounded up (2.175 -> 2.18): plain round() on a float
     turns 2.175 into 2.17. Exchange tick sizes (0.05 above $3 on some names) are
@@ -117,6 +190,7 @@ def view(account_id=None, db=None):
                 "vol_up": g["vega"] * STRESS_VOL_POINTS,
                 "as_of": g["as_of"], "missing_legs": g["missing_legs"],
             })
+        rows.extend(share_rows(conn, account_id, beta_assumed))
         tot = lambda k: sum(r[k] for r in rows if r[k] is not None)
         totals = {k: tot(k) for k in ("delta_sh", "usd_delta", "bw_delta", "theta", "vega")}
         stress = {str(m): sum(r["stress"][str(m)] for r in rows if r["stress"][str(m)] is not None)
@@ -155,7 +229,8 @@ def view(account_id=None, db=None):
                 "longs": [it for it in b["items"] if "long at cost" in it["what"]], "totals": totals, "stress": stress,
                 "stress_note": "approximate: delta + gamma for market moves (each stock moves beta x the market); vega for vol",
                 "as_of": (min(as_ofs), max(as_ofs)) if as_ofs else None,
-                "beta_assumed": sorted(set(beta_assumed)), "expiries": expiries, "orders": orders}
+                "beta_assumed": sorted(set(beta_assumed)), "expiries": expiries, "orders": orders,
+                "limits": limits(totals, b["share"], rows)}
     finally:
         conn.close()
 
@@ -175,6 +250,10 @@ def _report(account_id=None, db=None):
     print("  delta %+.0f shares (%s); moves like %s of the S&P 500 (beta-weighted)" % (
         t["delta_sh"], _money(t["usd_delta"], True), _money(t["bw_delta"], True)))
     print("  theta %s a day   vega %s per vol point" % (_money(t["theta"], True), _money(t["vega"], True)))
+    L = v["limits"]
+    print("  limits: theta %.3f%% of the sleeve a day (range %.2f-%.2f%%) -- %s; beta-weighted delta %s of %s -- %s%s" % (
+        100 * (L["theta_pct"] or 0), 100 * THETA_LO, 100 * THETA_HI, L["theta_state"], _money(L["bw_delta"]),
+        _money(L["delta_cap"]), L["delta_state"], ("   [readings: " + "; ".join(L["stale"]) + "]") if L["stale"] else ""))
     print("  if the market moves -5%%: %s   -10%%: %s   if vol +10 points: %s   (approximate)" % (
         _money(v["stress"]["-0.05"], True), _money(v["stress"]["-0.1"], True), _money(v["stress"]["vol+10"], True)))
     if v["beta_assumed"]:
@@ -268,7 +347,45 @@ def _selftest():
     ok(P["AMZN"]["grade"] == "B" and P["SPY"]["grade"] == "FUND" and P["JPM"]["grade"] is None,
        "grade: latest wins, fund reads FUND, ungraded is None: %s %s %s" % (P["AMZN"]["grade"], P["SPY"]["grade"], P["JPM"]["grade"]))
     ok(_half_up(4.35 * 0.5) == 2.18 and _half_up(2.27 * 0.5) == 1.14, "half-cent rounds up")
-    print("bookview selftest:", "PASS (11 checks)" if not fails else "%d FAIL" % len(fails))
+    # s138: the book limits
+    L = v["limits"]
+    ok(abs(L["theta_pct"] - v["totals"]["theta"] / v["sleeve"]["share"]) < 1e-12 and L["delta_cap"] == 0.5 * v["sleeve"]["share"],
+       "the view carries theta as a share of the sleeve and the delta limit at half of it")
+    sh = 300000.0
+    ok(limits({"theta": 149.0, "bw_delta": 0}, sh, [])["theta_state"] == "low", "theta below 0.05% is low")
+    ok(limits({"theta": 150.0, "bw_delta": 0}, sh, [])["theta_state"] == "ok", "0.05% exactly is inside")
+    ok(limits({"theta": 360.0, "bw_delta": 0}, sh, [])["theta_state"] == "ok", "0.12% exactly is inside")
+    ok(limits({"theta": 361.0, "bw_delta": 0}, sh, [])["theta_state"] == "high", "above 0.12% is high")
+    ok(limits({"theta": 200, "bw_delta": 150000.0}, sh, [])["delta_state"] == "ok"
+       and limits({"theta": 200, "bw_delta": 150001.0}, sh, [])["delta_state"] == "over"
+       and limits({"theta": 200, "bw_delta": -150001.0}, sh, [])["delta_state"] == "over",
+       "delta over half the sleeve, either sign, is over; exactly half is not")
+    from datetime import date as _dd
+    st = limits({"theta": 200, "bw_delta": 0}, sh, [{"ticker": "X", "as_of": "2026-10-20T15:15", "missing_legs": []}],
+                today=_dd(2026, 10, 28))["stale"]
+    ok(st == ["newest reading 2026-10-20"], "an old reading is called stale: %s" % st)
+    st = limits({"theta": 200, "bw_delta": 0}, sh, [{"ticker": "X", "as_of": "2026-10-28T12:30", "missing_legs": ["l"]}],
+                today=_dd(2026, 10, 28))["stale"]
+    ok(st == ["no reading on X"], "a leg with no reading is named")
+    # shares in the Greeks
+    c = sqlite3.connect(db)
+    c.execute("INSERT INTO stock_positions VALUES ('a','JPM',200,335.0)")
+    c.execute("INSERT INTO stock_positions VALUES ('a','ZZZ',100,50.0)")
+    c.execute("INSERT INTO stock_positions VALUES ('a','YYY',100,20.0)")
+    c.execute("INSERT INTO positions VALUES ('p4','a','COVERED_CALL','YYY','OPEN','REAL',NULL)")
+    c.execute("INSERT INTO legs VALUES ('y1','p4','LONG_STOCK','LONG',NULL,100,1,20.0,NULL,NULL,'OPEN',NULL)")
+    c.commit(); c.close()
+    v2 = view(db=db)
+    P2 = {(r["ticker"], r["strategy"]): r for r in v2["positions"]}
+    j = P2[("JPM", "SHARES")]
+    ok(j["delta_sh"] == 200 and j["spot"] == 332.57 and abs(j["bw_delta"] - 200 * 332.57 * 0.98) < 1e-6,
+       "200 JPM shares: delta 200 at the newest stored JPM price, beta-weighted")
+    z = P2[("ZZZ", "SHARES")]
+    ok(z["spot"] == 50.0 and z["price_note"] and "ZZZ priced at cost" in v2["limits"]["stale"][0],
+       "shares with no reading are priced at cost and the limits say so")
+    ok(("YYY", "SHARES") not in P2 and abs(v2["totals"]["delta_sh"] - v["totals"]["delta_sh"] - 400) < 1e-9,
+       "shares already carried as a stock leg are not counted twice (200 JPM + 100 ZZZ + YYY's leg 100)")
+    print("bookview selftest:", "PASS (%d checks)" % 22 if not fails else "%d FAIL" % len(fails))
     return 1 if fails else 0
 
 

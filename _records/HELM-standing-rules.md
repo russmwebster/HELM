@@ -7,7 +7,7 @@ future session builds; most sessions add nothing.*
 
 *First cut 2026-09-20, curated from the lessons list and the decisions scattered
 through `claude/HELM-worklist.md` (frozen). Russ reads it once before it is trusted.
-Last updated 2026-10-27 (s137: Greeks follow trader practice; quality is the main risk control; the book's theta range and delta limit). Before that 2026-10-27 (rank-bar review: real trades only; CSP band 0.30 included; long-call bar review closed). Before that 2026-10-25 (s135: never REPLACE a cascading parent; a write test compares every table; HELM advises in plain words and flags every rule overstepped; paper book frozen, paper exit agent retired; how `helm settle --date` reads its date). Before that 2026-10-24 (s134: the revision — rulebook v0.2 approved: strategy set, sleeve limits, paper book retired, universe, net P&L, no double entry). Before that 2026-10-23 (s133: a named contract is a record, not a selection). Before that 2026-10-14 (s130: the device shell never writes the live database). Before that 2026-10-12 (s129: plain language, no rule or task numbers when talking to Russ). Before that 2026-10-12 (s128: explain first, wait for the go-ahead). Before that 2026-10-10 (s127: PG archived as a product; the board is HELM's interface). Before that 2026-10-10 (s126: the handover replaces the live list). Before that 2026-10-01 (s125: net rent banked, the diagonal loss limit, the four-question
+Last updated 2026-10-28 (s138: proposal tools are commands, recorded; earnings fail closed; assignment accounting; three covered-call choices; book limits built; a screen casts a wider net than its rules; -B on a perturbation). Before that 2026-10-27 (s137: Greeks follow trader practice; quality is the main risk control; the book's theta range and delta limit). Before that 2026-10-27 (rank-bar review: real trades only; CSP band 0.30 included; long-call bar review closed). Before that 2026-10-25 (s135: never REPLACE a cascading parent; a write test compares every table; HELM advises in plain words and flags every rule overstepped; paper book frozen, paper exit agent retired; how `helm settle --date` reads its date). Before that 2026-10-24 (s134: the revision — rulebook v0.2 approved: strategy set, sleeve limits, paper book retired, universe, net P&L, no double entry). Before that 2026-10-23 (s133: a named contract is a record, not a selection). Before that 2026-10-14 (s130: the device shell never writes the live database). Before that 2026-10-12 (s129: plain language, no rule or task numbers when talking to Russ). Before that 2026-10-12 (s128: explain first, wait for the go-ahead). Before that 2026-10-10 (s127: PG archived as a product; the board is HELM's interface). Before that 2026-10-10 (s126: the handover replaces the live list). Before that 2026-10-01 (s125: net rent banked, the diagonal loss limit, the four-question
 diagonal card, two keep reasons; one base per percentage; live state in render harnesses). **Kept as a mirror on the Mac at
 `~/Projects/helm/_records/HELM-standing-rules.md` — edit that copy, publish with
 `project_write local_path`.***
@@ -117,7 +117,25 @@ diagonal card, two keep reasons; one base per percentage; live state in render h
   and **beta-weighted delta ≤ half the sleeve ($150,000 of S&P 500)**; outside either →
   a flag for Russ, like the sleeve, name and sector limits. Starting limits, reasoned not
   tested — review after a couple of months of readings. **Record gamma and vega on every
-  new trade's entry snapshot.**
+  new trade's entry snapshot.** *(Built s138: `bookview.limits` / `advice.book_limit_flags`,
+  as fractions of the sleeve; HELM-held shares count in the book's delta.)*
+- **Proposal tools are commands Russ runs — `helm puts`, `helm calls` — not scheduled jobs;
+  every run is recorded (every name's best contract and each left-off name's reason), so
+  the record builds even while the sleeve is full ("would be declined").** The regular
+  check on open positions is the snapshots + `helm advise`. *(Russ, 2026-10-28.)*
+- **Earnings fail closed on the proposal tools.** A stock with no upcoming date is offered
+  a put only if it reported within the last 60 days; a covered call only if it expires
+  before last report + 70 days. Otherwise it is left off with the reason. Funds have no
+  earnings. A report later in a put's trade, even on its expiry day, is allowed and shown
+  (DELL, Russ 2026-10-28).
+- **An assigned put closes at $0.00 on the assignment date** (the premium is realized and
+  counts in the sleeve); the position closes with exit reason ASSIGNED; the shares go in at
+  the strike; the **effective basis** (strike − premium per share) is stored as a number on
+  `stock_positions`. The import books it only with its share row and one matching CSP.
+  *(Russ, 2026-10-28; `helm/assignment.py`.)*
+- **Covered calls: three choices per holding**, ranked by the premium's yearly return on the
+  shares' value; **the spread < 10% rule applies to calls too.** Booking called-away shares
+  waits for import stage 2 (before the first covered call can expire). *(Russ, 2026-10-28.)*
 
 ### Earlier settled decisions (in force unless marked superseded)
 
@@ -271,6 +289,11 @@ diagonal card, two keep reasons; one base per percentage; live state in render h
   been a no." When a written rule and its source conversation could differ, check the
   archive/study doc — or ask — before choosing the narrower reading. *(2026-09-27.)*
 - **Search the project before recommending a change.** `project_search` first.
+- **A screen casts a wider net than its rules and applies the rules itself, so every
+  rejection carries its true reason.** s138's put tool first borrowed `evaluate_contracts`
+  with the rule band as its filter: an empty band read as "IBKR chain unavailable", fell back
+  to Yahoo and was recorded "no live IBKR quote" — while IBKR was fine and the truth was
+  "spread too wide" or "no 30–45 day expiry". A borrowed function brings its fallbacks.
 - **A named contract is a record, not a selection.** `helm open --strike/--expiry` books a
   trade already made, so selection rules (strike window, delta band, entry DTE window) must
   never hide it; only the exchange listing and the money rules (spread, size, ceiling — each
@@ -314,6 +337,9 @@ diagonal card, two keep reasons; one base per percentage; live state in render h
   `HELM_DB=` the copy, run the real CLI, dump the rows.
 - **Verify both ways.** Perturb the defect you most fear, confirm the suite fails;
   restore and confirm it passes; check the file is byte-identical after.
+- **Run a perturbation with `python3 -B`.** A same-length `sed` edit inside the same second
+  leaves the `.pyc` looking current, and the old code runs: s138's first delta break "passed"
+  that way.
 - **Aim a perturbation at a case the output can see.** A series that keeps one point
   per day hides an intraday defect whenever a later check that day overwrites it: W204's
   AA case passed with the fix switched off, EQT's (booked after the day's last check)
