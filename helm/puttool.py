@@ -327,7 +327,15 @@ def build(conn, today, tickers=None, fetch=fetch_contracts, book=None, db=None):
             "rest_price": _half_up(best["mid"] * (1 - PROFIT_TAKE)),
             "size_n": n, "size_binding": binding, "size_note": note,
         })
-    ranked = rank(bests)
+    ranked, firsts = [], {}
+    for r in rank(bests):                       # one per COMPANY (s140): GOOG/GOOGL share a name
+        k = S.name_key(r["ticker"])
+        if k in firsts:
+            rejects[r["ticker"]] = ("same company as %s, which ranks higher -- one put per company"
+                                    % firsts[k])
+            continue
+        firsts[k] = r["ticker"]
+        ranked.append(r)
     for i, r in enumerate(ranked, 1):
         r["rank"] = i
     return {"id": "puts_" + uuid.uuid4().hex[:12],
@@ -497,6 +505,22 @@ def _selftest():
 
     chains = {"AAA": [{**base, "mid": 1.0}], "FFF": [{**base, "mid": 2.0}], "GGG": [{**base, "spread_pct": 12.0}],
               "XLV": [{**base, "mid": 1.5, "strike": 140.0}]}
+    import helm.sleeve as S
+    _nk = S.name_key
+    S.name_key = lambda t: "AAA + FFF" if t in ("AAA", "FFF") else t      # a pretend share-class pair
+    try:
+        _so0 = S.sector_of
+        S.sector_of = lambda c, t: ("Tech", "test")
+        fb0 = {"share": 300000.0, "used": 0.0, "name_cap": 60000.0, "sector_cap": 90000.0,
+               "by_name": {}, "by_sector": {}}
+        run0 = build(conn, T, fetch=lambda t: (chains.get(t, []), 100.0, None), book=fb0, db=tmp)
+    finally:
+        S.name_key = _nk
+        S.sector_of = _so0
+    ok([c["ticker"] for c in run0["candidates"]] == ["FFF", "XLV"]
+       and run0["rejects"].get("AAA") == "same company as FFF, which ranks higher -- one put per company",
+       "one put per company: the lower share class is left off with the reason: %s %s"
+       % ([c["ticker"] for c in run0["candidates"]], run0["rejects"].get("AAA")))
     fake_book = {"share": 300000.0, "used": 298000.0, "name_cap": 60000.0, "sector_cap": 90000.0,
                  "by_name": {}, "by_sector": {}}
     import helm.sleeve as S

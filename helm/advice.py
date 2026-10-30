@@ -379,7 +379,7 @@ def rule_flags(conn, b, today):
                          {"used": b["used"], "share": b["share"]}))
     for t in b["over_name"]:
         v = b["by_name"][t]
-        its = [it for it in b["items"] if it["ticker"] == t]
+        its = [it for it in b["items"] if S.name_key(it["ticker"]) == t]
         out.append(_flag(t, "%s is over the name limit" % t,
                          "%s uses %s, %s over the %s limit (20%% of the sleeve). Nothing is forced; new %s "
                          "trades are declined." % (t, _m(v), _m(v - b["name_cap"]), _m(b["name_cap"]), t),

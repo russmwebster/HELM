@@ -39,6 +39,20 @@ BINDINGS = (SLEEVE_TOTAL, SLEEVE_NAME, SLEEVE_SECTOR)
 
 DIAG_FAMILY = ("DIAGONAL", "DIAGONAL_PUT", "PMCC")
 
+# Share classes of one company are ONE name for the 20% limit (Russ, 2026-10-30: the
+# put list sized GOOG on its own while a GOOGL put was held). Add a pair here when
+# a second class of a held company joins the watchlist.
+SAME_COMPANY = (("GOOG", "GOOGL"),)
+
+
+def name_key(ticker):
+    """The key the name limit counts under: 'GOOG + GOOGL' for either class, else the ticker."""
+    t = (ticker or "").upper()
+    for grp in SAME_COMPANY:
+        if t in grp:
+            return " + ".join(sorted(grp))
+    return t
+
 
 def _conn(db=None):
     if db is None:
@@ -137,7 +151,9 @@ def book(account_id=None, db=None):
             sec, src = sector_of(conn, t)
             it["sector"], it["sector_source"] = sec, src
             sectors[t] = sec
-            by_name[t] = by_name.get(t, 0.0) + it["dollars"]
+            sectors[name_key(t)] = sec
+            k = name_key(t)
+            by_name[k] = by_name.get(k, 0.0) + it["dollars"]
             by_sector[sec] = by_sector.get(sec, 0.0) + it["dollars"]
         used = sum(it["dollars"] for it in items)
         name_cap, sector_cap = NAME_PCT * share, SECTOR_PCT * share
@@ -168,7 +184,7 @@ def room_for(ticker, account_id=None, db=None, b=None):
         conn.close()
     rooms = {
         SLEEVE_TOTAL: b["share"] - b["used"],
-        SLEEVE_NAME: b["name_cap"] - b["by_name"].get(t, 0.0),
+        SLEEVE_NAME: b["name_cap"] - b["by_name"].get(name_key(t), 0.0),
         SLEEVE_SECTOR: b["sector_cap"] - b["by_sector"].get(sec, 0.0),
     }
     binding = min(BINDINGS, key=lambda k: rooms[k])     # ties: total, then name, then sector
@@ -186,9 +202,10 @@ def limit_text(binding, r):
         return "the HELM sleeve has %s free (%s used of %s)" % (
             _money(max(r["rooms"][SLEEVE_TOTAL], 0)), _money(b["used"]), _money(b["share"]))
     if binding == SLEEVE_NAME:
+        k = name_key(r["ticker"])
         return "%s has %s of room under the 20%% name limit (%s used of %s)" % (
-            r["ticker"], _money(max(r["rooms"][SLEEVE_NAME], 0)),
-            _money(b["by_name"].get(r["ticker"], 0)), _money(b["name_cap"]))
+            k, _money(max(r["rooms"][SLEEVE_NAME], 0)),
+            _money(b["by_name"].get(k, 0)), _money(b["name_cap"]))
     return "%s has %s of room under the 30%% sector limit (%s used of %s)" % (
         r["sector"], _money(max(r["rooms"][SLEEVE_SECTOR], 0)),
         _money(b["by_sector"].get(r["sector"], 0)), _money(b["sector_cap"]))
@@ -230,23 +247,26 @@ def _selftest():
       CREATE TABLE watchlist (ticker TEXT, sector TEXT);
       CREATE TABLE stock_positions (account_id TEXT, ticker TEXT, shares INT, cost_basis REAL);
       CREATE TABLE approved_funds (ticker TEXT, bucket TEXT, approved_at TEXT, note TEXT);
-      INSERT INTO watchlist VALUES ('AAA','Tech'),('BBB','Tech'),('CCC','Energy'),('DDD',NULL);
+      INSERT INTO watchlist VALUES ('AAA','Tech'),('BBB','Tech'),('CCC','Energy'),('DDD',NULL),
+                                   ('GOOG','Comm'),('GOOGL','Comm');
       INSERT INTO approved_funds VALUES ('XLK','Tech','2026-10-24',''),('SPY','US equity index','2026-10-24','');
       INSERT INTO positions VALUES ('p1','a','CSP','AAA','OPEN','REAL',NULL),
                                    ('p2','a','PMCC','CCC','OPEN','REAL',NULL),
                                    ('p3','a','CSP','BBB','OPEN','PAPER',NULL),
-                                   ('p4','a','CSP','CCC','CLOSED','REAL',NULL);
+                                   ('p4','a','CSP','CCC','CLOSED','REAL',NULL),
+                                   ('p5','a','CSP','GOOGL','OPEN','REAL',NULL);
       INSERT INTO legs VALUES ('l1','p1','SHORT_PUT','SHORT',500,1,100,5,NULL,NULL,'OPEN'),
                               ('l2','p2','LONG_CALL','LONG',40,2,100,100,NULL,NULL,'OPEN'),
                               ('l2s','p2','SHORT_CALL','SHORT',60,2,100,2,0.5,'2026-10-25T10:00','CLOSED'),
                               ('l3','p3','SHORT_PUT','SHORT',900,9,100,5,NULL,NULL,'OPEN'),
-                              ('l4','p4','SHORT_PUT','SHORT',100,1,100,3,1,'2026-10-23T10:00','CLOSED');
+                              ('l4','p4','SHORT_PUT','SHORT',100,1,100,3,1,'2026-10-23T10:00','CLOSED'),
+                              ('l5','p5','SHORT_PUT','SHORT',335,1,100,8.38,NULL,NULL,'OPEN');
     """)
     c.commit(); c.close()
     b = book(db=db)
     ok(b["realized"] == 300.0, "only legs closed from 10/24 count (short call +$300; the 10/23 close does not): %s" % b["realized"])
     ok(b["share"] == 300300.0, "share = base + realized")
-    ok(b["used"] == 50000 + 20000, "in use: CSP collateral + PMCC long at cost; paper excluded: %s" % b["used"])
+    ok(b["used"] == 50000 + 20000 + 33500, "in use: CSP collateral + PMCC long at cost; paper excluded: %s" % b["used"])
     ok(b["by_sector"].get("Tech") == 50000 and b["by_sector"].get("Energy") == 20000, "sectors from the watchlist")
     # name limit edge: AAA has 60,060 - 50,000 = 10,060 of room
     n, bd, note = size("CSP", "AAA", 10060, db=db, b=b)
@@ -265,7 +285,17 @@ def _selftest():
     tight = dict(b, used=b["share"] - 1000.0)
     n, bd, note = size("PMCC", "SPY", 5000, db=db, b=tight)
     ok(n == 0 and bd == SLEEVE_TOTAL and "HELM sleeve" in note, "sleeve total binds when it is the smallest")
-    print("sleeve selftest:", "PASS (%d checks)" % 10 if not fails else "%d FAIL" % len(fails))
+    # share classes (s140): a GOOGL put held ($33,500) leaves GOOG 60,060 - 33,500 = 26,560 of
+    # name room -- one $26,500 contract fits, two do not (the sector, Comm, has 56,590)
+    ok(name_key("goog") == name_key("GOOGL") == "GOOG + GOOGL" and name_key("AAA") == "AAA", "name_key")
+    ok(b["by_name"].get("GOOG + GOOGL") == 33500 and "GOOGL" not in b["by_name"], "GOOGL counts under the company")
+    n, bd, note = size("CSP", "GOOG", 26500, db=db, b=b)
+    ok(n == 1 and bd == SLEEVE_NAME and note.startswith("sized to 1 by the 20% name limit -- GOOG + GOOGL has $26,560"),
+       "GOOG is sized against GOOGL's collateral: %s %s %s" % (n, bd, note))
+    n, bd, note = size("CSP", "GOOG", 26561, db=db, b=b)
+    ok(n == 0 and "GOOG + GOOGL has $26,560 of room under the 20% name limit ($33,500 used" in note,
+       "$1 over the company's room is declined: %s" % note)
+    print("sleeve selftest:", "PASS (%d checks)" % 14 if not fails else "%d FAIL" % len(fails))
     return 1 if fails else 0
 
 
