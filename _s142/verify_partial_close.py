@@ -114,7 +114,7 @@ def realized_total(db, ticker):
 
 def sleeve(db, root=REPO):
     code = ("import json,helm.sleeve as S; b=S.book(); "
-            "print(json.dumps({'share':round(b['share'],2),'used':round(b['used'],2),"
+            "print(json.dumps({'share':round(b['share'],2),'used':round(b['used'],2),'gross':round(b.get('realized_gross',b['realized']),2),'fees':round(b.get('fees',0),2),"
             "'xle':round(b['by_name'].get('XLE',0),2),'csco':round(b['by_name'].get('CSCO',0),2)}))")
     env = dict(os.environ, HELM_DB=str(db), HELM_ROOT=str(root), PYTHONPATH=str(root))
     r = subprocess.run([sys.executable, "-B", "-c", code], capture_output=True, text=True, env=env, cwd=str(root))
@@ -131,7 +131,7 @@ def table_diff(a, b):
             n1 = c.execute('SELECT COUNT(*) FROM (SELECT * FROM main."%s" EXCEPT SELECT * FROM o."%s")' % (t, t)).fetchone()[0]
             n2 = c.execute('SELECT COUNT(*) FROM (SELECT * FROM o."%s" EXCEPT SELECT * FROM main."%s")' % (t, t)).fetchone()[0]
         except sqlite3.OperationalError:
-            changed.add(t + "(schema)"); continue
+            changed.add(t); continue      # its columns changed (s142: broker_fills.downloaded_at)
         if n1 or n2:
             changed.add(t)
     c.close()
@@ -265,8 +265,11 @@ def judge(r, tag=""):
     check(abs(r["A_end"]["real"] - r["C_end"]["real"]) < 0.01 and abs(r["A_end"]["real"] - 521.0) < 0.01,
           tag + "A (two runs) and C (one close of 8) realize the same: $%s vs $%s" % (r["A_end"]["real"], r["C_end"]["real"]))
     check(abs(r["B_end"]["real"] - r["C_end"]["real"]) < 0.01, tag + "B (both days, one run) realizes the same: $%s" % r["B_end"]["real"])
-    check(r["A_end"]["sleeve"] == r["C_end"]["sleeve"] == r["B_end"]["sleeve"],
-          tag + "A, B and C leave the same sleeve: %s" % r["C_end"]["sleeve"])
+    a_, b_, c_ = r["A_end"]["sleeve"], r["B_end"]["sleeve"], r["C_end"]["sleeve"]
+    check(a_["gross"] == b_["gross"] == c_["gross"] and a_["used"] == b_["used"] == c_["used"] and a_ == b_
+          and abs((c_["fees"] - a_["fees"]) + 0.67) < 0.006 and abs((a_["share"] - c_["share"]) + 0.67) < 0.006,
+          tag + "A, B and C: same gross and money in use; two closes pay one more commission ($0.67) than one close "
+          "of 8, so A's net sleeve is $0.67 lower: A %s / C %s" % (a_, c_))
     check(r["D_end"]["pieces"] == 0 and abs(r["D_end"]["real"] - 521.0) < 0.01,
           tag + "D same-day 5 + 3 -> one close of 8, no split (%s)" % r["D_end"])
     check(r["A_tables"] <= EXPECTED_TABLES, tag + "A: only the expected tables changed: %s" % sorted(r["A_tables"]))

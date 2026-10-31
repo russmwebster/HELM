@@ -83,7 +83,8 @@ CREATE TABLE IF NOT EXISTS broker_fills (
     position_id  TEXT,                    -- no foreign key: a fill record must never cascade
     leg_id       TEXT,
     imported_at  TEXT NOT NULL,
-    note         TEXT
+    note         TEXT,
+    downloaded_at TEXT                    -- s142: the download's own "Date downloaded" (newest copy wins)
 )"""
 
 
@@ -125,12 +126,13 @@ class Plan:
     items: list
     history: list             # pre-cutoff differences, report only
     learned_hash: str = None  # the IRA hash, when this run learned it
+    downloaded: str = None    # s142: the newest "Date downloaded" among the files
     notes: list = field(default_factory=list)
 
     @property
     def writes(self):
         return [i for i in self.items if i.kind in ("LEG_CLOSE", "POSITION_CLOSE", "PARTIAL_CLOSE", "PRICE_FIX",
-                                                    "MATCHED", "ASSIGN", "CALL_AWAY", "DIVIDEND",
+                                                    "MATCHED", "ASSIGN", "CALL_AWAY", "DIVIDEND", "FEE_FILL",
                                                     "OPEN")]
 
 
@@ -314,6 +316,74 @@ def dividend_items(conn, rows, row_keys, src_of, seen, cutoff, positions):
                                "positions_file": nm, "positions_date": pos["downloaded"]}))
     notes = (["%d dividend row(s) from %s on names HELM holds no shares in -- not HELM's (money-market interest "
               "never is)" % (other, cutoff)] if other else [])
+    return items, notes
+
+
+def fee_fill_items(conn, groups, seen, src_of, used_keys, start=CUTOFF):
+    """s142 (net of fees from 10/24): the rows of trades in the sleeve period -- positions
+    open now or closed from `start` -- that HELM never recorded: every leg's OPENING row,
+    and the CLOSING row of every leg bought or sold back (an expiry or assignment has no
+    fee). Exact matches only: same day, contract, side and contracts (split parts summed).
+    Recorded MATCHED so their fees count in the position's net; nothing in positions or
+    legs changes. Returns (items, notes): a row older than this download is a note, not
+    a report -- a download reaching back further records it."""
+    from helm import netpnl as N
+    rec = {(r["as_of"], (r["symbol"] or "").strip(), N._side(r["action"])) for r in N.fee_rows(conn)}
+    legs = conn.execute(
+        "SELECT l.*, p.ticker, p.tags, p.status ps, p.closed_at FROM legs l JOIN positions p ON p.id=l.position_id "
+        "WHERE p.book='REAL' AND l.option_type IN ('PUT','CALL') AND l.expiration IS NOT NULL AND l.strike IS NOT NULL "
+        "AND (p.status='OPEN' OR substr(p.closed_at,1,10) >= ?)", (start,)).fetchall()
+    total = {}
+    for l in conn.execute("SELECT l.*, p.ticker FROM legs l JOIN positions p ON p.id=l.position_id WHERE p.book='REAL' "
+                          "AND l.option_type IN ('PUT','CALL') AND l.expiration IS NOT NULL").fetchall():
+        for ev, d in (("OPEN", l["open_date"]), ("CLOSE", l["close_date"] if l["status"] == "CLOSED" else None)):
+            if d:
+                k = (ev, d[:10]) + _contract(l)
+                total[k] = total.get(k, 0) + int(l["contracts"])
+    earliest = min((gk[1] for gk in groups), default=None)
+    latest = max((gk[1] for gk in groups), default=None)
+    items, done, older = [], set(), []
+    for l in legs:
+        split = "split_from:" in (l["tags"] or "")
+        sym = N._symbol(conn, l["position_id"], l)
+        c = _contract(l)
+        wants = []
+        if not split:                    # a split part's opening row belongs to its original
+            wants.append(("OPEN", "OPENING", (l["open_date"] or "")[:10]))
+        if l["status"] == "CLOSED" and l["close_date"] and (l["close_price"] or 0) > 0:
+            wants.append(("CLOSE", "CLOSING", l["close_date"][:10]))
+        for ev, side, d in wants:
+            if (d, sym, side) in rec or (ev, d) + c in done:
+                continue
+            label = "%s %s %s %s %g %s" % (d, l["ticker"], l["direction"].lower(), (c[2] or "").lower(), c[3], c[1])
+            g = groups.get((ev, d) + c)
+            if g is None:
+                if earliest and d < earliest:
+                    older.append(d)
+                elif latest and d >= latest:
+                    pass                 # on or after this download's last day -- a later download has it
+                else:
+                    items.append(Item("REPORT", "%s %s -- its row isn't in this download, so its fee can't be recorded"
+                                      % (label, "opened" if ev == "OPEN" else "closed"), ticker=l["ticker"]))
+                continue
+            if any(k in used_keys for k in g["keys"]):
+                continue                 # another item in this run records it
+            if g["contracts"] != total.get((ev, d) + c, 0):
+                items.append(Item("REPORT", "%s %s -- HELM has %d contracts, Fidelity %d; fee not recorded"
+                                  % (label, "opened" if ev == "OPEN" else "closed", total.get((ev, d) + c, 0),
+                                     g["contracts"]), ticker=l["ticker"]))
+                continue
+            fl = [(f, k, src_of[k]) for f, k in zip(g["rows"], g["keys"]) if k not in seen]
+            if not fl:
+                continue
+            fee = sum((f.commission or 0) + (f.fees or 0) for f, _, _ in fl)
+            done.add((ev, d) + c)
+            items.append(Item("FEE_FILL", "%s x%d %s -- fee $%.2f recorded (the trade is already in HELM)"
+                              % (label, g["contracts"], "opened" if ev == "OPEN" else "closed", fee),
+                              position_id=l["position_id"], ticker=l["ticker"], legs=[(l["id"], None, None)],
+                              as_of=d, fills=fl))
+    notes = (["%d fee row(s) of trades in the sleeve period are older than this download (from %s) -- run a "
+              "download that reaches back to %s to record them" % (len(older), earliest, min(older))] if older else [])
     return items, notes
 
 
@@ -653,22 +723,31 @@ def plan(conn, exports, cutoff=CUTOFF, reasons=None, positions=None):
             history.append("%s %s %s %s %g %s x%d -- in HELM, not at Fidelity on that date"
                            % (k[1], k[0].lower(), k[2], k[4].lower(), k[5], k[3], h[0]))
     history.sort()
-    return Plan(files=[e.path for e in exports], items=items, history=history, notes=notes)
+
+    # ------------------------------- s142: opening fees of trades in the sleeve period
+    used = {x[1] for it in items for x in it.fills}
+    f_items, f_notes = fee_fill_items(conn, groups, seen, src_of, used, cutoff)
+    items.extend(f_items)
+    notes.extend(f_notes)
+    return Plan(files=[e.path for e in exports], items=items, history=history, notes=notes,
+                downloaded=max((e.downloaded for e in exports if getattr(e, "downloaded", None)), default=None))
 
 
-def _record(conn, fills, outcome, position_id, leg_id, note, now):
+def _record(conn, fills, outcome, position_id, leg_id, note, now, downloaded=None):
     for f, k, src in fills:
         conn.execute(
             "INSERT OR IGNORE INTO broker_fills (fill_key, source, as_of, run_date, action, symbol, qty, price, "
-            "commission, fees, amount, outcome, position_id, leg_id, imported_at, note) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "commission, fees, amount, outcome, position_id, leg_id, imported_at, note, downloaded_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (k, src, f.as_of, f.run_date, f.raw_action, f.symbol.strip(), f.qty, f.price, f.commission,
-             f.fees, f.amount, outcome, position_id, leg_id, now, note))
+             f.fees, f.amount, outcome, position_id, leg_id, now, note, downloaded))
 
 
 def ensure_schema(conn, ira_hash):
     """broker_fills + the IRA's account hash. Refuses a different hash."""
     conn.execute(BROKER_FILLS_DDL)
+    if "downloaded_at" not in {r[1] for r in conn.execute("PRAGMA table_info(broker_fills)")}:
+        conn.execute("ALTER TABLE broker_fills ADD COLUMN downloaded_at TEXT")
     conn.execute(HELM_DIVIDENDS_DDL)
     have = stored_ira_hash(conn)
     if have is None and ira_hash:
@@ -781,6 +860,8 @@ def apply(p, db_path=None, ira_hash=None):
             pid, lids, _lab = FO.book(it, now[:10], FILL_TIME)
             it.position_id = pid
             it.legs = [(lids[0], None, None)] if len(lids) == 1 else [(x, None, None) for x in lids]
+        elif it.kind == "FEE_FILL":
+            pass                      # only the fill rows are recorded (below)
         elif it.kind == "PRICE_FIX":
             fx = it.fix
             leg = Leg.get(fx["leg_id"])
@@ -799,9 +880,9 @@ def apply(p, db_path=None, ira_hash=None):
         conn = get_conn(db_path) if db_path else get_conn()
         try:
             fills = [x for x in it.fills if x[1] not in recorded]
-            outcome = {"MATCHED": "MATCHED", "PRICE_FIX": "CORRECTED"}.get(it.kind, "BOOKED")
+            outcome = {"MATCHED": "MATCHED", "PRICE_FIX": "CORRECTED", "FEE_FILL": "MATCHED"}.get(it.kind, "BOOKED")
             lid = it.legs[0][0] if len(it.legs) == 1 else (it.fix or {}).get("leg_id")
-            _record(conn, fills, outcome, it.position_id, lid, it.kind, now)
+            _record(conn, fills, outcome, it.position_id, lid, it.kind, now, getattr(p, "downloaded", None))
             conn.commit()
             recorded.update(x[1] for x in fills)
         finally:

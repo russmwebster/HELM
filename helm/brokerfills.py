@@ -304,6 +304,7 @@ class Export:
     skipped: int         # disclaimer lines, other accounts
     other_account: bool  # a History_for_Account file for some other account
     hash_unknown: bool   # a History_for_Account file and HELM has no IRA hash yet
+    downloaded: str = None   # s142: "Date downloaded" from the footer, ISO local time (None if absent)
 
 
 def _fill_keys(fills):
@@ -321,8 +322,31 @@ def _fill_keys(fills):
     return keys
 
 
+_ACT_DOWNLOADED = re.compile(r"Date downloaded\s+(\d{1,2}/\d{1,2}/\d{4})\s+(\d{1,2}:\d{2})\s*([ap]m)", re.I)
+
+
+def downloaded_at(raw):
+    """s142: an activity download's footer time ("Date downloaded 10/31/2026 04:50 pm")
+    as ISO local time, or None. A revised row (Fidelity re-states a fee) is told apart
+    by which download is newer."""
+    hit = _ACT_DOWNLOADED.search(raw or "")
+    if not hit:
+        return None
+    try:
+        return datetime.strptime("%s %s %s" % hit.groups(), "%m/%d/%Y %I:%M %p").isoformat(timespec="minutes")
+    except ValueError:
+        return None
+
+
 def read_export(path, ira_hash=None):
     """Read one Fidelity activity download, Rollover IRA rows only."""
+    e = _read_export(path, ira_hash)
+    with open(path, newline="", encoding="utf-8-sig") as handle:
+        e.downloaded = downloaded_at(handle.read())
+    return e
+
+
+def _read_export(path, ira_hash=None):
     fmt = export_format(path)
     if fmt not in ("HISTORY_FOR_ACCOUNT", "ACCOUNTS_HISTORY"):
         raise ValueError("not a Fidelity activity download: %s" % mask_name(os.path.basename(path)))

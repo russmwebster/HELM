@@ -153,8 +153,11 @@ def in_use_items(conn, account_id=None):
 def book(account_id=None, db=None):
     conn = _conn(db)
     try:
-        realized, n_legs, missing = realized_since(conn)
+        gross, n_legs, missing = realized_since(conn)      # legs + dividends, gross
         dividends = dividends_since(conn)
+        from helm import netpnl
+        fees = netpnl.fees_since(conn, SLEEVE_START)      # s142: net of fees from 10/24
+        realized = gross - fees
         share = SLEEVE_BASE + realized
         items = in_use_items(conn, account_id)
         by_name, by_sector, sectors = {}, {}, {}
@@ -173,7 +176,8 @@ def book(account_id=None, db=None):
             "share": share, "base": SLEEVE_BASE, "start": SLEEVE_START,
             "realized": realized, "realized_legs": n_legs, "realized_missing_price": missing,
             "dividends": dividends,
-            "basis": "gross (until the Fidelity import)",
+            "basis": "net of %s fees (gross %s)" % (_money(fees), _money(gross)),
+            "realized_gross": gross, "fees": fees,
             "used": used, "free": share - used,
             "name_cap": name_cap, "sector_cap": sector_cap,
             "by_name": by_name, "by_sector": by_sector, "sector_of_name": sectors,
@@ -321,13 +325,27 @@ def _selftest():
     b2 = book(db=db)
     ok(b2["dividends"] == 25.0 and b2["realized"] == 325.0 and b2["share"] == 300325.0,
        "a dividend paid from 10/24 counts (HELM's $25 of $50), one paid 10/23 does not: %s" % b2["realized"])
-    print("sleeve selftest:", "PASS (%d checks)" % 16 if not fails else "%d FAIL" % len(fails))
+    # s142: fees from 10/24 come off (cash basis; a revised copy of a row counts once)
+    c = sqlite3.connect(db)
+    c.executescript("""
+      CREATE TABLE broker_fills (fill_key TEXT PRIMARY KEY, as_of TEXT, action TEXT, symbol TEXT, qty INT, price REAL,
+                                 commission REAL, fees REAL, position_id TEXT, imported_at TEXT);
+      INSERT INTO broker_fills VALUES ('f1','2026-10-25','YOU BOUGHT CLOSING TRANSACTION','-AAA',1,0.5,0.65,0.02,'p1','t1'),
+                                      ('f2','2026-10-25','YOU BOUGHT CLOSING TRANSACTION','-AAA',1,0.5,0.65,0.03,'p1','t2'),
+                                      ('f0','2026-10-20','YOU SOLD OPENING TRANSACTION','-AAA',-1,5,0.65,0.02,'p1','t1');
+    """)
+    c.commit(); c.close()
+    b3 = book(db=db)
+    ok(abs(b3["fees"] - 0.68) < 1e-9 and abs(b3["realized"] - (325.0 - 0.68)) < 1e-9 and b3["realized_gross"] == 325.0
+       and abs(b3["share"] - (300325.0 - 0.68)) < 1e-9 and b3["basis"].startswith("net of"),
+       "fees from 10/24 come off, the revised copy once, the 10/20 fee not: %s %s" % (b3["fees"], b3["basis"]))
+    print("sleeve selftest:", "PASS (%d checks)" % 17 if not fails else "%d FAIL" % len(fails))
     return 1 if fails else 0
 
 
 def _report(account_id=None, db=None):
     b = book(account_id, db)
-    print("HELM sleeve  %s  (base %s + realized since %s %s, %s)" % (
+    print("HELM sleeve  %s  (base %s + realized since %s %s, %s)" % (  # s142: realized is net
         _money(b["share"]), _money(b["base"]), b["start"], _money(b["realized"]), b["basis"]))
     if b.get("dividends"):
         print("             (realized includes %s of dividends on HELM-held shares)" % _money(b["dividends"]))

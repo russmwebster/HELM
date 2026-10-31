@@ -154,6 +154,7 @@ def run():
                 ("DIVIDEND", "To book -- dividends on HELM-held shares (counted in the sleeve)"),
                 ("OPEN", "To book -- opened at Fidelity (new positions, PMCC shorts, rolls)"),
                 ("PRICE_FIX", "To correct -- entry prices on open positions"),
+                ("FEE_FILL", "To record -- opening fees of trades already in HELM (net of fees from 10/24)"),
                 ("MATCHED", "Already in HELM (recorded so they aren't checked again)"),
                 ("REPORT", "Not booked -- for you to look at"))
     for kind, title in sections:

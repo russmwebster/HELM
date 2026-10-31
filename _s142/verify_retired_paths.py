@@ -70,8 +70,11 @@ def diff(a, b):
     for (t,) in c.execute("SELECT name FROM main.sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"):
         if not c.execute("SELECT 1 FROM o.sqlite_master WHERE name=?", (t,)).fetchone():
             out.add(t); continue
-        n = c.execute('SELECT (SELECT COUNT(*) FROM (SELECT * FROM main."%s" EXCEPT SELECT * FROM o."%s")) + '
-                      '(SELECT COUNT(*) FROM (SELECT * FROM o."%s" EXCEPT SELECT * FROM main."%s"))' % (t, t, t, t)).fetchone()[0]
+        try:
+            n = c.execute('SELECT (SELECT COUNT(*) FROM (SELECT * FROM main."%s" EXCEPT SELECT * FROM o."%s")) + '
+                          '(SELECT COUNT(*) FROM (SELECT * FROM o."%s" EXCEPT SELECT * FROM main."%s"))' % (t, t, t, t)).fetchone()[0]
+        except sqlite3.OperationalError:
+            n = 1            # its columns changed (s142: broker_fills.downloaded_at) -- a change
         if n:
             out.add(t)
     c.close()
