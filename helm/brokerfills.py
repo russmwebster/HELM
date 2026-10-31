@@ -341,6 +341,36 @@ def read_export(path, ira_hash=None):
     return Export(path, fmt, parsed.fills, _fill_keys(parsed.fills), parsed.skipped, False, False)
 
 
+_DOWNLOADED = re.compile(r"Date downloaded\s+([A-Za-z]{3})-(\d{1,2})-(\d{4})")
+
+
+def read_positions(path):
+    """s142: a Portfolio_Positions download -> {"path", "downloaded" (ISO date or
+    None), "shares": {ticker: shares}} for the Rollover IRA's share lines only
+    (options, cash and pending lines left out). Read-only; no account number kept."""
+    with open(path, newline="", encoding="utf-8-sig") as handle:
+        raw = handle.read()
+    hit = _DOWNLOADED.search(raw)
+    downloaded = None
+    if hit:
+        try:
+            downloaded = datetime.strptime("%s-%s-%s" % hit.groups(), "%b-%d-%Y").date().isoformat()
+        except ValueError:
+            downloaded = None
+    shares = {}
+    for row in csv.DictReader(io.StringIO(raw.lstrip("\ufeff").lstrip("\r\n"))):
+        if (row.get("Account name") or "").strip() != IRA_NAME:
+            continue
+        sym = (row.get("Symbol") or "").strip()
+        if not sym or sym.startswith("-") or "*" in sym or not re.match(r"^[A-Z.]+$", sym):
+            continue
+        q = _num(row.get("Quantity"))
+        if q is None:
+            continue
+        shares[sym] = shares.get(sym, 0) + int(round(q))
+    return {"path": path, "downloaded": downloaded, "shares": shares}
+
+
 def merge_key(f):
     """Split fills of one order: same day, contract, leg direction, event."""
     return (f.event, f.as_of, f.ticker, f.expiration, f.option_type, f.strike, f.leg_direction)

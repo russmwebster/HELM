@@ -17,8 +17,14 @@ original stays OPEN with the rest -- its leg, total_contracts and net_premium cu
 to what is left; its readings and entry snapshot stay with it. Every reader of an
 open position keeps seeing an ordinary one-leg trade. Same-day pieces of one
 order were already merged into one fill (brokerfills.merge_option_fills).
-It REPORTS, and does not book, called-away shares, exercises, partial assignments
-and share/dividend rows (later in stage 2).
+s142 also books CALLED-AWAY shares (a covered call's ASSIGNED row with its "YOU
+SOLD ASSIGNED CALLS" share row; helm/assignment.book_call) and DIVIDENDS on
+HELM-held shares (helm_dividends: HELM's share = the dividend x HELM's shares /
+the account's shares, from a Portfolio_Positions download dated within
+POSITIONS_DAYS of the dividend; otherwise it asks for one). Money-market interest
+and dividends on names HELM doesn't hold are not HELM's.
+It REPORTS, and does not book, exercises, partial assignments, an early-assigned
+PMCC short and other share rows.
 
     plan(conn, exports, ...)  -> Plan        read-only
     apply(plan, db_path)      -> list[str]   writes; the CLI takes the backup
@@ -32,6 +38,7 @@ nothing. Commission and fees are stored there per row -- net P&L is stage 3.
 """
 from __future__ import annotations
 
+import os
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -42,6 +49,22 @@ CUTOFF = "2026-10-24"
 PRICE_TOL = 0.005          # a cent rounds; anything at or above half a cent is a difference
 FILL_TIME = "16:00:00"
 SINGLE_LEG = ("CSP", "COVERED_CALL", "LONG_CALL", "LONG_PUT")
+POSITIONS_DAYS = 7         # s142: a Positions download this close to a dividend gives the account's shares
+
+HELM_DIVIDENDS_DDL = """
+CREATE TABLE IF NOT EXISTS helm_dividends (
+    fill_key        TEXT PRIMARY KEY,     -- the dividend row's broker_fills key
+    ticker          TEXT NOT NULL,
+    paid_on         TEXT NOT NULL,        -- the row's date (the pay date)
+    gross           REAL NOT NULL,        -- the whole dividend the account received
+    helm_shares     INTEGER NOT NULL,     -- HELM's shares (stock_positions) that day
+    account_shares  INTEGER NOT NULL,     -- the account's shares, from the Positions download
+    helm_amount     REAL NOT NULL,        -- gross x helm_shares / account_shares: what the sleeve counts
+    positions_file  TEXT,                 -- which Positions download (name masked)
+    positions_date  TEXT,                 -- its download date
+    imported_at     TEXT NOT NULL,
+    note            TEXT
+)"""
 
 BROKER_FILLS_DDL = """
 CREATE TABLE IF NOT EXISTS broker_fills (
@@ -92,7 +115,8 @@ class Item:
     fills: list = field(default_factory=list)     # [(fill, key, source)] recorded on apply
     fix: dict = None          # PRICE_FIX: {leg_id, old, new, net_premium_old, net_premium_new}
     open: dict = None         # OPEN (s141): {strategy, legs, contracts, flags, grade, parent}
-    split: dict = None        # PARTIAL_CLOSE (s142): {leg_id, have, close}; POSITION_CLOSE after one: {leg_id, have}
+    split: dict = None        # PARTIAL_CLOSE (s142): {leg_id, have, close}; POSITION_CLOSE after one: {after}
+    div: dict = None          # DIVIDEND (s142): the helm_dividends row
 
 
 @dataclass
@@ -106,7 +130,7 @@ class Plan:
     @property
     def writes(self):
         return [i for i in self.items if i.kind in ("LEG_CLOSE", "POSITION_CLOSE", "PARTIAL_CLOSE", "PRICE_FIX",
-                                                    "MATCHED", "ASSIGN",
+                                                    "MATCHED", "ASSIGN", "CALL_AWAY", "DIVIDEND",
                                                     "OPEN")]
 
 
@@ -189,6 +213,110 @@ def _assign_item(conn, rows, row_keys, src_of, seen, label, tk, as_of, exp, stri
                 legs=[(live[0]["id"], 0.0, "ASSIGNED")])
 
 
+def _call_away_item(conn, rows, row_keys, src_of, seen, label, tk, as_of, exp, strike, q, cands, fl):
+    """s142: a short call ASSIGNED. Booked (helm/assignment.book_call) only with its
+    share row -- "YOU SOLD ASSIGNED CALLS AS OF ..." on the same date, 100 x
+    contracts shares at the strike -- and exactly one open real covered call that
+    matches it in full. An early-assigned PMCC short, a partial call-away and
+    anything else is a REPORT."""
+    shares = [(f, k) for f, k in zip(rows, row_keys)
+              if not f.is_option and f.ticker == tk and f.as_of == as_of and k not in seen
+              and "ASSIGNED CALLS" in (f.raw_action or "").upper()]
+    n_sh = sum(abs(int(f.qty or 0)) for f, _ in shares)
+    done = [l for l in cands if l["status"] == "CLOSED" and (l["close_date"] or "")[:10] == as_of
+            and l["strategy"] == "COVERED_CALL"]
+    allf = fl + [(f, k, src_of[k]) for f, k in shares]
+    if done and sum(l["contracts"] for l in done) == q:
+        return Item("MATCHED", "%s called away -- already booked in HELM" % label, ticker=tk,
+                    position_id=done[0]["position_id"], fills=allf, as_of=as_of)
+    live_all = [l for l in cands if l["status"] == "OPEN" and l["pstatus"] == "OPEN"]
+    live = [l for l in live_all if l["strategy"] == "COVERED_CALL"]
+    if not live and any(l["strategy"] in ("PMCC", "DIAGONAL") for l in live_all):
+        return Item("REPORT", "%s -- the PMCC's short call was assigned early; not booked (decide by hand: "
+                    "exercise the long or buy the shares)" % label, ticker=tk)
+    if not shares or n_sh != 100 * q:
+        return Item("REPORT", "%s short call assigned -- its share row (%d shares expected, %d found) isn't in "
+                    "this download; not booked" % (label, 100 * q, n_sh), ticker=tk)
+    bad = [f for f, _ in shares if f.price is None or abs(f.price - float(strike)) >= PRICE_TOL]
+    if bad:
+        return Item("REPORT", "%s short call assigned -- the shares left at %s, not the %g strike; not booked"
+                    % (label, _fmt(bad[0].price), strike), ticker=tk)
+    if len(live) != 1 or live[0]["contracts"] != q:
+        return Item("REPORT", "%s short call assigned -- %d open HELM covered calls match (%s contracts); a partial "
+                    "call-away isn't booked; refused" % (label, len(live), "/".join(str(l["contracts"]) for l in live)
+                                                         or "none"), ticker=tk)
+    from helm import assignment as A
+    try:
+        v = A.preview_call(conn, live[0]["position_id"])
+    except ValueError as e:
+        return Item("REPORT", "%s short call assigned -- %s; not booked" % (label, e), ticker=tk)
+    return Item("CALL_AWAY", "%s CALLED AWAY: call closes at 0.00 (premium $%s kept); %d %s shares out at %g "
+                "(HELM paid %.2f: $%s); realized $%s%s" % (
+                    label, "{:,.2f}".format(v["premium"]), v["shares"], tk, float(strike), v["cost_basis"],
+                    "{:,.2f}".format(v["share_result"]), "{:,.2f}".format(v["realized"]),
+                    "; %d shares stay" % v["shares_left"] if v["shares_left"] else ""),
+                position_id=live[0]["position_id"], ticker=tk, pnl=v["realized"], as_of=as_of, fills=allf,
+                legs=[(live[0]["id"], 0.0, "ASSIGNED")])
+
+
+def _days(a, b):
+    from datetime import date
+    return abs((date.fromisoformat(a[:10]) - date.fromisoformat(b[:10])).days)
+
+
+def dividend_items(conn, rows, row_keys, src_of, seen, cutoff, positions):
+    """s142: (items, notes) for DIVIDEND RECEIVED rows from `cutoff`. HELM's only when
+    stock_positions holds the ticker (acquired on or before the row's date); then it
+    needs a Positions download dated within POSITIONS_DAYS for the account's shares."""
+    items, other = [], 0
+    has_sp = _has_table(conn, "stock_positions")
+    for f, k in zip(rows, row_keys):
+        if f.is_option or k in seen or f.as_of < cutoff:
+            continue
+        if not (f.raw_action or "").upper().startswith("DIVIDEND RECEIVED"):
+            continue
+        tk = (f.ticker or "").strip()
+        sp = conn.execute("SELECT * FROM stock_positions WHERE ticker=?", (tk,)).fetchone() if has_sp else None
+        held = int(sp["shares"] or 0) if sp and (sp["acquired_at"] or "")[:10] <= f.as_of else 0
+        label = "%s %s dividend $%s" % (f.as_of, tk, "{:,.2f}".format(f.amount or 0))
+        if not held:
+            gone = conn.execute(
+                "SELECT substr(l.close_date,1,10) d FROM legs l JOIN positions p ON p.id=l.position_id "
+                "WHERE p.book='REAL' AND p.ticker=? AND l.leg_role='LONG_STOCK' AND l.status='CLOSED' "
+                "AND substr(l.close_date,1,10) <= ? AND substr(l.close_date,1,10) >= date(?, '-60 days') "
+                "ORDER BY l.close_date DESC LIMIT 1", (tk, f.as_of, f.as_of)).fetchone()
+            if gone:
+                items.append(Item("REPORT", "%s -- HELM's %s shares were called away on %s; if the ex-dividend date "
+                                  "was before that, part of this is HELM's. Not booked" % (label, tk, gone["d"]),
+                                  ticker=tk))
+            else:
+                other += 1
+            continue
+        near = [x for x in (positions or []) if x.get("downloaded") and _days(x["downloaded"], f.as_of) <= POSITIONS_DAYS]
+        if not near:
+            items.append(Item("REPORT", "%s on HELM's %d shares -- no Positions download within %d days of it, so "
+                              "the account's %s shares aren't known; download Positions and run again"
+                              % (label, held, POSITIONS_DAYS, tk), ticker=tk))
+            continue
+        pos = min(near, key=lambda x: (_days(x["downloaded"], f.as_of), x["downloaded"] < f.as_of))
+        acct = int(pos["shares"].get(tk, 0))
+        if acct < held:
+            items.append(Item("REPORT", "%s -- the Positions download of %s shows %d %s shares, fewer than HELM's %d; "
+                              "not booked" % (label, pos["downloaded"], acct, tk, held), ticker=tk))
+            continue
+        amt = round(float(f.amount or 0) * held / acct, 2)
+        nm = B.mask_name(os.path.basename(pos["path"]))
+        items.append(Item("DIVIDEND", "%s: HELM's share $%s (%d of the account's %d shares, Positions of %s)"
+                          % (label, "{:,.2f}".format(amt), held, acct, pos["downloaded"]), ticker=tk, pnl=amt,
+                          as_of=f.as_of, fills=[(f, k, src_of[k])],
+                          div={"fill_key": k, "ticker": tk, "paid_on": f.as_of, "gross": float(f.amount or 0),
+                               "helm_shares": held, "account_shares": acct, "helm_amount": amt,
+                               "positions_file": nm, "positions_date": pos["downloaded"]}))
+    notes = (["%d dividend row(s) from %s on names HELM holds no shares in -- not HELM's (money-market interest "
+              "never is)" % (other, cutoff)] if other else [])
+    return items, notes
+
+
 PARTIAL_OK = ("CSP", "COVERED_CALL")
 
 
@@ -268,8 +396,9 @@ def split_off(conn, position_id, leg_id, have, k, now):
     return new_pid, new_lid
 
 
-def plan(conn, exports, cutoff=CUTOFF, reasons=None):
-    """exports: [brokerfills.Export]. reasons: {position_id: EXIT_REASON}."""
+def plan(conn, exports, cutoff=CUTOFF, reasons=None, positions=None):
+    """exports: [brokerfills.Export]. reasons: {position_id: EXIT_REASON}.
+    positions: [brokerfills.read_positions(...)] -- the account's shares, for dividends."""
     reasons = reasons or {}
     seen = known_keys(conn)
     items, history, notes = [], [], []
@@ -320,6 +449,10 @@ def plan(conn, exports, cutoff=CUTOFF, reasons=None):
         if event == "ASSIGNED" and otype == "PUT" and direction == "SHORT":
             items.append(_assign_item(conn, rows, row_keys, src_of, seen, label, tk, as_of, exp, strike, q,
                                       cands, fl))
+            continue
+        if event == "ASSIGNED" and otype == "CALL" and direction == "SHORT":
+            items.append(_call_away_item(conn, rows, row_keys, src_of, seen, label, tk, as_of, exp, strike, q,
+                                         cands, fl))
             continue
         if event in ("ASSIGNED", "EXERCISED"):
             items.append(Item("REPORT", "%s %s -- %s; %s booked in stage 2" % (
@@ -411,6 +544,11 @@ def plan(conn, exports, cutoff=CUTOFF, reasons=None):
                     l["strike"], (l["expiration"] or "")[:10], _fmt(l["open_price"]), _fmt(pr),
                     "{:,.2f}".format(pnl)), position_id=pid, ticker=p["ticker"], legs=[(l["id"], pr, lr)],
                     pnl=pnl, as_of=as_of, fills=fl))
+
+    # ------------------------------------------------------ s142: dividends
+    d_items, d_notes = dividend_items(conn, rows, row_keys, src_of, seen, cutoff, positions)
+    items.extend(d_items)
+    notes.extend(d_notes)
 
     # ------------------------------------------------- s141: new opens and rolls
     if pending_opens:
@@ -531,6 +669,7 @@ def _record(conn, fills, outcome, position_id, leg_id, note, now):
 def ensure_schema(conn, ira_hash):
     """broker_fills + the IRA's account hash. Refuses a different hash."""
     conn.execute(BROKER_FILLS_DDL)
+    conn.execute(HELM_DIVIDENDS_DDL)
     have = stored_ira_hash(conn)
     if have is None and ira_hash:
         conn.execute("INSERT INTO helm_meta (key, value) VALUES (?, ?)", (B.ACCOUNT_HASH_KEY, ira_hash))
@@ -603,6 +742,30 @@ def apply(p, db_path=None, ira_hash=None):
             leg.save()
             it.position_id = new_pid
             it.legs = [(new_lid, it.legs[0][1], it.legs[0][2])]
+        elif it.kind == "CALL_AWAY":
+            from helm import assignment as A
+            c2 = get_conn(db_path) if db_path else get_conn()
+            try:
+                lid = it.legs[0][0]
+                if c2.execute("SELECT status FROM legs WHERE id=?", (lid,)).fetchone()[0] != "OPEN":
+                    raise RuntimeError("%s: the call is no longer open -- stopped; nothing more written" % it.ticker)
+                A.book_call(c2, it.position_id, when, label)
+            finally:
+                c2.close()
+        elif it.kind == "DIVIDEND":
+            d = it.div
+            c2 = get_conn(db_path) if db_path else get_conn()
+            try:
+                sp = c2.execute("SELECT shares FROM stock_positions WHERE ticker=?", (d["ticker"],)).fetchone()
+                if sp is None or int(sp[0]) != d["helm_shares"]:
+                    raise RuntimeError("%s: HELM's shares changed since the plan -- stopped" % d["ticker"])
+                c2.execute("INSERT INTO helm_dividends (fill_key, ticker, paid_on, gross, helm_shares, account_shares, "
+                           "helm_amount, positions_file, positions_date, imported_at, note) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                           (d["fill_key"], d["ticker"], d["paid_on"], d["gross"], d["helm_shares"], d["account_shares"],
+                            d["helm_amount"], d["positions_file"], d["positions_date"], now, "Fidelity import"))
+                c2.commit()
+            finally:
+                c2.close()
         elif it.kind == "ASSIGN":
             from helm import assignment as A
             c2 = get_conn(db_path) if db_path else get_conn()

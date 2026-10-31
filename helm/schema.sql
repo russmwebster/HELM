@@ -1152,6 +1152,22 @@ CREATE TABLE IF NOT EXISTS broker_fills (
     note         TEXT
 );
 
+-- s142 (2026-10-31): HELM's share of dividends on HELM-held shares (helm/fillimport.py writes it;
+-- helm/sleeve.py counts it in the realized total). Also created by fillimport.ensure_schema.
+CREATE TABLE IF NOT EXISTS helm_dividends (
+    fill_key        TEXT PRIMARY KEY,     -- the dividend row's broker_fills key
+    ticker          TEXT NOT NULL,
+    paid_on         TEXT NOT NULL,        -- the row's date (the pay date)
+    gross           REAL NOT NULL,        -- the whole dividend the account received
+    helm_shares     INTEGER NOT NULL,     -- HELM's shares (stock_positions) that day
+    account_shares  INTEGER NOT NULL,     -- the account's shares, from the Positions download
+    helm_amount     REAL NOT NULL,        -- gross x helm_shares / account_shares: what the sleeve counts
+    positions_file  TEXT,                 -- which Positions download (name masked)
+    positions_date  TEXT,                 -- its download date
+    imported_at     TEXT NOT NULL,
+    note            TEXT
+);
+
 -- s138 (2026-10-28): the put tool's record (helm/puttool.py writes these; nothing reads them with SELECT *).
 CREATE TABLE IF NOT EXISTS put_runs (
     id            TEXT PRIMARY KEY,

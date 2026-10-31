@@ -106,7 +106,18 @@ def realized_since(conn, start=None):
             missing.append(r["id"])
         else:
             total += v
+    total += dividends_since(conn, start)   # s142: dividends on HELM-held shares count when paid
     return total, len(rows), missing
+
+
+def dividends_since(conn, start=None):
+    """s142: HELM's share of dividends paid from `start` (helm_dividends, booked by
+    the Fidelity import). Collateral interest is never in it."""
+    start = start or SLEEVE_START
+    if not _has_table(conn, "helm_dividends"):
+        return 0.0
+    return float(conn.execute("SELECT COALESCE(SUM(helm_amount),0) FROM helm_dividends WHERE paid_on >= ?",
+                              (start,)).fetchone()[0])
 
 
 def in_use_items(conn, account_id=None):
@@ -143,6 +154,7 @@ def book(account_id=None, db=None):
     conn = _conn(db)
     try:
         realized, n_legs, missing = realized_since(conn)
+        dividends = dividends_since(conn)
         share = SLEEVE_BASE + realized
         items = in_use_items(conn, account_id)
         by_name, by_sector, sectors = {}, {}, {}
@@ -160,6 +172,7 @@ def book(account_id=None, db=None):
         return {
             "share": share, "base": SLEEVE_BASE, "start": SLEEVE_START,
             "realized": realized, "realized_legs": n_legs, "realized_missing_price": missing,
+            "dividends": dividends,
             "basis": "gross (until the Fidelity import)",
             "used": used, "free": share - used,
             "name_cap": name_cap, "sector_cap": sector_cap,
@@ -295,7 +308,20 @@ def _selftest():
     n, bd, note = size("CSP", "GOOG", 26561, db=db, b=b)
     ok(n == 0 and "GOOG + GOOGL has $26,560 of room under the 20% name limit ($33,500 used" in note,
        "$1 over the company's room is declined: %s" % note)
-    print("sleeve selftest:", "PASS (%d checks)" % 14 if not fails else "%d FAIL" % len(fails))
+    # s142: HELM's dividends count in the realized total when paid, from 10/24
+    ok(b["dividends"] == 0.0, "no dividends table -> no dividends")
+    c = sqlite3.connect(db)
+    c.executescript("""
+      CREATE TABLE helm_dividends (fill_key TEXT PRIMARY KEY, ticker TEXT, paid_on TEXT, gross REAL,
+                                   helm_shares INT, account_shares INT, helm_amount REAL);
+      INSERT INTO helm_dividends VALUES ('d1','AAA','2026-10-23',90,100,100,90),
+                                        ('d2','AAA','2026-11-02',50,100,200,25);
+    """)
+    c.commit(); c.close()
+    b2 = book(db=db)
+    ok(b2["dividends"] == 25.0 and b2["realized"] == 325.0 and b2["share"] == 300325.0,
+       "a dividend paid from 10/24 counts (HELM's $25 of $50), one paid 10/23 does not: %s" % b2["realized"])
+    print("sleeve selftest:", "PASS (%d checks)" % 16 if not fails else "%d FAIL" % len(fails))
     return 1 if fails else 0
 
 
@@ -303,6 +329,8 @@ def _report(account_id=None, db=None):
     b = book(account_id, db)
     print("HELM sleeve  %s  (base %s + realized since %s %s, %s)" % (
         _money(b["share"]), _money(b["base"]), b["start"], _money(b["realized"]), b["basis"]))
+    if b.get("dividends"):
+        print("             (realized includes %s of dividends on HELM-held shares)" % _money(b["dividends"]))
     print("in use       %s   free %s" % (_money(b["used"]), _money(b["free"])))
     print("limits       one name %s (20%%)   one sector %s (30%%)" % (_money(b["name_cap"]), _money(b["sector_cap"])))
     print("\nby name")

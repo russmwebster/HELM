@@ -12,8 +12,11 @@ keeps the Rollover IRA's rows only, and never stores or prints the account numbe
 (HELM keeps a fingerprint of it). Fills from 2026-10-24 are booked; earlier ones are
 compared and reported. OPEN positions get their entry prices corrected to the fill;
 closed positions are never changed. Assigned short puts are booked (s138: the put
-closes at 0.00, the shares go in at the strike). New opens, called-away shares and
-dividends are reported and booked in stage 2. The planner and writer are helm/fillimport.py.
+closes at 0.00, the shares go in at the strike). New opens and rolls are booked (s141);
+partial closes, called-away shares and dividends on HELM-held shares (s142) too --
+a dividend reads the account's shares from the Portfolio_Positions download in
+Downloads dated nearest it (within a week; otherwise it asks for one). The planner
+and writer are helm/fillimport.py.
 
 (`helm import` is HELM's original positions-onboarding import -- a different job.)
 """
@@ -41,6 +44,17 @@ def _pick(path):
     cands = glob.glob(os.path.join(d, "History_for_Account_*.csv")) + glob.glob(os.path.join(d, "Accounts_History*.csv"))
     cands.sort(key=os.path.getmtime, reverse=True)
     return (cands[0] if cands else None), cands[1:]
+
+
+def _positions(B):
+    """s142: every Portfolio_Positions download in Downloads, read (the account's shares)."""
+    out = []
+    for c in glob.glob(os.path.join(_downloads(), "Portfolio_Positions*.csv")):
+        try:
+            out.append(B.read_positions(c))
+        except Exception:      # noqa: BLE001 -- an unreadable file is simply not used
+            continue
+    return out
 
 
 def _learn_hash(B):
@@ -119,13 +133,14 @@ def run():
         if learned and have is None:
             console.print("[dim]Rollover IRA identified from %s; HELM will keep a fingerprint of its number, "
                           "never the number.[/dim]" % B.mask_name(learned_from))
-        p = FI.plan(conn, [exp], reasons=reasons)
+        p = FI.plan(conn, [exp], reasons=reasons, positions=_positions(B))
     finally:
         conn.close()
 
     opts = sum(1 for f in exp.fills if f.is_option)
     console.print("[dim]Rollover IRA: %d rows (%d option fills), %s to %s; booking from %s. "
-                  "Share rows are read only to book an assignment; cash and dividend rows aren't read yet.[/dim]" % (
+                  "Share rows are read only to book an assignment or a call-away; dividend rows only on HELM-held shares; "
+                  "cash rows aren't read.[/dim]" % (
                       len(exp.fills), opts, min((f.as_of for f in exp.fills), default="—"),
                       max((f.as_of for f in exp.fills), default="—"), FI.CUTOFF))
     for n in p.notes:
@@ -135,6 +150,8 @@ def run():
                 ("PARTIAL_CLOSE", "To book -- part of a position closed (the closed part becomes its own position)"),
                 ("LEG_CLOSE", "To book -- legs closed"),
                 ("ASSIGN", "To book -- puts assigned (shares into HELM)"),
+                ("CALL_AWAY", "To book -- covered calls assigned (shares called away)"),
+                ("DIVIDEND", "To book -- dividends on HELM-held shares (counted in the sleeve)"),
                 ("OPEN", "To book -- opened at Fidelity (new positions, PMCC shorts, rolls)"),
                 ("PRICE_FIX", "To correct -- entry prices on open positions"),
                 ("MATCHED", "Already in HELM (recorded so they aren't checked again)"),
