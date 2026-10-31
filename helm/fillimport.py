@@ -10,8 +10,15 @@ Rulebook v0.2 section 12.1, as Russ decided it on 10-26:
 Stage 1 books closes, leg closes and expiries; s138 adds ASSIGNED short puts
 (the option row and its "YOU BOUGHT ASSIGNED PUTS" share row, booked by
 helm/assignment.py). s141 (stage 2) books new opens and rolls (helm/fillopens.py).
-It REPORTS, and does not book, called-away shares, exercises and share/dividend
-rows (later in stage 2).
+s142 books PARTIAL closes of a one-leg put or covered call by splitting the
+position: the closed contracts become their own CLOSED position (tag
+split_from:<id>, its share of the premium, closed through _finalize_close), the
+original stays OPEN with the rest -- its leg, total_contracts and net_premium cut
+to what is left; its readings and entry snapshot stay with it. Every reader of an
+open position keeps seeing an ordinary one-leg trade. Same-day pieces of one
+order were already merged into one fill (brokerfills.merge_option_fills).
+It REPORTS, and does not book, called-away shares, exercises, partial assignments
+and share/dividend rows (later in stage 2).
 
     plan(conn, exports, ...)  -> Plan        read-only
     apply(plan, db_path)      -> list[str]   writes; the CLI takes the backup
@@ -74,7 +81,7 @@ def stored_ira_hash(conn):
 
 @dataclass
 class Item:
-    kind: str                 # LEG_CLOSE | POSITION_CLOSE | PRICE_FIX | MATCHED | ASSIGN | OPEN | REPORT
+    kind: str                 # LEG_CLOSE | POSITION_CLOSE | PARTIAL_CLOSE | PRICE_FIX | MATCHED | ASSIGN | OPEN | REPORT
     text: str                 # one plain line for the trader
     position_id: str = None
     ticker: str = None
@@ -85,6 +92,7 @@ class Item:
     fills: list = field(default_factory=list)     # [(fill, key, source)] recorded on apply
     fix: dict = None          # PRICE_FIX: {leg_id, old, new, net_premium_old, net_premium_new}
     open: dict = None         # OPEN (s141): {strategy, legs, contracts, flags, grade, parent}
+    split: dict = None        # PARTIAL_CLOSE (s142): {leg_id, have, close}; POSITION_CLOSE after one: {leg_id, have}
 
 
 @dataclass
@@ -97,7 +105,8 @@ class Plan:
 
     @property
     def writes(self):
-        return [i for i in self.items if i.kind in ("LEG_CLOSE", "POSITION_CLOSE", "PRICE_FIX", "MATCHED", "ASSIGN",
+        return [i for i in self.items if i.kind in ("LEG_CLOSE", "POSITION_CLOSE", "PARTIAL_CLOSE", "PRICE_FIX",
+                                                    "MATCHED", "ASSIGN",
                                                     "OPEN")]
 
 
@@ -180,6 +189,85 @@ def _assign_item(conn, rows, row_keys, src_of, seen, label, tk, as_of, exp, stri
                 legs=[(live[0]["id"], 0.0, "ASSIGNED")])
 
 
+PARTIAL_OK = ("CSP", "COVERED_CALL")
+
+
+def _partial_item(conn, leg, q, price, event, label, tk, as_of, fl, reasons, left):
+    """s142: Fidelity closed q of the leg's contracts. Booked as a split only for a
+    one-leg put or covered call closed (not expired) for fewer contracts than HELM
+    holds; anything else is a REPORT."""
+    have = leg["contracts"]
+    why = None
+    if event != "CLOSE":
+        why = "an expiry of %d of HELM's %d contracts -- the counts disagree" % (q, have)
+    elif q > have:
+        why = "Fidelity closed %d, HELM's leg has only %d" % (q, have)
+    elif leg["strategy"] not in PARTIAL_OK:
+        why = "a partial close on a %s isn't booked -- only puts and covered calls" % leg["strategy"].lower()
+    elif conn.execute("SELECT COUNT(*) FROM legs WHERE position_id=? AND status='OPEN'",
+                      (leg["position_id"],)).fetchone()[0] != 1:
+        why = "the position has more than one open leg"
+    if why:
+        return Item("REPORT", "%s -- HELM's leg has %d contracts, Fidelity closed %d: %s; book by hand"
+                    % (label, have, q, why), ticker=tk)
+    pnl = _leg_pnl(leg["direction"], leg["open_price"], price, q, leg["multiplier"] or 100)
+    one = dict(leg, contracts=q)
+    reason = reasons.get(leg["position_id"]) or _position_reason(leg["strategy"], [(one, price)], False)
+    left[leg["id"]] = have - q
+    return Item("PARTIAL_CLOSE", "%s %s %s PARTLY CLOSED: %d of %d -- %s %g %s %s -> %s; realized $%s (reason %s); "
+                "%d stay open" % (as_of, tk, leg["strategy"].lower().replace("_", " "), q, have,
+                                  leg["direction"].lower(), leg["strike"], (leg["expiration"] or "")[:10],
+                                  _fmt(leg["open_price"]), _fmt(price), "{:,.2f}".format(pnl), reason, have - q),
+                position_id=leg["position_id"], ticker=tk, legs=[(leg["id"], price, "DISCRETIONARY")],
+                reason=reason, pnl=pnl, as_of=as_of, fills=fl, split={"leg_id": leg["id"], "have": have, "close": q})
+
+
+def split_off(conn, position_id, leg_id, have, k, now):
+    """s142: move k of an open one-leg position's `have` contracts to a new OPEN
+    position (same trade, its share of the premium), and cut the original to
+    have - k. One transaction on `conn`; the caller commits, then closes the new
+    position through close_cmd._finalize_close. Returns (new_pid, new_leg_id).
+    Refuses unless the rows are exactly as planned."""
+    from helm.models.position import Position
+    from helm.models.leg import Leg
+    p = conn.execute("SELECT * FROM positions WHERE id=?", (position_id,)).fetchone()
+    l = conn.execute("SELECT * FROM legs WHERE id=?", (leg_id,)).fetchone()
+    n_open = conn.execute("SELECT COUNT(*) FROM legs WHERE position_id=? AND status='OPEN'", (position_id,)).fetchone()[0]
+    if (p is None or l is None or p["status"] != "OPEN" or l["status"] != "OPEN" or l["position_id"] != position_id
+            or int(l["contracts"]) != int(have) or n_open != 1 or not (0 < k < have)):
+        raise RuntimeError("%s: the position is no longer as planned (%s open, leg %s x%s) -- stopped"
+                           % (position_id, p and p["status"], l and l["status"], l and l["contracts"]))
+    npo = p["net_premium"]
+    piece_np = None if npo is None else round(npo * k / have, 2)
+    keep_np = None if npo is None else round(npo - piece_np, 2)
+    new_pid = Position.new_id(p["ticker"], p["strategy"])
+    new_lid = Leg.new_id(new_pid, l["leg_role"])
+    tag = "split_from:%s" % position_id
+    pr = dict(p)
+    pr.update(id=new_pid, total_contracts=k, net_premium=piece_np, realized_pnl=None, signal_id=None,
+              tags=(pr["tags"] + "," if pr["tags"] else "") + tag, created_at=now, updated_at=now,
+              notes=((pr["notes"] + " | ") if pr["notes"] else "") + (
+                  "Fidelity import %s: %d of %d contracts closed early, split off %s; its readings and entry "
+                  "snapshot stay on %s" % (now[:10], k, have, position_id, position_id)))
+    cols = list(pr)
+    conn.execute("INSERT INTO positions (%s) VALUES (%s)" % (",".join(cols), ",".join("?" * len(cols))),
+                 [pr[c] for c in cols])
+    lr = dict(l)
+    lr.update(id=new_lid, position_id=new_pid, contracts=k, created_at=now,
+              notes=((lr["notes"] + " | ") if lr["notes"] else "") + "split from %s (%d of %d)" % (leg_id, k, have))
+    cols = list(lr)
+    conn.execute("INSERT INTO legs (%s) VALUES (%s)" % (",".join(cols), ",".join("?" * len(cols))),
+                 [lr[c] for c in cols])
+    conn.execute("UPDATE legs SET contracts=?, notes=COALESCE(notes || ' | ', '') || ? WHERE id=? AND status='OPEN'",
+                 (have - k, "Fidelity import %s: %d of %d closed early, split off to %s" % (now[:10], k, have, new_pid),
+                  leg_id))
+    conn.execute("UPDATE positions SET total_contracts=?, net_premium=?, updated_at=?, "
+                 "notes=COALESCE(notes || ' | ', '') || ? WHERE id=? AND status='OPEN'",
+                 (have - k, keep_np, now, "Fidelity import %s: %d of %d contracts closed early -> %s; premium %s -> %s"
+                  % (now[:10], k, have, new_pid, npo, keep_np), position_id))
+    return new_pid, new_lid
+
+
 def plan(conn, exports, cutoff=CUTOFF, reasons=None):
     """exports: [brokerfills.Export]. reasons: {position_id: EXIT_REASON}."""
     reasons = reasons or {}
@@ -209,6 +297,7 @@ def plan(conn, exports, cutoff=CUTOFF, reasons=None):
 
     # ---------------------------------------------------- new fills (>= cutoff)
     closing = {}   # position_id -> [(leg, price, leg_reason, group)]
+    left = {}      # s142: leg_id -> contracts still open after a partial close earlier in this run
     pending_opens = []   # s141: opening fills not in HELM -> helm/fillopens.classify
     for gk, g in sorted(groups.items(), key=lambda kv: (kv[0][1], kv[0][2])):
         event, as_of, tk, exp, otype, strike, direction = gk
@@ -266,6 +355,9 @@ def plan(conn, exports, cutoff=CUTOFF, reasons=None):
                               position_id=already[0]["position_id"], fills=fl, as_of=as_of))
             continue
         live = [l for l in cands if l["status"] == "OPEN" and l["pstatus"] == "OPEN"]
+        if any(l["id"] in left for l in live):   # s142: as this run's earlier partial leaves it
+            live = [dict(l, contracts=left[l["id"]]) if l["id"] in left else l for l in live]
+            live = [l for l in live if l["contracts"] > 0]
         exact = [l for l in live if l["contracts"] == q]
         if len(live) == 1 and len(exact) == 1:
             leg = exact[0]
@@ -278,8 +370,7 @@ def plan(conn, exports, cutoff=CUTOFF, reasons=None):
             items.append(Item("REPORT", "%s -- %d open HELM legs could be meant; refused, book by hand"
                               % (label, len(live)), ticker=tk))
         else:
-            items.append(Item("REPORT", "%s -- HELM's leg has %d contracts, Fidelity closed %d; partial "
-                              "closes are not booked yet, book by hand" % (label, live[0]["contracts"], q), ticker=tk))
+            items.append(_partial_item(conn, live[0], q, price, event, label, tk, as_of, fl, reasons, left))
 
     for pid, cl in closing.items():
         p = conn.execute("SELECT * FROM positions WHERE id=?", (pid,)).fetchone()
@@ -310,7 +401,9 @@ def plan(conn, exports, cutoff=CUTOFF, reasons=None):
                 txt += " -- includes $%s from legs closed earlier" % "{:,.2f}".format(earlier)
             items.append(Item("POSITION_CLOSE", txt, position_id=pid, ticker=p["ticker"],
                               legs=[(l["id"], pr, lr) for l, pr, lr, _, _, _ in lines], reason=reason,
-                              pnl=total, as_of=as_of, fills=fills))
+                              pnl=total, as_of=as_of, fills=fills,
+                              split={"after": {l["id"]: l["contracts"] for l, _, _, _, _, _ in lines
+                                               if l["id"] in left}} if any(l["id"] in left for l, *_ in lines) else None))
         else:
             for l, pr, lr, pnl, ev, fl in lines:
                 items.append(Item("LEG_CLOSE", "%s %s %s leg %s %g %s %s -> %s; $%s; position stays open" % (
@@ -347,13 +440,24 @@ def plan(conn, exports, cutoff=CUTOFF, reasons=None):
         g = opens.get(c + ((l["open_date"] or "")[:10],))
         if g is None:
             continue
-        if g["contracts"] != l["contracts"]:
+        helm_n = l["contracts"]
+        sibs = [x for x in legs if x["id"] != l["id"] and _contract(x) == c
+                and (x["open_date"] or "")[:10] == (l["open_date"] or "")[:10]]
+        if g["contracts"] != helm_n and sibs:   # s142: the parts split off by a partial close
+            helm_n += sum(x["contracts"] for x in sibs)
+        if g["contracts"] != helm_n:
             items.append(Item("REPORT", "%s %s %g %s: HELM has %d contracts, Fidelity filled %d on %s -- not corrected"
                               % (l["ticker"], _otype(l).lower(), l["strike"], c[1], l["contracts"], g["contracts"],
                                  (l["open_date"] or "")[:10]), ticker=l["ticker"]))
             continue
         new = round(g["price"], 4)
         if abs(new - l["open_price"]) < PRICE_TOL:
+            continue
+        if sibs:
+            items.append(Item("REPORT", "%s %s %g %s: opened at %s in HELM, %.4g at Fidelity -- part of it was split "
+                              "off by a partial close; not corrected automatically" % (
+                                  l["ticker"], _otype(l).lower(), l["strike"], c[1], _fmt(l["open_price"]), new),
+                              ticker=l["ticker"]))
             continue
         fresh = [(f, k, src_of[k]) for f, k in zip(g["rows"], g["keys"]) if k not in seen]
         if l["status"] != "OPEN":
@@ -463,6 +567,10 @@ def apply(p, db_path=None, ira_hash=None):
             for lid, _, _ in it.legs:
                 if byid.get(lid) is None or str(byid[lid].status).upper() != "OPEN":
                     raise RuntimeError("%s: leg %s is no longer open -- stopped; nothing more written" % (it.ticker, lid))
+                exp_n = ((it.split or {}).get("after") or {}).get(lid)
+                if exp_n is not None and int(byid[lid].contracts) != int(exp_n):
+                    raise RuntimeError("%s: leg %s has %s contracts, the plan expected %s -- stopped"
+                                       % (it.ticker, lid, byid[lid].contracts, exp_n))
             if it.kind == "POSITION_CLOSE":
                 res = C._finalize_close(pos, legs, {lid: pr for lid, pr, _ in it.legs}, it.reason, when=when)
             else:
@@ -474,6 +582,27 @@ def apply(p, db_path=None, ira_hash=None):
                 leg = Leg.get(lid)
                 leg.notes = ((leg.notes + " | ") if leg.notes else "") + label
                 leg.save()
+        elif it.kind == "PARTIAL_CLOSE":
+            sp = it.split
+            c2 = get_conn(db_path) if db_path else get_conn()
+            try:
+                new_pid, new_lid = split_off(c2, it.position_id, sp["leg_id"], sp["have"], sp["close"], now)
+                c2.commit()
+            except Exception:
+                c2.rollback()
+                raise
+            finally:
+                c2.close()
+            piece = Position.get(new_pid)
+            res = C._finalize_close(piece, Leg.for_position(new_pid), {new_lid: it.legs[0][1]}, it.reason, when=when)
+            if not res.get("ok"):
+                raise RuntimeError("%s: the split-off part %s did not close (%s) -- stopped; it is OPEN, close it "
+                                   "by hand or restore the backup" % (it.ticker, new_pid, res.get("error")))
+            leg = Leg.get(new_lid)
+            leg.notes = ((leg.notes + " | ") if leg.notes else "") + label
+            leg.save()
+            it.position_id = new_pid
+            it.legs = [(new_lid, it.legs[0][1], it.legs[0][2])]
         elif it.kind == "ASSIGN":
             from helm import assignment as A
             c2 = get_conn(db_path) if db_path else get_conn()

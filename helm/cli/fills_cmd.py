@@ -131,7 +131,9 @@ def run():
     for n in p.notes:
         console.print("[dim]%s[/dim]" % n)
 
-    sections = (("POSITION_CLOSE", "To book -- positions closed"), ("LEG_CLOSE", "To book -- legs closed"),
+    sections = (("POSITION_CLOSE", "To book -- positions closed"),
+                ("PARTIAL_CLOSE", "To book -- part of a position closed (the closed part becomes its own position)"),
+                ("LEG_CLOSE", "To book -- legs closed"),
                 ("ASSIGN", "To book -- puts assigned (shares into HELM)"),
                 ("OPEN", "To book -- opened at Fidelity (new positions, PMCC shorts, rolls)"),
                 ("PRICE_FIX", "To correct -- entry prices on open positions"),
@@ -142,7 +144,7 @@ def run():
         if rows:
             console.print("\n[bold]%s[/bold]" % title)
             for it in rows:
-                console.print("  " + it.text + (("   [dim]%s[/dim]" % it.position_id) if kind == "POSITION_CLOSE" else ""))
+                console.print("  " + it.text + (("   [dim]%s[/dim]" % it.position_id) if kind in ("POSITION_CLOSE", "PARTIAL_CLOSE") else ""))
     if p.history:
         console.print("\n[bold]Before %s[/bold] -- %d difference(s) between HELM and Fidelity; report only, "
                       "closed positions are not corrected%s" % (FI.CUTOFF, len(p.history),
