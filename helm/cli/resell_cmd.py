@@ -184,7 +184,7 @@ def structural_refusal(pos, legs, strike, expiry, contracts, price, today=None):
     return None
 
 
-def record(pos, legs, strike, expiry, contracts, price, quote, frag, spot=None):
+def record(pos, legs, strike, expiry, contracts, price, quote, frag, spot=None, open_date=None, when=None):
     """Write the leg and the event, atomically. Returns the new leg id."""
     from helm import posview as PV
     from helm.db import transaction
@@ -199,16 +199,16 @@ def record(pos, legs, strike, expiry, contracts, price, quote, frag, spot=None):
     lid = Leg.new_id(pos.id, role)
     while lid in taken:                      # Leg.save is INSERT OR REPLACE:
         lid = Leg.new_id(pos.id, role)       # a 4-hex collision would overwrite
-    now = datetime.now().isoformat()
+    now = when or datetime.now().isoformat()   # s141: the import passes the trade date
     with transaction() as conn:
         if conn.execute("SELECT 1 FROM legs WHERE id=?", (lid,)).fetchone():
             raise RuntimeError(f"leg id {lid} already exists -- nothing written")
         Leg.create(position_id=pos.id, leg_role=role, direction="SHORT",
-                   open_price=float(price), open_date=date.today().isoformat(),
+                   open_price=float(price), open_date=open_date or date.today().isoformat(),
                    id=lid, option_type=otype, strike=float(strike),
                    expiration=str(expiry)[:10], contracts=int(contracts),
                    entry_delta=quote.get("delta"),
-                   notes=f"W180 step 6: short #{n} sold against {lg['id']}",
+                   notes=f"W180 step 6: short #{n} sold against {lg['id']}" + (f" | {frag}" if when else ""),
                    conn=conn)
         LifecycleEvent.record(
             pos.id, "ADJUSTED", occurred_at=now, leg_id=lid,

@@ -146,6 +146,11 @@ def open_position_with_snapshot(
     # override in its notes, written in the same transaction as the position.
     # None (every existing caller) changes nothing.
     notes_extra: Optional[str] = None,
+    # s141: the Fidelity import books the trade date (16:00, date only) and the
+    # fill's day; every other caller leaves both None and gets now, as before.
+    opened_at: Optional[str] = None,
+    open_date: Optional[str] = None,
+    notes: Optional[str] = None,          # s141: replaces the "Pending execution" line
 ) -> tuple[str, str, str]:
     """
     Create position, leg, and entry snapshot in one atomic operation.
@@ -179,12 +184,13 @@ def open_position_with_snapshot(
             ticker=ticker,
             company_name=company_name,
             status='OPEN',
-            opened_at=now,
+            opened_at=opened_at or now,
             total_contracts=contracts,
             net_premium=net_premium,
             book=book,
             origin_screen=origin_screen,
-            notes=(f"Pending execution — opened via HELM on {today}"
+            notes=(notes if notes else
+                   f"Pending execution — opened via HELM on {today}"
                    + (f" -- {notes_extra}" if notes_extra else "")),
             conn=conn,
         )
@@ -197,7 +203,7 @@ def open_position_with_snapshot(
             leg_role=leg_role,
             direction=direction,
             open_price=fill_price,
-            open_date=today,
+            open_date=open_date or today,
             option_type=opt_type,
             strike=contract["strike"],
             expiration=contract["expiration"],
@@ -302,6 +308,7 @@ def open_multileg_with_snapshot(
     position_fields: Optional[dict] = None,
     pricing_source: Optional[str] = None,
     opened_at: Optional[str] = None,
+    open_date: Optional[str] = None,      # s141: the fill's day (Fidelity import)
     notes: Optional[str] = None,
 ) -> tuple:
     """
@@ -384,7 +391,7 @@ def open_multileg_with_snapshot(
                 leg_role=leg_role,
                 direction=direction,
                 open_price=lg["fill_price"],
-                open_date=today,
+                open_date=open_date or today,
                 option_type=opt_type,
                 strike=lg["strike"],
                 expiration=lg["expiration"],

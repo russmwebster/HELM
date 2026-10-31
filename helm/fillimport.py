@@ -9,8 +9,9 @@ Rulebook v0.2 section 12.1, as Russ decided it on 10-26:
 
 Stage 1 books closes, leg closes and expiries; s138 adds ASSIGNED short puts
 (the option row and its "YOU BOUGHT ASSIGNED PUTS" share row, booked by
-helm/assignment.py). It REPORTS, and does not book, new opens, called-away
-shares, exercises (stage 2), and share/dividend rows.
+helm/assignment.py). s141 (stage 2) books new opens and rolls (helm/fillopens.py).
+It REPORTS, and does not book, called-away shares, exercises and share/dividend
+rows (later in stage 2).
 
     plan(conn, exports, ...)  -> Plan        read-only
     apply(plan, db_path)      -> list[str]   writes; the CLI takes the backup
@@ -73,7 +74,7 @@ def stored_ira_hash(conn):
 
 @dataclass
 class Item:
-    kind: str                 # LEG_CLOSE | POSITION_CLOSE | PRICE_FIX | MATCHED | ASSIGN | REPORT
+    kind: str                 # LEG_CLOSE | POSITION_CLOSE | PRICE_FIX | MATCHED | ASSIGN | OPEN | REPORT
     text: str                 # one plain line for the trader
     position_id: str = None
     ticker: str = None
@@ -83,6 +84,7 @@ class Item:
     as_of: str = None
     fills: list = field(default_factory=list)     # [(fill, key, source)] recorded on apply
     fix: dict = None          # PRICE_FIX: {leg_id, old, new, net_premium_old, net_premium_new}
+    open: dict = None         # OPEN (s141): {strategy, legs, contracts, flags, grade, parent}
 
 
 @dataclass
@@ -95,7 +97,8 @@ class Plan:
 
     @property
     def writes(self):
-        return [i for i in self.items if i.kind in ("LEG_CLOSE", "POSITION_CLOSE", "PRICE_FIX", "MATCHED", "ASSIGN")]
+        return [i for i in self.items if i.kind in ("LEG_CLOSE", "POSITION_CLOSE", "PRICE_FIX", "MATCHED", "ASSIGN",
+                                                    "OPEN")]
 
 
 def _otype(leg):
@@ -206,6 +209,7 @@ def plan(conn, exports, cutoff=CUTOFF, reasons=None):
 
     # ---------------------------------------------------- new fills (>= cutoff)
     closing = {}   # position_id -> [(leg, price, leg_reason, group)]
+    pending_opens = []   # s141: opening fills not in HELM -> helm/fillopens.classify
     for gk, g in sorted(groups.items(), key=lambda kv: (kv[0][1], kv[0][2])):
         event, as_of, tk, exp, otype, strike, direction = gk
         if as_of < cutoff:
@@ -239,10 +243,19 @@ def plan(conn, exports, cutoff=CUTOFF, reasons=None):
             if same_day and sum(l["contracts"] for l in same_day) == q:
                 items.append(Item("MATCHED", "%s opened -- already in HELM" % label, ticker=tk,
                                   position_id=same_day[0]["position_id"], fills=fl, as_of=as_of))
+            elif same_day:
+                items.append(Item("REPORT", "%s %s opened -- HELM has %d contracts opened that day, Fidelity %d; "
+                                  "not booked again, check by hand" % (label, direction.lower(),
+                                                                      sum(l["contracts"] for l in same_day), q),
+                                  ticker=tk))
+            elif any(l["status"] == "OPEN" and l["pstatus"] == "OPEN" for l in cands):
+                o = [l for l in cands if l["status"] == "OPEN" and l["pstatus"] == "OPEN"][0]
+                items.append(Item("REPORT", "%s %s opened -- HELM already has this contract open (opened %s, %s); "
+                                  "not booked again, check the dates by hand" % (
+                                      label, direction.lower(), (o["open_date"] or "")[:10], o["position_id"]),
+                                  ticker=tk))
             else:
-                items.append(Item("REPORT", "%s %s opened at %s -- a NEW position; new opens are "
-                                  "booked in stage 2 (for now `helm open`)"
-                                  % (label, direction.lower(), _fmt(g["price"])), ticker=tk))
+                pending_opens.append((gk, g, fl))
             continue
 
         # CLOSE or EXPIRED
@@ -305,6 +318,22 @@ def plan(conn, exports, cutoff=CUTOFF, reasons=None):
                     l["strike"], (l["expiration"] or "")[:10], _fmt(l["open_price"]), _fmt(pr),
                     "{:,.2f}".format(pnl)), position_id=pid, ticker=p["ticker"], legs=[(l["id"], pr, lr)],
                     pnl=pnl, as_of=as_of, fills=fl))
+
+    # ------------------------------------------------- s141: new opens and rolls
+    if pending_opens:
+        from helm import fillopens as FO
+        ctx = {"closed": {}, "closing_legs": set(), "assign_shares": {}}
+        for it in items:
+            if it.kind in ("POSITION_CLOSE", "LEG_CLOSE"):
+                ctx["closing_legs"].update(lid for lid, _, _ in it.legs)
+            if it.kind == "POSITION_CLOSE" and it.reason != "EXPIRED":
+                p = conn.execute("SELECT strategy FROM positions WHERE id=?", (it.position_id,)).fetchone()
+                if p and p["strategy"] in ("CSP", "COVERED_CALL"):
+                    ctx["closed"][(it.as_of, it.ticker, "PUT" if p["strategy"] == "CSP" else "CALL")] = it.position_id
+            if it.kind == "ASSIGN":
+                n = conn.execute("SELECT contracts FROM legs WHERE id=?", (it.legs[0][0],)).fetchone()[0]
+                ctx["assign_shares"][it.ticker] = ctx["assign_shares"].get(it.ticker, 0) + 100 * int(n)
+        items.extend(FO.classify(conn, pending_opens, ctx))
 
     # ------------------------------------------- entry prices on OPEN positions
     opens = {}
@@ -455,6 +484,11 @@ def apply(p, db_path=None, ira_hash=None):
                 A.book(c2, it.position_id, when, label)
             finally:
                 c2.close()
+        elif it.kind == "OPEN":
+            from helm import fillopens as FO
+            pid, lids, _lab = FO.book(it, now[:10], FILL_TIME)
+            it.position_id = pid
+            it.legs = [(lids[0], None, None)] if len(lids) == 1 else [(x, None, None) for x in lids]
         elif it.kind == "PRICE_FIX":
             fx = it.fix
             leg = Leg.get(fx["leg_id"])

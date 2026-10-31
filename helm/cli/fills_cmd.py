@@ -133,6 +133,7 @@ def run():
 
     sections = (("POSITION_CLOSE", "To book -- positions closed"), ("LEG_CLOSE", "To book -- legs closed"),
                 ("ASSIGN", "To book -- puts assigned (shares into HELM)"),
+                ("OPEN", "To book -- opened at Fidelity (new positions, PMCC shorts, rolls)"),
                 ("PRICE_FIX", "To correct -- entry prices on open positions"),
                 ("MATCHED", "Already in HELM (recorded so they aren't checked again)"),
                 ("REPORT", "Not booked -- for you to look at"))
