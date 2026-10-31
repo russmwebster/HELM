@@ -56,7 +56,7 @@ straddle_*.py
 /master.html
 /master_data.json
 /data/master.csv
-archive/
+/archive/local/
 
 # ── macOS ────────────────────────────────────────────────────────────────
 .DS_Store
@@ -91,7 +91,6 @@ data/helm.db*mode=ro
 /verify_*.py
 /probe_*.py
 /smoketest_*.py
-/sample_mktdata.py
 /vol_context_prototype.py
 /_s[0-9][0-9]_smoke.py
 /_to_delete/
@@ -99,3 +98,6 @@ data/helm.db*mode=ro
 # s120 cleanup: ghosts the device VM leaves when a file is deleted under an open handle
 data/.fuse_hidden*
 Claude outputs/
+/data/archive/
+/_s122/px/
+/_s122/lc_backtest_results.json
