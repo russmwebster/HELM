@@ -25,6 +25,27 @@ IBKR_PORT      = 4002   # IB Gateway live (change to 4003 for paper)
 IBKR_CLIENT_ID = 11     # HELM client ID -- avoids conflict with COTS (uses 1) and stale 10
 IBKR_TIMEOUT   = 10     # seconds
 
+# Client numbers by role (W103, s141). Every HELM command connects with
+# DEFAULT_IDS. The scheduled snapshot switches its own process to SNAPSHOT_IDS
+# at its start (check_cmd.run_snapshot), so a board action or an engine restart
+# during a slot can no longer hold a number the snapshot needs -- IB Gateway
+# refuses a second connection on a client number already in use, and the
+# snapshot drops that reading as "IBKR not connected" (08-07: 36 of 78 lost).
+# 31-33 agreed 2026-10-31, clear of the Book's 73-76 and ibkr-data's 84, 90-94.
+DEFAULT_IDS  = {"check": IBKR_CLIENT_ID, "stock": 12, "option": 13}
+SNAPSHOT_IDS = {"check": 31, "stock": 32, "option": 33}
+_role_ids = dict(DEFAULT_IDS)
+
+
+def role_id(role: str) -> int:
+    """The client number this process uses for a role: check | stock | option."""
+    return _role_ids[role]
+
+
+def use_snapshot_ids() -> None:
+    """Switch this process to the snapshot's own client numbers (31-33)."""
+    _role_ids.update(SNAPSHOT_IDS)
+
 # Module-level connection cache
 _ib = None
 
@@ -84,7 +105,7 @@ def is_connected() -> bool:
 
 def check_connection(host: str = IBKR_HOST,
                      port: int = IBKR_PORT,
-                     client_id: int = IBKR_CLIENT_ID,
+                     client_id=None,             # None -> role_id("check")
                      timeout: int = 5) -> dict:
     """
     Probe the IB Gateway and return a status dict.
@@ -100,6 +121,8 @@ def check_connection(host: str = IBKR_HOST,
         }
     """
     from ib_insync import IB
+    if client_id is None:
+        client_id = role_id("check")   # 11, or 31 inside the snapshot
     result = {
         "connected": False,
         "host": host,

@@ -358,7 +358,7 @@ def fetch_ibkr_underlying(ticker: str) -> dict:
     """
     result = {"price": None, "source": "ibkr", "live": False, "error": None}
     try:
-        from helm.ibkr import check_connection
+        from helm.ibkr import check_connection, role_id
         status = check_connection()
         if not status["connected"]:
             result["error"] = "IBKR not connected"
@@ -366,7 +366,7 @@ def fetch_ibkr_underlying(ticker: str) -> dict:
 
         from ib_insync import IB, Stock
         ib = IB()
-        ib.connect("127.0.0.1", 4002, clientId=12, readonly=True)
+        ib.connect("127.0.0.1", 4002, clientId=role_id("stock"), readonly=True)   # 12; 32 in the snapshot (W103)
         try:
             ib.reqMarketDataType(2)  # HELM-076: frozen; IBKR upgrades to live (1) when a live session genuinely exists (pre/post-market)
             stock = Stock(ticker, "SMART", "USD")
@@ -402,14 +402,14 @@ def fetch_ibkr_option(ticker: str, expiration: str, strike: float,
     }
     try:
 
-        from helm.ibkr import check_connection
+        from helm.ibkr import check_connection, role_id
         if not check_connection()["connected"]:
             result["error"] = "IBKR not connected"
             return result
 
         from ib_insync import IB, Option
         ib = IB()
-        ib.connect("127.0.0.1", 4002, clientId=13, readonly=True)
+        ib.connect("127.0.0.1", 4002, clientId=role_id("option"), readonly=True)   # 13; 33 in the snapshot (W103)
         try:
             exp_fmt = expiration.replace("-", "")  # YYYYMMDD
             opt = Option(ticker, exp_fmt, strike,
@@ -3112,6 +3112,10 @@ def run_snapshot():
         )
     except Exception:
         pass
+    # W103 (s141): the snapshot connects on its own client numbers (31-33), so
+    # nothing else HELM runs during a slot can take them.
+    from helm.ibkr import use_snapshot_ids
+    use_snapshot_ids()
     args = sys.argv[1:]
     if not get_active_account():
         console.print("[red]No active account. Run helm setup first.[/red]")
