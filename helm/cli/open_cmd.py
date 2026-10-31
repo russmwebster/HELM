@@ -3730,11 +3730,16 @@ def run():
     if is_pmcc:
         try:
             from helm.cli.diagonal import evaluate_diagonal, display_diagonal, PMCC_CONFIG
-            spot_pm, pmcc_d = evaluate_diagonal(ticker, PMCC_CONFIG)
+            # s140: the same pin rule as DIAGONAL (W163) -- a full four-flag pin
+            # names its own pair, so an empty PMCC screen must not refuse it.
+            _pmcc_pinned = (pin_strike is not None and pin_expiry is not None
+                            and "--long-strike" in args and "--long-expiry" in args)
+            spot_pm, pmcc_d = evaluate_diagonal(ticker, PMCC_CONFIG, allow_empty=_pmcc_pinned)
         except Exception as e:
             console.print(f"[red]Error:[/red] {e}")
             return
-        display_diagonal(ticker, spot_pm, pmcc_d, args, label="Poor Man's Covered Call (PMCC)")
+        display_diagonal(ticker, spot_pm, pmcc_d, args, label="Poor Man's Covered Call (PMCC)",
+                         strategy="PMCC")
         return
 
     if is_perm:

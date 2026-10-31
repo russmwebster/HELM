@@ -358,7 +358,8 @@ def evaluate_diagonal(ticker: str, config: dict = None, allow_empty: bool = Fals
     return spot, [_reshape_diagonal(r, spot) for r in flat]
 
 
-def display_diagonal(ticker: str, spot: float, diagonals: list, args: list, label: str = "Diagonal Spread"):
+def display_diagonal(ticker: str, spot: float, diagonals: list, args: list, label: str = "Diagonal Spread",
+                     strategy: str = "DIAGONAL"):
     """Display diagonal candidates and handle confirm flow."""
     console.print()
     console.print(f"  [bold]{ticker}[/bold]  {label}  ·  spot [bold cyan]${spot:.2f}[/bold cyan]")
@@ -403,7 +404,7 @@ def display_diagonal(ticker: str, spot: float, diagonals: list, args: list, labe
         console.print("[dim]Add [bold]--confirm[/bold] to open a position.[/dim]")
         return
 
-    _confirm_diagonal(ticker, spot, diagonals, args)
+    _confirm_diagonal(ticker, spot, diagonals, args, strategy=strategy)
 
 
 def _diag_contracts_prompt(strategy: str, long_leg: dict, ticker: str = None):
@@ -461,7 +462,8 @@ def _diag_contracts_prompt(strategy: str, long_leg: dict, ticker: str = None):
     return contracts, None
 
 
-def _confirm_diagonal(ticker: str, spot: float, diagonals: list, args: list = None):
+def _confirm_diagonal(ticker: str, spot: float, diagonals: list, args: list = None,
+                      strategy: str = "DIAGONAL"):
     """Prompt, confirm fills, and log the two-leg position -- through the
     canonical multi-leg writer (W163). Books position + both legs + entry
     snapshot + OPENED lifecycle atomically, with net_premium, book, entry_dte,
@@ -480,6 +482,11 @@ def _confirm_diagonal(ticker: str, spot: float, diagonals: list, args: list = No
     not on the chain REFUSES rather than substituting (W7).
     """
     args = args or []
+    # s140 (2026-10-30): the PMCC route passes strategy="PMCC". This had "DIAGONAL"
+    # written in, so a PMCC booked as a diagonal and was advised under the run-off
+    # diagonals' rules instead of the PMCC rules (rulebook v0.2 section 6).
+    strategy = (strategy or "DIAGONAL").upper()
+    kind = "PMCC" if strategy == "PMCC" else "Diagonal"
 
     def _argval(flag):
         try:
@@ -549,7 +556,7 @@ def _confirm_diagonal(ticker: str, spot: float, diagonals: list, args: list = No
 
     # W160/W201: sized on the long leg's debit through the one shared
     # sizing function; a long leg over $5,000 at one contract is declined.
-    contracts, override_note = _diag_contracts_prompt("DIAGONAL", l, ticker)
+    contracts, override_note = _diag_contracts_prompt(strategy, l, ticker)
     if contracts is None:
         return
 
@@ -599,9 +606,9 @@ def _confirm_diagonal(ticker: str, spot: float, diagonals: list, args: list = No
         "max_loss": abs(net_debit_actual),             # a debit diagonal risks its debit
     }
     pos_id, leg_ids, _snaps = open_multileg_with_snapshot(
-        ticker=ticker, strategy="DIAGONAL", legs=legs, contracts=contracts,
+        ticker=ticker, strategy=strategy, legs=legs, contracts=contracts,
         spot=spot, book="REAL", position_fields=pf, pricing_source="manual-fill",
-        notes=f"Diagonal: short ${s['strike']:.0f} {s['expiration']} / "
+        notes=f"{kind}: short ${s['strike']:.0f} {s['expiration']} / "
               f"long ${l['strike']:.0f} {l['expiration']} -- fills confirmed at entry"
               + (" -- PINNED OUT OF BAND (s113/W163): not a screened candidate; "
                  f"short delta {s.get('delta')} {s.get('dte')}d, long delta {l.get('delta')} "
@@ -609,7 +616,7 @@ def _confirm_diagonal(ticker: str, spot: float, diagonals: list, args: list = No
               + (f" -- {override_note}" if override_note else ""))
 
     console.print()
-    console.print(f"  [green]OK[/green]  {ticker} DIAGONAL logged — {pos_id}")
+    console.print(f"  [green]OK[/green]  {ticker} {strategy} logged — {pos_id}")
     console.print(f"  [dim]{len(leg_ids)} legs + entry snapshot written; net debit ${net_debit_actual:.2f} recorded as the position premium.[/dim]")
     console.print()
 
