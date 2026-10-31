@@ -3,6 +3,7 @@
 # Symlinked or run directly as: python3 helm.py <command>
 # Or via alias: alias helm='python3 ~/Projects/helm/helm.py'
 
+import os
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
@@ -15,8 +16,8 @@ COMMANDS = {
     'roll':      ('helm.cli.roll',      'run',  'Roll a position'),
     'settings':  ('helm.cli.settings',  'run',  'View or edit strategy settings'),
     'analyze':   ('helm.cli.analyze',   'run',  'Analyze historical outcomes'),
-    'import':    ('helm.cli.import_cmd', 'run',  'Import positions from a broker export'),
-    'confirm-fills': ('helm.cli.confirmfills_cmd', 'run', 'Confirm real entry fills from a broker activity export'),
+    'import':    ('helm.cli.import_cmd', 'run',  'RETIRED -- trades come in with helm fills'),
+    'confirm-fills': ('helm.cli.confirmfills_cmd', 'run', 'RETIRED -- helm fills corrects entry prices'),
     'fills':     ('helm.cli.fills_cmd',  'run',  'Book real trades from a Fidelity activity download (s136)'),
     'gwwatch':   ('helm.cli.gwwatch_cmd', 'run',  'Is the IB gateway answering? (runs itself every 10 min)'),
     'ibkr':      ('helm.cli.ibkr_cmd',  'run',  'Manage IB Gateway connection'),
@@ -25,9 +26,9 @@ COMMANDS = {
     'quality':   ('helm.cli.quality_cmd', 'run',  'Ownership-quality grade (CSP assign/bail read)'),
     'snapshot':  ('helm.cli.check_cmd',     'run_snapshot', 'Persist a live health snapshot (scheduled writer)'),
     'scan':      ('helm.cli.scan_cmd',      'run', 'Scan optionable tickers for opportunities'),
-    'open':      ('helm.cli.open_cmd',      'run', 'Evaluate contracts for a new position'),
-    'activity':  ('helm.cli.activity_cmd',  'run', 'Import Fidelity activity to close positions'),
-    'reconcile': ('helm.cli.reconcile_cmd', 'run', 'Compare HELM positions to Fidelity portfolio'),
+    'open':      ('helm.cli.open_cmd',      'run', 'Evaluate contracts for a new position (books nothing)'),
+    'activity':  ('helm.cli.activity_cmd',  'run', 'RETIRED -- helm fills books closes'),
+    'reconcile': ('helm.cli.reconcile_cmd', 'run', 'Compare HELM positions to Fidelity portfolio (read-only)'),
     'theme':     ('helm.cli.theme_cmd',     'run', 'Investment themes — setup, refresh, IPO tracking'),
     'ivr':       ('helm.cli.ivr_cmd',       'run', 'IV Rank / Percentile -- refresh, list, show'),
     'guide':    ('helm.cli.guide_cmd',    'run', 'Strategy guide — matrix, conviction, workflow'),
@@ -70,6 +71,17 @@ def print_help():
     console.print('[dim]First time? Run [bold cyan]helm setup[/bold cyan] to get started.[/dim]')
     console.print()
 
+# s142 (Russ, 2026-10-31): no double entry -- every trade enters HELM from the
+# Fidelity download (helm fills). These three booked trades by other routes; they
+# are switched off, not deleted (other commands import their functions).
+# HELM_RETIRED_ON=1 runs them for an old harness on a database copy.
+RETIRED = {
+    'import': 'helm import (the original positions onboarding) is retired',
+    'confirm-fills': 'helm confirm-fills is retired -- helm fills corrects entry prices from the download',
+    'activity': 'helm activity is retired -- helm fills books closes, expiries and assignments',
+}
+
+
 def main():
     if len(sys.argv) < 2 or sys.argv[1] in ('--help', '-h', 'help'):
         print_help()
@@ -81,6 +93,13 @@ def main():
         from rich.console import Console
         Console().print(f'[red]Unknown command:[/red] {cmd}')
         Console().print('[dim]Run [bold]helm help[/bold] to see available commands.[/dim]')
+        sys.exit(1)
+
+    if cmd in RETIRED and os.environ.get('HELM_RETIRED_ON') != '1':
+        from rich.console import Console
+        Console().print(f'[yellow]{RETIRED[cmd]}.[/yellow]')
+        Console().print('[dim]Trades enter HELM from Fidelity: download Activity & Orders, then '
+                        '[bold]cd ~/Projects/helm && helm fills[/bold] (or "Update book from Fidelity" on Today).[/dim]')
         sys.exit(1)
 
     sys.argv = [f'helm {cmd}'] + sys.argv[2:]

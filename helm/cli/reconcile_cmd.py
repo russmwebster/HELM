@@ -2,7 +2,8 @@
 # helm/cli/reconcile_cmd.py
 # helm reconcile -- compare HELM open positions to Fidelity portfolio
 #
-# Read-only diff. No automatic changes.
+# Read-only diff. No automatic changes. s142: it writes nothing (no PENDING promotion,
+# no balance refresh) -- trades and their state come from helm fills.
 # Shows: Match / Partial / HELM-only / Check (unmatched option on a HELM ticker)
 # / not HELM's (everything else in the file -- another book's or Russ's; s126)
 # Advises on any discrepancies.
@@ -479,11 +480,7 @@ def run():
     # Matched
     for hp in matched:
         pos = hp["position"]
-        # Auto-promote PENDING to OPEN when matched against Fidelity
-        if pos["status"] == "PENDING":
-            from helm.db import get_conn as _pgc
-            _pgc().execute("UPDATE positions SET status='OPEN' WHERE id=?", (pos["id"],))
-            _pgc().commit()
+        # s142: no longer promotes PENDING to OPEN -- reconcile is read-only
         t.add_row("[green]✓ MATCH[/green]", pos["ticker"], pos["strategy"],
                   _legs_str(hp["legs"]), "", _fidpnl_cell(hp.get("fid_pnl")))
 
@@ -573,13 +570,11 @@ def run():
     # command already opens; it was being thrown away with the Account Total
     # and SPAXX rows. No new file handling, no new habit -- it refreshes
     # whenever you check alignment.
-    if _bal and _bal.get("net_liquidation"):
-        _update_account_balances(account_id, _bal)
+    # s142 (Russ, 2026-10-31): reconcile is read-only -- the balance refresh is off.
+    # Nothing that sizes a CSP, covered call or PMCC reads accounts.portfolio_value
+    # (the sleeve does); only the retired structures' old sizing did.
 
-    try:
-        _log_event("RECONCILE_RUN")
-    except Exception:
-        pass
+    # s142: no RECONCILE_RUN event either -- the command writes nothing.
 
 
 if __name__ == "__main__":

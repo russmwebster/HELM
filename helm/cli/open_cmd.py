@@ -17,6 +17,7 @@
 #   helm open ANET LONG_CALL        Evaluate long call contracts
 #   helm open ANET CSP --top 5      Show top 5 contracts
 
+import os
 import sys
 import math
 import logging
@@ -3487,8 +3488,20 @@ def display_debit_spreads(ticker, strategy, config, spreads, spot, atr, account_
 OFF_LIMITS = {"SHORT_STRANGLE", "JADE_LIZARD"}
 
 
+OPEN_BOOKING_RETIRED = True   # s142 (Russ, 2026-10-31): helm open evaluates only; helm fills books
+
+
 def run():
     args = sys.argv[1:]
+    if "--confirm" in args and OPEN_BOOKING_RETIRED and os.environ.get("HELM_OPEN_BOOKING_ON") != "1":
+        console.print()
+        console.print("[yellow]helm open no longer books trades[/yellow] -- every trade enters HELM from the "
+                      "Fidelity download, so a trade is never entered twice.")
+        console.print("[dim]Place the trade in Fidelity, download Activity & Orders, then "
+                      "[bold]cd ~/Projects/helm && helm fills[/bold] (or \"Update book from Fidelity\" on Today). "
+                      "Run helm open without --confirm to evaluate contracts. Nothing was written.[/dim]")
+        console.print()
+        sys.exit(1)
 
     if not args or args[0] in ("--help", "-h"):
         console.print()
