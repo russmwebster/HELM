@@ -2,7 +2,6 @@
 
   helm restart              the engine server (unchanged default)
   helm restart pg           the PG web app -- the web/desktop dashboard
-  helm restart trial        the free-data trial web app
   helm restart all          every HELM agent above
   helm restart list         show the targets, and which are up, touching nothing
 
@@ -45,9 +44,7 @@ TARGETS = {
     "pg": ("com.helm.pg", "PG web app (the web dashboard)",
            ("127.0.0.1",), 8770, "http://127.0.0.1:8770",
            "tail -20 ~/Projects/helm-pg/pg.log"),
-    "trial": ("com.helm.trial.ui", "free-data trial web app",
-              ("127.0.0.1",), 8771, "http://127.0.0.1:8771",
-              "tail -20 ~/Projects/helm-pg/pg-trial.log"),
+    # s142: the free-data trial web app (com.helm.trial.ui, the archived product's) is gone
 }
 
 # Spellings that are obviously the same thing. Deliberately a fixed map rather
@@ -56,7 +53,6 @@ ALIASES = {
     "engine": "server", "helm": "server",
     "web": "pg", "ui": "pg", "dashboard": "pg", "desktop": "pg",
     "helm-pg": "pg", "helm_pg": "pg",
-    "helm-trial": "trial", "trial-ui": "trial",
 }
 
 DEFAULT = "server"

@@ -48,28 +48,69 @@ COMMANDS = {
     'status':    ('helm.cli.status_cmd',    'run', 'Portfolio dashboard — positions, P&L, activity'),
     'paper':     ('helm.cli.paper_cmd',   'run',  'Paper book — generate picks from the latest scan'),
     'audit':     ('helm.cli.audit_cmd',   'run', 'End-of-day collection audit -- did the day collect as designed?'),
-    'restart':   ('helm.cli.server_cmd',   'run', 'Restart a HELM service — pg (web dashboard) | trial | all; default engine server'),
+    'restart':   ('helm.cli.server_cmd',   'run', 'Restart a HELM service — pg (web dashboard) | all; default engine server'),
 }
+
+# s142 (Russ, 2026-10-31): `helm help` lists the commands of the strategies HELM
+# trades now (puts, covered calls, PMCCs) and the ones that keep it running. The
+# rest still run exactly as before -- the board and the scheduled jobs call some of
+# them -- but are listed only by `helm legacy`, and go on LEGACY_UNTIL unless Russ
+# says otherwise.
+MAIN = (
+    ("Trading", ("advise", "puts", "calls", "open", "quality", "book", "sleeve")),
+    ("Booking", ("fills",)),
+    ("Data and checks", ("check", "snapshot", "ivr", "watchlist", "reconcile", "audit")),
+    ("Running HELM", ("ibkr", "gwwatch", "restart")),
+)
+LEGACY_UNTIL = "2026-12-01"
+LEGACY = (
+    ("Replaced by the import (still run, as fallbacks)", ("close", "assign", "settle", "resell",
+                                                          "import", "confirm-fills", "activity")),
+    ("Replaced by the board or other commands", ("status", "positions", "health", "pending", "workflow", "guide")),
+    ("Retired strategies and old tools", ("scan", "paper", "roll", "theme", "exposure", "risk", "stock",
+                                          "analyze", "settings", "setup")),
+)
+
+
+def _table(names):
+    from rich.table import Table
+    from rich import box
+    t = Table(box=box.SIMPLE, show_header=False, padding=(0, 2))
+    t.add_column(style='cyan bold')
+    t.add_column(style='dim')
+    for cmd in names:
+        t.add_row(cmd, COMMANDS[cmd][2])
+    return t
+
 
 def print_help():
     from rich.console import Console
-    from rich.table import Table
-    from rich import box
     console = Console()
     console.print()
     console.print('[bold cyan]HELM[/bold cyan] [dim]v0.1.0 — High-conviction Entry & Lifecycle Manager[/dim]')
     console.print()
-    console.print('[bold]Usage:[/bold]  helm <command> [args]')
+    console.print('[bold]Usage:[/bold]  cd ~/Projects/helm && helm <command> \\[args]')
+    for title, names in MAIN:
+        console.print()
+        console.print('[bold]%s[/bold]' % title)
+        console.print(_table(names))
+    console.print('[dim]Older commands still run: [bold]helm legacy[/bold] lists them (due to go on %s).[/dim]'
+                  % LEGACY_UNTIL)
     console.print()
-    t = Table(box=box.SIMPLE, show_header=False, padding=(0,2))
-    t.add_column(style='cyan bold')
-    t.add_column(style='dim')
-    for cmd, (_, _, desc) in COMMANDS.items():
-        t.add_row(cmd, desc)
-    console.print(t)
+
+
+def print_legacy():
+    from rich.console import Console
+    console = Console()
     console.print()
-    console.print('[dim]First time? Run [bold cyan]helm setup[/bold cyan] to get started.[/dim]')
+    console.print('[bold]Legacy commands[/bold] [dim]-- each still runs exactly as before; due to go on %s '
+                  'unless you keep it.[/dim]' % LEGACY_UNTIL)
+    for title, names in LEGACY:
+        console.print()
+        console.print('[bold]%s[/bold]' % title)
+        console.print(_table(names))
     console.print()
+
 
 # s142 (Russ, 2026-10-31): no double entry -- every trade enters HELM from the
 # Fidelity download (helm fills). These three booked trades by other routes; they
@@ -88,6 +129,9 @@ def main():
         sys.exit(0)
 
     cmd = sys.argv[1].lower()
+    if cmd == 'legacy':
+        print_legacy()
+        sys.exit(0)
 
     if cmd not in COMMANDS:
         from rich.console import Console
@@ -101,6 +145,12 @@ def main():
         Console().print('[dim]Trades enter HELM from Fidelity: download Activity & Orders, then '
                         '[bold]cd ~/Projects/helm && helm fills[/bold] (or "Update book from Fidelity" on Today).[/dim]')
         sys.exit(1)
+
+    if cmd in {c for _, names in LEGACY for c in names} and cmd not in RETIRED and sys.stderr.isatty():
+        # one dim line for a person at the terminal only -- never on a pipe, so the
+        # board's and the scheduled jobs' output is byte-for-byte what it was
+        sys.stderr.write('\033[2m(%s is a legacy command, due to go on %s -- helm legacy)\033[0m\n'
+                         % (cmd, LEGACY_UNTIL))
 
     sys.argv = [f'helm {cmd}'] + sys.argv[2:]
 
