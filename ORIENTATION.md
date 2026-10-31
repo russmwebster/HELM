@@ -1,143 +1,110 @@
 # HELM — ORIENTATION
 
-**What this file is:** the structural map of HELM — architecture, data model, pipeline, conventions. It exists so a fresh session (human or Claude) can get oriented fast without relying on memory that doesn't survive between sessions.
+**What this file is:** the structural map of HELM — what it is for, how a trade moves through it, the modules, the data model, the infrastructure and the conventions. It exists so a fresh session can get oriented fast without relying on memory.
 
-**What this file is NOT:** it is not live status, and it is not the source of truth. It *points* at ground truth; it does not restate it. When this map and the code disagree, **the code wins** — and this file should be corrected.
+**What this file is NOT:** status, or the source of truth. It *points* at ground truth. When this map and the code disagree, **the code wins** — correct this file.
 
-**Where things live (the three-rate rule).** HELM's knowledge changes at three different speeds; keeping them in separate places is what prevents the drift that stale, blended handover notes used to cause:
+**Where things live** (rewritten 2026-10-31, s142):
 
 | Kind | Changes | Lives in |
 |------|---------|----------|
-| **Structure** — architecture, data model, conventions | rarely | **this file** (`ORIENTATION.md`) |
-| **State** — active work, what's committed/unpushed, open forks | every session | **`ISSUES.md`** (Status block) |
-| **History** — what changed and why | continuously | **git** + `ISSUES.md` Resolved log |
+| **Structure** — architecture, data model, conventions | rarely | **this file** |
+| **State** — the book, open items, what the last session did, the next free W-number | every session | **`claude/HELM-handover.md`** in the HELM project (mirror `_records/HELM-handover.md`) — read it first |
+| **Decisions and paid-for lessons** | when one is earned | **`claude/HELM-standing-rules.md`** (mirror `_records/`); retired and superseded lines in `HELM-standing-rules-history.md` |
+| **History** — what changed and why | continuously | **git** |
 
-Do not put status in this file. Do not put architecture in `ISSUES.md`. If you catch yourself re-narrating something that already lives in code or the register, stop and point at it instead.
+`archive/root/ISSUES.md` (frozen 2026-09-20 at HELM-218) and the old worklists are history only: code cites their ids, nothing reads them for status.
 
 ---
 
 ## 1. What HELM is
 
-A personal, Claude-native options-trading platform for a Fidelity Rollover IRA pursuing the variance risk premium (VRP). Two books share the *same* machinery:
+Russ's options desk on the Fidelity **Rollover IRA**. Since the revision (2026-10-24) it does one job: **generate cash by selling premium** — **cash-secured puts**, **covered calls on HELM-held shares** (mostly after an assignment), and **PMCCs** (a LEAPS call bought, short calls sold against it). Condors, spreads, standalone long calls/puts and the short-dated diagonal route are out; their code remains for history and for the PMCC, which is built on the diagonal family.
 
-- **REAL** — the live account.
-- **PAPER** — a parallel, auto-traded counterfactual book that trades candidates the REAL book passed on, building a labelled corpus for a future learning layer.
+- **One book.** Every position is a row in `positions` with `book='REAL'`. The PAPER book was frozen on 2026-10-24 (77 positions closed `RUN_OFF`); its rows are history, never evidence.
+- **Russ places and sizes every trade by hand in Fidelity. HELM advises and tracks; it never acts.** It gives one plain recommendation per position, with its reason and number, and flags every rule overstepped.
+- **HELM's money is a sleeve:** $300,000 + the net realized result of every real leg closed from 10/24 (+ dividends on HELM-held shares). Limits: in use ≤ sleeve, one name ≤ 20%, one sector ≤ 30%; whole-book theta 0.05–0.12% of the sleeve a day, beta-weighted delta ≤ half the sleeve. `helm/sleeve.py`, `helm/bookview.py`.
 
-Both are rows in the same `positions` table, distinguished by a `book` field, and both are SCORED by the same decision core. They are not TRADED the same way.
-
-### Who acts on which book — the operating principle
-
-**The REAL book is traded by Russ. The PAPER book is traded by rules.** This holds on both sides of a position's life, and it is a deliberate design decision — not an accident of what happens to be built yet.
-
-| | entry | exit |
-| --- | --- | --- |
-| **REAL** | Russ decides. The scan and the screens propose; nothing books a real position without him. | **Russ decides.** No rule has ever closed a real position, and none is meant to. |
-| **PAPER** | `helm paper generate`, from candidates the real book passed on. | `com.helm.paper.exits`, 15:35 daily, by the exit doctrine. |
-
-Three consequences, written down because sessions keep rediscovering them:
-
-- **On the real book HELM informs; it does not act.** The exit alert (HELM-143) is real-book only and deliberately "alerts about exits; it never takes one". The thesis card reports which rule conditions are met and does not instruct (HELM-182). Anything reading as an instruction on a real-book surface is a defect, not a feature.
-- **`book` is therefore also the ACTOR field.** A real close was decided by a human; a paper close was decided by a rule. The `exit_reason` vocabulary is shared so the two books pool for outcome studies (HELM-161) — but the same word means "the rule fired" on paper and "Russ chose this label" on real. **Any study that pools them is counting two different things.** (s107: the real book carries exactly one `STOP` in 79 closes. It was Russ, not a stop rule.)
-- **"No rule has ever closed a real position" is the design working, not a finding.** Rule-precedence questions (stop -> give-back -> 7-DTE -> 21-DTE) are PAPER-book questions: the agent needs an order because it must pick one. They are not decisions about how Russ trades.
-
-So rule work has two possible products: a change to what the paper agent DOES, or a change to what HELM TELLS Russ. Say which one is intended before building it.
-
-Vision, firewall, and server-access details live in the **project charter** (the HELM project description), not here. One rule is worth repeating even so: this is **HELM only** — never touch the separate, live COTS system. (Its firewall and paths are in the charter; the old in-repo `cots2` reference copy has been removed.)
+Vision, firewall and server access are in the project charter. **Never touch COTS** (`~/Projects/cots`, `cots.local:8765`, `com.cots.*`).
 
 ---
 
-## 2. How to operate it (the CLI)
+## 2. How a trade moves through HELM
 
-`helm <command> [args]` resolves to `bin/helm` (a 2-line shim to the `helm` conda-env python) → **`helm.py`**, a small dispatcher whose `COMMANDS` dict maps each command name to `helm.cli.<module>.run()`.
-
-**`helm.py` is the authoritative command list** — read it to see every command and which module serves it. Each command module lives in `helm/cli/` and exposes a `run()` entry point.
-
-For Claude specifically: work happens over the **bridge** — POST to `http://helm.local:8766/exec {cmd, timeout}` via the Chrome extension, reading results back through `window` variables. Claude reads code/DB and drafts guarded patch scripts; the human runs all terminal and git.
-
----
-
-## 3. Lifecycle pipeline → where it lives
-
-The trade lifecycle and the modules that implement each stage. (Command names are in `helm.py`; module roles are one-liners — read the file for detail.)
-
-- **scan / screen** — find candidates → `helm/cli/scan_cmd.py`, `screen.py`, `helm/russ_scan.py`
-- **decide** — the verdict → `helm/decision.py` (core engine) + `helm/verdict.py` (adapters) + `helm/health.py` (composite health score)
-- **open / execute** — enter a position → `helm/cli/open_cmd.py`
-- **monitor / check** — periodic health check that journals to the `checks` table → `helm/cli/check_cmd.py` *(the REAL check runs ~3×/day via launchd)*
-- **close** — exit → `helm/cli/close_cmd.py`
-- **reconcile / sync** — align with broker state → `helm/cli/reconcile_cmd.py`, `import_cmd.py`, `ibkr_cmd.py`
-- **paper book** — auto-manage the PAPER corpus → `helm/cli/paper_manage.py`, `_paper_open.py`, `_paper_generate.py`, `_decision_capture.py`
+| Step | Who | Where |
+|------|-----|-------|
+| **Choose** a put / covered call | Russ runs the tool | `helm puts` → `helm/puttool.py`; `helm calls` → `helm/calltool.py`. Universe: latest ownership grade A–C or an approved fund (`helm/ownership.py`, `approved_funds`). Every run is recorded (`put_runs`/`put_candidates`, `call_runs`/`call_candidates`). Sizing by the sleeve: `sleeve.size()`. |
+| **Evaluate** a named contract | Russ | `helm open TICKER STRATEGY` (`helm/cli/open_cmd.py`, `diagonal.py` for the PMCC) — **evaluates only**; `--confirm` refuses (s142). |
+| **Place** it | Russ, in Fidelity | — |
+| **Book** it | Russ downloads Activity & Orders → `helm fills` (or Today's "Update book from Fidelity") | `helm/brokerfills.py` reads both download formats (Rollover IRA only; the account number is never stored — a SHA-256 in `helm_meta`). `helm/fillimport.py` plans and writes: closes, leg closes, expiries, **partial closes** (the closed part becomes its own position, tag `split_from:<id>`), entry-price corrections, assignments (`helm/assignment.py`: puts in, **calls away**), **dividends** on HELM-held shares (`helm_dividends`, split by the Positions download), and opens and rolls (`helm/fillopens.py`). Every row it acts on is recorded in `broker_fills`, so a rerun proposes nothing. Anything it can't book cleanly is a **report**, never a guess. |
+| **Watch** it | scheduled | `helm snapshot --all` at 10:00 / 12:30 / 15:15 (`helm/cli/check_cmd.py`) writes `checks` and `leg_checks`; exit flags `helm/exit_flags.py`; the 16:15 audit `helm/cli/audit_cmd.py`. |
+| **Advise** | Russ reads | `helm advise` / the board's Today page → `helm/advice.py` (one recommendation per position, rule flags, book-limit flags, reading coverage). |
+| **Measure** | — | `helm/netpnl.py`: net of fees is the P&L of record from 10/24 (one row per trade — a fee Fidelity revised is taken from the newest download); older trades gross, labelled. |
 
 ---
 
-## 4. Data model
+## 3. The commands
 
-Defined in **`helm/schema.sql`** (authoritative; includes a tail of `ALTER TABLE` migrations — read the whole file, not just the `CREATE TABLE` blocks). Row/ORM helpers live in **`helm/models/`**. 19 tables, 3 views:
+`helm` → `bin/helm` (shim to the `helm` conda env's python) → **`helm.py`**, whose `COMMANDS` dict maps each name to `helm.cli.<module>.run()` (a few to `helm.<module>.run`). **`helm.py` is the authoritative list.**
 
-**Entities**
-- `accounts` — the trading account(s)
-- `positions` — every position, REAL and PAPER (`book` field)
-- `legs` — individual option/stock legs of a position
-- `stock_positions` — stock holdings
-
-**Journals (time series)**
-- `checks` — one row per REAL health check (per position); the monitor-stage journal
-- `leg_checks` — per-leg marks captured during a check
-- `lifecycle_events`, `helm_events` — lifecycle / system event logs
-
-**Entry / exit / outcome capture**
-- `entry_snapshots` — conditions at entry
-- `signals` — scan-signal → outcome scaffolding (links back to a position when opened)
-- `processed_transactions`, `import_pathways` — broker import bookkeeping
-
-**Config / reference**
-- `strategy_settings` — the tunable levers; **single source of truth** for thresholds (guarded by `helm/models/settings.py`'s load-time fat-finger check)
-- `watchlist` — the scan universe (`active` flag = the live set)
-- `themes`, `theme_tickers` — thematic grouping
-- `iv_history`, `market_context` — market data history
-- `helm_meta` — schema version / metadata
-
-**Views:** `v_trade_summary`, `v_trade_lifecycle`, `v_exit_decisions`.
+- `helm help` shows the **17 commands** of today's strategies and plumbing (`MAIN` in `helm.py`); `helm legacy` lists the other 23 (`LEGACY`), which **still run** — the board calls `close`, `resell`, `scan`, `paper`, `pending` — and are due to go on `LEGACY_UNTIL` unless Russ keeps them.
+- **Retired and switched off** (code kept; env switches for old harnesses on a DB copy): `import`, `confirm-fills`, `activity` (`RETIRED` in `helm.py`, `HELM_RETIRED_ON=1`); `helm open --confirm` (`OPEN_BOOKING_RETIRED`, `HELM_OPEN_BOOKING_ON=1`); paper entries (`PAPER_ENTRIES_RETIRED`, `HELM_PAPER_ENTRIES_ON=1`); the paper exit agent (`PAPER_EXITS_RETIRED`, `HELM_PAPER_EXITS_ON=1`).
+- `helm reconcile` is read-only (compares HELM with a Positions download; writes nothing).
 
 ---
 
-## 5. Decision core
+## 4. The board (`~/Projects/helm-pg`)
 
-**`helm/decision.py`** — the universe-agnostic, book-agnostic verdict engine. Entry point `evaluate(pos, legs, marks) -> (reason, total_pnl)`; it reads levers from `strategy_settings` and routes each position to its strategy family. Siblings in the same file capture counterfactuals without acting: `evaluate_arms` (stop A/B experiment) and `evaluate_shadow_debit_stop` (long-debit shadow capture) — both pure, neither mutates the verdict.
-
-**`helm/verdict.py`** — the `_ns_pos` / `_ns_leg` adapters that wrap DB dicts as attribute objects for the core, plus `band_for`.
-
-The core is the single home for decision logic — earlier there were multiple divergent copies (in the check command, health, paper manager); they were unified into `decision.py`. Keep it that way: don't re-implement verdict logic elsewhere, call the core.
+HELM's web interface (http://127.0.0.1:8770, launchd `com.helm.pg`), used as a macOS web app. **It holds no model**: every threshold and verdict is imported or read from the engine, and it **changes things only by running HELM's own CLI**, never by writing the database. Menu: Today · Details (Book) · Watchlist · Health; older pages are still served off-menu. **Never hoist a `helm` import to module scope there** — every page renders blank. Engine changes reach it after `helm restart pg`; templates don't need one. `restart pg` does not clear `.pos_cache.json`.
 
 ---
 
-## 6. Infrastructure
+## 5. Data model
 
-- **Paths & config** — `helm/config.py` (`DB_PATH` → `data/helm.db`, `SCHEMA_PATH`, etc.). Always resolve the DB via `helm.config.DB_PATH`, never a hardcoded path.
-- **DB layer** — `helm/db.py` (`get_conn`, `transaction`, `init_db`, migration helpers). SQLite in WAL mode.
-- **Secrets** — `helm/secrets_loader.py` reads `~/.helm/env` (chmod 600, outside the repo). Credentials are never hardcoded in plists/dotfiles/repo.
-- **Scheduling** — four `com.helm.*` launchd agents (check, paper-manage, server, notify). See `~/Library/LaunchAgents` for the authoritative set.
-- **Bridge** — a local server at `helm.local:8766` exposing `/exec`; how Claude reads state and runs read-only checks.
-- **Market data (IBKR entitlement)** — the account carries a live real-time US market-data subscription; real-time quotes are entitled. When writing data-fetch code, assume live data is available — `reqMarketDataType(1)` returns real-time in RTH, and a frozen request (`2`) upgrades to live (`1`) when a feed exists (see `sample_mktdata.py`). Do **not** default to delayed (`3`) or code as if there is no live entitlement. Off-hours, IBKR can still serve live pre/post-market prints — check `t.marketDataType` rather than assuming frozen/prior-close.
+**`helm/schema.sql`** is authoritative (with a tail of `ALTER TABLE` migrations — read the whole file); some tables are also created by the module that owns them (`fillimport.ensure_schema`, `puttool`, `calltool`, `assignment.ensure_columns`). Models in `helm/models/`. 37 tables, 4 views:
 
----
+- **Trades:** `positions` (one per trade; `book`, `strategy`, `parent_position_id` = a roll's predecessor, `tags` incl. `split_from:`), `legs` (option and stock legs; stock legs carry shares in `contracts`, multiplier 1), `stock_positions` (HELM-held shares, `cost_basis`, `effective_basis` = strike − put premium), `entry_snapshots` (conditions at entry, one per position), `lifecycle_events`, `accounts`.
+- **Readings:** `checks` (one row per position per snapshot), `leg_checks` (per leg), `iv_history`, `earnings_history`, `market_context` (records only — nothing reads it).
+- **The import's records:** `broker_fills` (every Fidelity row booked, matched or used, with commission, fees and the download's time), `helm_dividends`, `helm_events` (IMPORT_RUN and other system events), `helm_meta` (the IRA's fingerprint).
+- **Proposal tools:** `put_runs`, `put_candidates`, `call_runs`, `call_candidates`.
+- **Reference:** `watchlist` (universe + sector), `ownership_quality` (grades), `approved_funds` (24 funds, each with the sector bucket the limit counts), `strategy_settings` (tunable levers, one row per strategy).
+- **History and dormant** (kept on purpose; mostly paper-era or the old scan): `signals`, `exit_flags`, `exit_considered`, `exit_alerts`, `check_exit_flags`, `check_kept_hist`, `entry_thesis`, `paper_refusals`, `stop_arm_events`, `agent_runs`, `themes`, `theme_tickers`, `processed_transactions`, `import_pathways`.
+- **Views:** `v_trade_summary`, `v_trade_lifecycle`, `v_exit_decisions`, `v_learning_positions`.
 
-## 7. Conventions & guardrails
-
-Authoritative detail lives in `ISSUES.md` (top-of-file conventions) — this is a pointer summary.
-
-- **Session lifecycle** — start each session by orienting from the `ISSUES.md` Status block + git (never recollection); read HELM-051 before the first bridge call. End each session with a **checkpoint** that refreshes the `ISSUES.md` Status block (Counts · Last-shipped · `_Last updated_` stamp; move any resolved issues to the Resolved log) via a per-session `checkpoint_sNN.py` — dry-run then `--apply`, timestamped backup + readback, runs no git. Full process: `docs/checkpoint-process.md`.
-
-- **Firewall** — HELM only; never COTS. Bright line.
-- **Register discipline** — `ISSUES.md` is the single source of truth for issues/status (Status block · Active · Parking lot · Resolved log). Reconcile from the live register + git, never from recollection or a past session's prose. A source change commits *with* its `ISSUES.md` update, named files only (never `git add -A`).
-- **Division of labor** — Claude reads code/DB and drafts guarded patch scripts; the human runs all terminal/git.
-- **Patch discipline** — every patch: idempotency sentinel · anchor-count assert · `/tmp` stage + validate (`py_compile`, or an in-memory build for schema) · timestamped backup · dry-run default → `--apply` · post-write readback. For live-DB migrations: read-only probe → WAL-safe `.backup()` copy → `integrity_check` → trial on the copy → then apply.
+**Two traps:** (1) several models map `SELECT *` into a constructor (`checks`, `entry_snapshots`, `iv_history`, `legs`, `lifecycle_events`, `pathways`, `settings`, `signals`, `themes`) — a new column there breaks every path that builds the model; (2) **never `INSERT OR REPLACE` into a table others CASCADE from** (`positions`, `legs`, `checks`, `themes`) — REPLACE deletes first and the cascade takes the children (it wiped 161 real legs' readings before s135).
 
 ---
 
-## 8. Keeping this file honest
+## 6. Decision core
 
-- Update it when **structure** changes (new table, new pipeline stage, moved module) — via the normal guarded-patch flow, committed beside the code.
-- Never add status, issue numbers, or thresholds — those drift; they belong in `ISSUES.md` or `strategy_settings`.
-- Prefer a pointer over a paraphrase. If a section starts re-describing what a file does in detail, shorten it to "read `<file>`."
-- If a past note or this file uses a term you can't place, treat it as suspect, not canonical — check it against the code before acting on it.
+**`helm/decision.py`** — the verdict engine: `evaluate(pos, legs, marks)` routes each position to its strategy family and reads levers from `strategy_settings`. **`helm/strategies.py`** — the strategy set and families. **`helm/verdict.py`** — adapters and `band_for`. **`helm/exit_flags.py`** — the flags the snapshot raises; **the diagonal family's rules (`exit_flags._legs`/`_diag_rows`/`_live_at`) are the PMCC's** — the short-dated DIAGONAL route is retired, the family is not. Keep decision logic in the core; a rule written twice drifts.
+
+---
+
+## 7. Infrastructure
+
+- **Paths** — `helm/config.py` (`DB_PATH` → `data/helm.db`; `HELM_DB` and `HELM_ROOT` override). SQLite in WAL mode; `helm/db.py`.
+- **Backups** — a nightly `.backup` copy outside the repo (launchd `com.russ.helm-nightly-backup`, 2:15, `~/Backups/helm/`, 14 days, Backblaze off the Mac). Writers take their own `VACUUM INTO` copy first (`data/helm.db.bak-*`; keep the newest three).
+- **Scheduled jobs** — the repo keeps `launchd/`: `com.helm.snapshot.daily` (10:00/12:30/15:15), `com.helm.audit.eod` (16:15), `com.helm.mktsampler`, `com.helm.gwwatch`; `launchd/parked/` holds the retired paper exit job. The board (`com.helm.pg`), the engine server (`com.helm.server`) and the 9:35 vol refresh are installed on the Mac; `~/Library/LaunchAgents` is the authoritative set. Jobs collect readings only — nothing scheduled acts on a trade.
+- **IB Gateway** — port 4002. **The snapshot runs on its own client numbers 31–33** (`ibkr.use_snapshot_ids()`); everything else uses 11–15, 17, 21, 99. The Gateway refuses a second connection on a number in use; a process that called `get_ib()` keeps 11 open until `disconnect_ib()`. New numbers are agreed with the Book first.
+- **Market data** — IBKR live entitlement (`reqMarketDataType(1)`); IBKR gives ≤ 120 days of history; long price history comes from `_s122/px/`, refreshed on the Mac. Yahoo is blocked from the cloud container and the device VM.
+- **Bridge** — `http://helm.local:8766/exec`; rules in the standing rules. **Secrets** — `~/.helm/env` (never print it), read by `helm/secrets_loader.py`.
+
+---
+
+## 8. Conventions
+
+- **Explain any change first — what, which files, why — and wait for Russ's go-ahead.** A question is not an instruction.
+- **Before editing a file keep a `.bak-YYYYMMDD-sNNN` copy**; it goes once the change is committed and its first unattended run is clean.
+- **Verify on a `VACUUM INTO` copy** with `HELM_DB=` pointed at it, through the real CLI started the way production starts it; compare every table; perturb the change to prove the test can fail (`python3 -B`). Session test scripts live in `_sNNN/`.
+- **The device shell never writes the live database**; write scripts are tested on a copy and Russ runs them on the Mac.
+- **The Mac's working tree is production** — a snapshot runs whatever is on disk at its next run.
+- **Russ commits and pushes** — one command naming every file, ending with the session's attribution lines. Commands shown to Russ start `cd ~/Projects/helm && helm …`.
+
+---
+
+## 9. Keeping this file honest
+
+- Update it when **structure** changes (a new table, a new step, a moved module), committed beside the code.
+- No status, issue numbers or thresholds that live elsewhere — point at them.
+- Prefer a pointer over a paraphrase. A term you can't place is suspect, not canonical: check it against the code.

@@ -7,7 +7,7 @@ future session builds; most sessions add nothing.*
 
 *First cut 2026-09-20, curated from the lessons list and the decisions scattered
 through `claude/HELM-worklist.md` (frozen). Russ reads it once before it is trusted.
-Last updated 2026-10-30 (s140: HELM commands are shown with `cd ~/Projects/helm &&` in front). Before that 2026-10-28 (s138: proposal tools are commands, recorded; earnings fail closed; assignment accounting; three covered-call choices; book limits built; a screen casts a wider net than its rules; -B on a perturbation). Before that 2026-10-27 (s137: Greeks follow trader practice; quality is the main risk control; the book's theta range and delta limit). Before that 2026-10-27 (rank-bar review: real trades only; CSP band 0.30 included; long-call bar review closed). Before that 2026-10-25 (s135: never REPLACE a cascading parent; a write test compares every table; HELM advises in plain words and flags every rule overstepped; paper book frozen, paper exit agent retired; how `helm settle --date` reads its date). Before that 2026-10-24 (s134: the revision — rulebook v0.2 approved: strategy set, sleeve limits, paper book retired, universe, net P&L, no double entry). Before that 2026-10-23 (s133: a named contract is a record, not a selection). Before that 2026-10-14 (s130: the device shell never writes the live database). Before that 2026-10-12 (s129: plain language, no rule or task numbers when talking to Russ). Before that 2026-10-12 (s128: explain first, wait for the go-ahead). Before that 2026-10-10 (s127: PG archived as a product; the board is HELM's interface). Before that 2026-10-10 (s126: the handover replaces the live list). Before that 2026-10-01 (s125: net rent banked, the diagonal loss limit, the four-question
+Last updated 2026-10-31 (s142: no double entry as built; partial closes; called-away shares and dividends; net of fees from 10/24; retired lines moved to the history file; two harness lessons). Before that 2026-10-31 (s141: a process that called `get_ib()` holds client 11; the snapshot is on its own client numbers). Before that 2026-10-30 (s140: HELM commands are shown with `cd ~/Projects/helm &&` in front). Before that 2026-10-28 (s138: proposal tools are commands, recorded; earnings fail closed; assignment accounting; three covered-call choices; book limits built; a screen casts a wider net than its rules; -B on a perturbation). Before that 2026-10-27 (s137: Greeks follow trader practice; quality is the main risk control; the book's theta range and delta limit). Before that 2026-10-27 (rank-bar review: real trades only; CSP band 0.30 included; long-call bar review closed). Before that 2026-10-25 (s135: never REPLACE a cascading parent; a write test compares every table; HELM advises in plain words and flags every rule overstepped; paper book frozen, paper exit agent retired; how `helm settle --date` reads its date). Before that 2026-10-24 (s134: the revision — rulebook v0.2 approved: strategy set, sleeve limits, paper book retired, universe, net P&L, no double entry). Before that 2026-10-23 (s133: a named contract is a record, not a selection). Before that 2026-10-14 (s130: the device shell never writes the live database). Before that 2026-10-12 (s129: plain language, no rule or task numbers when talking to Russ). Before that 2026-10-12 (s128: explain first, wait for the go-ahead). Before that 2026-10-10 (s127: PG archived as a product; the board is HELM's interface). Before that 2026-10-10 (s126: the handover replaces the live list). Before that 2026-10-01 (s125: net rent banked, the diagonal loss limit, the four-question
 diagonal card, two keep reasons; one base per percentage; live state in render harnesses). **Kept as a mirror on the Mac at
 `~/Projects/helm/_records/HELM-standing-rules.md` — edit that copy, publish with
 `project_write local_path`.***
@@ -15,6 +15,11 @@ diagonal card, two keep reasons; one base per percentage; live state in render h
 ---
 
 ## Who does what
+
+*s142 (2026-10-31): lines about retired structures and superseded decisions moved, word for
+word, to `claude/HELM-standing-rules-history.md` (mirror `_records/`) — the paper book, the old
+sizing caps, long calls, spreads, the pinned-diagonal booking, the paper-era "actor" notes.
+Any of them comes back unchanged if it is needed again.*
 
 - **Russ trades the REAL book by hand — entry and exit, and sizes every trade. On the
   real book HELM informs; it never acts.** *(Russ, s107; HELM-193.)* **The PAPER book is
@@ -36,13 +41,6 @@ diagonal card, two keep reasons; one base per percentage; live state in render h
   over 30%, a held name graded below C or ungraded, earnings inside a covered call. **Earnings
   on a put or a diagonal are a mark on the holding line** (highlighted inside 7 days), not a
   "Needs you" item — no rule asks for anything then. *(Russ, 2026-10-25, s135.)*
-- `book` is therefore also the actor field: a real close was a human, a paper close
-  was a rule. The two books share an `exit_reason` vocabulary so they can be pooled —
-  **but the same word means different things in each.**
-- Rule-precedence questions were paper-book questions; with the paper book retired, a
-  rule change is a change to what HELM TELLS Russ.
-- Rule work has two possible products: a change to what the paper agent DOES, or a
-  change to what HELM TELLS Russ. **Say which before building.**
 - Russ commits and pushes. Sessions stage files by name and write the message.
 - **Sessions explain any change first — what, which files, why — and wait for Russ's
   go-ahead before editing anything, records included. A question is not an
@@ -139,6 +137,25 @@ diagonal card, two keep reasons; one base per percentage; live state in render h
   shares' value; **the spread < 10% rule applies to calls too.** Booking called-away shares
   waits for import stage 2 (before the first covered call can expire). *(Russ, 2026-10-28.)*
 
+- **No double entry, as built (Russ, 2026-10-31, s142).** Trades enter HELM only through
+  `helm fills`. `helm open` evaluates only (`--confirm` refuses); `helm import`, `confirm-fills`
+  and `activity` are retired; `helm reconcile` writes nothing. `helm help` lists 17 commands;
+  the other 23 (close, assign, settle, resell among them) still run, listed by `helm legacy`,
+  due to go on 2026-12-01 unless Russ keeps them.
+- **A partial close splits the position (s142).** The closed contracts become their own CLOSED
+  position (tag `split_from:<id>`, its share of the premium); the original stays OPEN with the
+  rest and keeps its readings and entry snapshot. Same-day pieces of one order are one fill.
+  Puts and covered calls only; anything else partial is reported.
+- **Called-away shares and dividends (Russ's decisions 2026-10-31, built s142).** A covered call
+  assigned: the call closes at $0.00, the shares leave at the call strike, and their result
+  (strike − what HELM paid) is a CLOSED stock leg on the covered-call position, so the sleeve
+  counts it. A dividend on HELM-held shares counts HELM's part only — dividend × HELM's shares ÷
+  the account's shares from a Positions download within 7 days (else HELM asks for one).
+- **Net of fees from 10/24 only (Russ, 2026-10-31 — the small version).** The sleeve and every
+  trade since 10/24 are net; older trades stay gross, labelled "fees not applied" (the year's
+  fees are about $16 a trade and change no study's answer). Fidelity can revise a row's fee
+  after the trade: fees count **one row per trade, from the newest download** (`helm/netpnl.py`).
+
 ### Earlier settled decisions (in force unless marked superseded)
 
 - **HELM is one track. HELM PG as a product to sell is archived; `helm-pg` is HELM's
@@ -149,24 +166,6 @@ diagonal card, two keep reasons; one base per percentage; live state in render h
   **Archived, history only — never orient from them:** `claude/HELM-product-vision-and-status.md`,
   `HELM-product-development-plan.md`, `HELM-PG-wiring-pickup.md`, `HELM-trial-free-data.md`,
   `HELM-PG-where-the-product-stands.md`. Their status blocks describe July–August.
-- *(Superseded 2026-10-24: net of fees is now the P&L of record, from the Fidelity
-  import — see the revision above. History: on 2026-08-26 a spec implemented fee capture
-  as though decided and broke `helm close`; build net P&L from the import's fills, not by
-  editing `helm close`.)*
-- **PAPER settles expiries by inference** from the last good expiry-day spot — OTM →
-  0.00, ITM → intrinsic, within 1% of the strike or no mark → flagged. **REAL is
-  asked, never inferred.** *(Russ, s110.)*
-- **A paper leg with NO expiry-day mark settles from the official close**
-  (`expiry.settlement_intrinsic`, yfinance) as an explicit fallback, and the ±1%
-  guard cases settle the same way. *(Russ, 2026-09-20 — W177.)* **The guard that keeps
-  W167 intact: the fallback WRITES `close_price`, and `settled_mark` keeps reading
-  `close_price` first — so a settled leg still has exactly one value.**
-- *(The paper rules in this list — inference settlement, the official-close fallback,
-  hand-fired settlement, the paper exit agent — are history: the paper book was frozen on
-  2026-10-24 and has no open positions. Their code stays.)*
-- **Paper settlement stays hand-fired.** No agent, no tripwire. *(Russ, 2026-09-20.)*
-  **Accepted consequence: every paper expiry Friday loses readings until a session
-  runs `helm settle`, and the audit grades those days DEGRADED with the cause named.**
 - **Diagonals stay in the model, as a rented long** — *for the three run-off real
   diagonals only (EQT, IBM, JPM; longs 12/18). New diagonal-family trades are PMCCs under
   the revision's rules (2026-10-24).* The long call is the asset; a
@@ -186,26 +185,10 @@ diagonal card, two keep reasons; one base per percentage; live state in render h
   No bid AND no ask marks nothing. *(W179, 2026-09-21.)*
 - **Gate on facts, display judgments.** The stored IV-rank ceiling stays a warning,
   not a gate. *(Russ, s92.)*
-- *(Superseded 2026-10-24 by the sleeve limits above: the $5,000 per-trade cap and its
-  one-contract decline (W160/W201), the 5% cash ceiling, the 5% long-premium sleeve
-  (W194) and the long-call entry screen (W195, `lc-screen-v2`). Their code stays in
-  `helm/risk_cap.py` / `helm/lc_screen.py` for the retired structures — long calls and
-  puts, spreads, condors still size the old way until they are parked. Full text: this
-  file's git history (`_records/`, before s134) and `HELM-archive-2026-09-27-s123*.md`.)*
-  The long-call bar review is closed. *(Russ, 2026-10-27.)*
-- **The 20-point give-back line is the default exit on real long calls** (any that remain open). *(Russ,
-  2026-09-27. Replayed on the real book: −$6,540 vs −$27,056 actual, 23 better / 6
-  worse, consistent before and after the 25 Jul switch.)*
 - **The 21-DTE deadline stays for CSPs and condors — as insurance, not edge.** The
   n≥120 re-run (W16, 2026-09-26) found 28 DTE loses on new trades and cuts no big
   losses there; the historic tail came from oversized trades, which sizing now handles.
   *(Russ, 2026-09-26; supersedes s107's "stays until the re-run".)*
-- **Credit spreads (bear call, bull put) close at 21 DTE, not 7.** *(Russ, 2026-09-26.
-  The 7-day deadline's paper closes: 10 of 10 lost, median −363% of credit.)* **Only
-  these two** *(Russ, 2026-09-27)*: the deadline is `strategy_settings.dte_exit_threshold`,
-  one row per strategy, so changing it never moves condors, CSPs or covered calls.
-  Switched on by `_s123/w192_apply.py` (W192), which refuses while an open spread sits
-  inside the new window unless `--force`.
 - **CSPs: 50% profit target; no stop-loss, strike-breach or give-back exit.** Every
   such rule, replayed on the marks, made more trades worse than better in both the old
   and new samples. *(Russ, 2026-09-26.)* **A CSP whose bid-ask spread is ≥ 10% of mid at
@@ -215,16 +198,8 @@ diagonal card, two keep reasons; one base per percentage; live state in render h
   real** like W160 (Enter records nothing; a typed count overrides, recorded "RULE
   OVERRIDE (W189)"). *(W189, built 2026-09-27; decline-with-override follows the W195
   pattern Russ approved.)*
-- *(Retired 2026-10-24 with the paper book: `PAPER_EXITS_RETIRED` in `paper_exit_agent.py`;
-  the launchd job unloaded and its plist parked.)* **The paper exit agent decides after every snapshot, not once a day.** *(Russ,
-  2026-09-27 — W198.)* **As built:** inside the snapshot process after the 10:00 and
-  12:30 slots (any snapshot starting before 15:00 that covers PAPER); the scheduled
-  15:35 run is the after-15:15 pass; a lock keeps two passes from overlapping; ledger
-  note "after snapshot HH:MM"; off switch `HELM_W198_OFF=1`.
 - **Tilt capital toward premium selling**, where the book has shown an edge. *(Russ,
   2026-09-27.)*
-- **A REAL diagonal may be pinned from the chain, out of band**, booked as
-  `MANUAL_PIN` with "PINNED OUT OF BAND" in its notes, permanently. *(Russ, s113.)*
 - **A diagonal shows BOTH legs' DTE.** *(Since W180 step 5, 2026-09-23: a diagonal's
   flags read the legs themselves — the short in SHORT ON, the long in LONG ONLY.)*
 - **A diagonal card draws what the diagonal rule reads.** The W88 slice 5 panels take
@@ -238,9 +213,6 @@ diagonal card, two keep reasons; one base per percentage; live state in render h
   so targets and the paper record are somewhat optimistic. *(s115.)*
 - **A `.bak` lives until its change is committed AND its first unattended run is
   clean; then it goes. Keep the newest three database backups.** *(s120.)*
-- *(Superseded 2026-10-24 by "HELM advises in plain words" above.)* Exit flags were review
-  triggers, not sell signals; the disposition is still a logged yes/no, never an
-  auto-exit. *(s114/s115.)*
 - **A breached diagonal may be closed WHOLE rather than re-sold.** *(Russ, 2026-09-23,
   on TSLA.)*
 - **A control belongs on a surface that shows what the control acts on.** *(Russ +
@@ -332,6 +304,12 @@ diagonal card, two keep reasons; one base per percentage; live state in render h
 
 ## While verifying
 
+- **A harness that reads the CLI's words must set `COLUMNS` wide** (rich wraps at 80 and splits the
+  phrase being looked for), and **space CLI runs a second apart** — the import's backup name and its
+  IMPORT_RUN event id are stamped to the second, so two runs in one second collide. *(s142.)*
+- **A table comparison must count a changed column set as a change**, not crash on it (`EXCEPT`
+  needs equal columns; s142's `broker_fills.downloaded_at`). *(s142.)*
+
 - **A write test compares EVERY table's rows, not only the ones the change is meant to touch.**
   The s135 freeze was tested on a copy against positions and legs and passed; it had deleted
   5,612 `leg_checks` rows. *(2026-10-25.)*
@@ -413,8 +391,9 @@ diagonal card, two keep reasons; one base per percentage; live state in render h
 - **Status paragraphs are the least-checked claims in the project.** `0 0` after a
   fetch answers "pushed"; `git status --porcelain` answers "committed". Ask both.
 - **Know what time it is before auditing a day.**
-- **Never restart the engine 10:00–10:35, 12:30–13:05 or 15:15–15:50** — it kills a
-  running snapshot via client id 11. *(W103.)* *(From W198 the 10:00 and 12:30
+- **Never restart the engine 10:00–10:35, 12:30–13:05 or 15:15–15:50** — it killed a
+  running snapshot through the shared client numbers. *(W103.)* *(s141: cause fixed — the snapshot runs on
+  31–33; the rule is lifted only after a restart during a snapshot goes through cleanly, recorded here.)* *(From W198 the 10:00 and 12:30
   snapshot processes also run the paper exit pass, ~6 more minutes; still inside those
   windows.)*
 - **The working tree on the Mac IS production.** A snapshot, scan or agent runs
@@ -435,6 +414,11 @@ diagonal card, two keep reasons; one base per percentage; live state in render h
   settles legs that expired BEFORE D**, so one run dated the day after the latest expiry
   covers every earlier one; an expiry on D itself is not included. *(s135: the handover's
   "10-16, then 10-23" was two runs where one dated 10-24 was needed.)*
+- **IB Gateway refuses a second connection on a client number already in use** (it does not drop the
+  first). **A HELM process that calls `helm.ibkr.get_ib()` keeps client 11 open until it disconnects**, so
+  any later `check_connection()` in the same process is refused and reads as "IBKR not connected" — release
+  it (`disconnect_ib()`) first. The scheduled snapshot runs on its own numbers 31–33 (`use_snapshot_ids()`);
+  every other command uses 11–15, 17, 21, 99. A new number is agreed with the Book first. *(s141, 2026-10-31.)*
 - **Bridge rules:** `python3`, `git`, `helm` only · 45s timeout · responses truncate
   near 1,000 chars · **send plain readable `python3 -c`, and have the page JS return
   only `j.output`** · reading repo SOURCE is refused · a failed `open(path,'wb')` has
