@@ -10,6 +10,12 @@ row). Nothing is fetched live, so every Greek is "as of the last snapshot".
   stress    approximate book P&L for a market move of -5% / -10% (each stock
             moves beta x the market; delta + gamma) and for implied vol +10 points
   expiries  what expires on each date and how much of the sleeve it frees
+  market    s144 (Russ, 2026-11-01): what the market can do to the book, in dollars --
+            the day's time decay against a typical S&P day (SPY's stored implied
+            vol / sqrt(252)), the S&P fall that takes back a day's time decay, and
+            the book's P&L at every market move from -10% to +10% (the risk curve;
+            delta + gamma, each stock moving beta x the market). Display only: no
+            limit and no flag read it.
   orders    the 50% profit-take buy-to-close price for each open CSP short
             (covered-call and PMCC shorts too, when there are any); the run-off
             diagonals keep their own exit flags and are left out
@@ -19,6 +25,7 @@ listed in `beta_assumed`.
 
     python3 -m helm.bookview --selftest     helm book
 """
+import math
 import os
 import sqlite3
 
@@ -37,6 +44,11 @@ THETA_LO = 0.0005            # 0.05% of the sleeve a day -- below: the sleeve is
 THETA_HI = 0.0012            # 0.12% -- above: premium is running rich (more risk)
 DELTA_FRAC = 0.50            # beta-weighted delta at most half the sleeve
 STALE_DAYS = 3               # newest reading older than this (calendar days) -> stale
+
+# s144 (Russ, 2026-11-01): the market line and the risk curve -- display only.
+MARKET_SYMBOL = "SPY"        # the "typical day" is SPY's implied vol, as the 9:35 refresh stores it
+TRADING_DAYS = 252
+CURVE_MOVES = tuple(round(0.01 * k, 2) for k in range(-10, 11))   # -10% .. +10%, 1% steps
 
 
 def _latest_leg_reading(conn, leg_id):
@@ -166,6 +178,77 @@ def stress_pnl(delta_sh, gamma_sh, spot, beta, market_move):
     return delta_sh * ds + 0.5 * gamma_sh * ds * ds
 
 
+def book_pnl(rows, market_move):
+    """The book's delta + gamma P&L for one market move -- the sum of each row's
+    stress_pnl, so the curve and the -5%/-10% what-ifs can never disagree."""
+    tot = 0.0
+    for r in rows:
+        x = stress_pnl(r["delta_sh"], r.get("gamma_sh") or 0.0, r.get("spot"), r["beta"], market_move)
+        if x is not None:
+            tot += x
+    return tot
+
+
+def _market_move(conn):
+    """SPY's latest stored implied vol -> the options market's typical daily move
+    (iv / sqrt(252)). None when no reading is stored."""
+    try:
+        r = conn.execute("SELECT date, iv_current FROM iv_history WHERE ticker=? AND iv_current IS NOT NULL "
+                         "ORDER BY date DESC LIMIT 1", (MARKET_SYMBOL,)).fetchone()
+    except sqlite3.OperationalError:        # a database without the table
+        return None
+    if not r or not r["iv_current"] or float(r["iv_current"]) <= 0:
+        return None
+    iv = float(r["iv_current"])
+    return {"symbol": MARKET_SYMBOL, "iv": iv, "date": r["date"], "daily": iv / 100.0 / math.sqrt(TRADING_DAYS)}
+
+
+def _m(x, sign=False):
+    s = "$" + format(int(round(abs(x))), ",d")
+    return ("−" if x < 0 else ("+" if sign else "")) + s
+
+
+def market(conn, rows, totals, today=None):
+    """s144 (Russ, 2026-11-01): what the market can do to the book, in dollars, and
+    the plain-words line Today shows. Display only -- nothing reads it as a rule."""
+    from datetime import date as _date
+    today = today or _date.today()
+    th = totals.get("theta") or 0.0
+    bw = totals.get("bw_delta") or 0.0
+    mv = _market_move(conn)
+    per_1pct = bw / 100.0
+    curve = [{"move": m, "pnl": book_pnl(rows, m)} for m in CURVE_MOVES]
+    out = {"theta": th, "bw_delta": bw, "per_1pct": per_1pct, "typical": mv, "typical_down": None,
+           "typical_up": None, "breakeven_fall": None, "curve": curve, "stale": None,
+           "note": "approximate: delta + gamma, each stock moving beta x the S&P; leaves out time decay, "
+                   "changes in implied vol, and any one stock's own news (earnings)"}
+    lines = []
+    if th > 0:
+        lines.append("Time earns the book %s a day." % _m(th))
+    elif th < 0:
+        lines.append("The book pays %s a day in time decay." % _m(-th))
+    if mv:
+        out["typical_down"] = book_pnl(rows, -mv["daily"])
+        out["typical_up"] = book_pnl(rows, mv["daily"])
+        try:
+            age = (today - _date.fromisoformat(mv["date"][:10])).days
+        except ValueError:
+            age = None
+        if age is None or age > STALE_DAYS:
+            out["stale"] = "SPY's implied vol is from %s" % mv["date"][:10]
+        lines.append("A typical S&P day (±%.2f%%, from SPY's implied vol of %.1f%% on %s) moves it about %s or %s." % (
+            100 * mv["daily"], mv["iv"], mv["date"][5:10], _m(out["typical_down"], True), _m(out["typical_up"], True)))
+    else:
+        lines.append("No SPY implied vol is stored, so there is no typical day to show; a 1%% S&P move is about %s." % _m(per_1pct))
+    if th > 0 and per_1pct > 0:
+        out["breakeven_fall"] = th / per_1pct / 100.0          # as a fraction: 0.0012 = 0.12%
+        lines.append("An S&P fall of %.2f%% takes back a day's time decay." % (100 * out["breakeven_fall"]))
+    elif per_1pct < 0:
+        lines.append("The book gains when the S&P falls (%s per 1%%)." % _m(-per_1pct))
+    out["lines"] = lines
+    return out
+
+
 def view(account_id=None, db=None):
     b = S.book(account_id, db)
     conn = S._conn(db)
@@ -230,7 +313,8 @@ def view(account_id=None, db=None):
                 "stress_note": "approximate: delta + gamma for market moves (each stock moves beta x the market); vega for vol",
                 "as_of": (min(as_ofs), max(as_ofs)) if as_ofs else None,
                 "beta_assumed": sorted(set(beta_assumed)), "expiries": expiries, "orders": orders,
-                "limits": limits(totals, b["share"], rows)}
+                "limits": limits(totals, b["share"], rows),
+                "market": market(conn, rows, totals)}
     finally:
         conn.close()
 
@@ -258,6 +342,14 @@ def _report(account_id=None, db=None):
         _money(v["stress"]["-0.05"], True), _money(v["stress"]["-0.1"], True), _money(v["stress"]["vol+10"], True)))
     if v["beta_assumed"]:
         print("  beta assumed 1.0 (none on the watchlist):", ", ".join(v["beta_assumed"]))
+    M = v["market"]
+    print("\nthe market and the book (%s)" % M["note"])
+    for ln in M["lines"]:
+        print("  " + ln)
+    if M["stale"]:
+        print("  [" + M["stale"] + "]")
+    print("  risk curve: " + "   ".join("%+d%% %s" % (round(100 * c["move"]), _money(c["pnl"], True))
+                                       for c in M["curve"] if round(100 * c["move"]) in (-10, -5, -2, -1, 1, 2, 5, 10)))
     print("\n  %-6s %-9s %8s %10s %10s %8s %8s" % ("name", "strategy", "delta sh", "$ delta", "beta-wtd", "theta", "vega"))
     for r in sorted(v["positions"], key=lambda r: r["ticker"]):
         print("  %-6s %-9s %+8.0f %10s %10s %8s %8s%s" % (
@@ -367,6 +459,42 @@ def _selftest():
     st = limits({"theta": 200, "bw_delta": 0}, sh, [{"ticker": "X", "as_of": "2026-10-28T12:30", "missing_legs": ["l"]}],
                 today=_dd(2026, 10, 28))["stale"]
     ok(st == ["no reading on X"], "a leg with no reading is named")
+    # s144: the market line and the risk curve
+    M = v["market"]
+    C = {round(100 * x["move"]): x["pnl"] for x in M["curve"]}
+    ok(sorted(C) == list(range(-10, 11)) and C[0] == 0.0, "curve: -10%..+10% in 1% steps, zero at no move")
+    ok(abs(C[-5] - v["stress"]["-0.05"]) < 1e-6 and abs(C[-10] - v["stress"]["-0.1"]) < 1e-6,
+       "the curve and the -5%%/-10%% what-ifs agree: %s %s" % (C[-5], v["stress"]["-0.05"]))
+    hand = sum(r["delta_sh"] * (r["spot"] * -0.03 * r["beta"]) + 0.5 * r["gamma_sh"] * (r["spot"] * -0.03 * r["beta"]) ** 2
+               for r in v["positions"])
+    ok(abs(C[-3] - hand) < 1e-6, "curve -3%% by hand: %s vs %s" % (C[-3], hand))
+    ok(abs(M["breakeven_fall"] - v["totals"]["theta"] / (v["totals"]["bw_delta"] / 100.0) / 100.0) < 1e-15,
+       "break-even fall = theta / (beta-weighted delta per 1%)")
+    ok(M["typical"] is None and M["typical_down"] is None and any("No SPY implied vol" in ln for ln in M["lines"]),
+       "no SPY implied vol stored -> no typical day, said so")
+    c = sqlite3.connect(db)
+    c.executescript("""CREATE TABLE iv_history (ticker TEXT, date TEXT, iv_current REAL);
+      INSERT INTO iv_history VALUES ('SPY','2026-10-29',13.33),('SPY','2026-10-30',14.29),('AMZN','2026-10-31',40.0);""")
+    c.commit()
+    c.row_factory = sqlite3.Row
+    from datetime import date as _d2
+    M2 = market(c, v["positions"], v["totals"], today=_d2(2026, 11, 2))
+    dly = 0.1429 / math.sqrt(252)
+    ok(abs(M2["typical"]["daily"] - dly) < 1e-12 and M2["typical"]["date"] == "2026-10-30",
+       "typical day = SPY's newest implied vol / sqrt(252): %s" % M2["typical"])
+    ok(abs(M2["typical_down"] - book_pnl(v["positions"], -dly)) < 1e-9 and M2["typical_down"] < 0 < M2["typical_up"],
+       "typical down / up from the curve's own function")
+    ok(M2["stale"] is None and market(c, v["positions"], v["totals"], today=_d2(2026, 11, 5))["stale"]
+       == "SPY's implied vol is from 2026-10-30", "SPY's vol older than 3 days is named")
+    want = ["Time earns the book $78 a day.",
+            "A typical S&P day (±%.2f%%, from SPY's implied vol of 14.3%% on 10-30) moves it about %s or %s." % (
+                100 * dly, _m(M2["typical_down"], True), _m(M2["typical_up"], True)),
+            "An S&P fall of %.2f%% takes back a day's time decay." % (100 * M2["breakeven_fall"])]
+    ok(M2["lines"] == want, "the Today line, word for word: %s" % M2["lines"])
+    M3 = market(c, [], {"theta": -20.0, "bw_delta": -5000.0}, today=_d2(2026, 11, 2))
+    ok(M3["lines"][0] == "The book pays $20 a day in time decay." and M3["breakeven_fall"] is None
+       and M3["lines"][-1] == "The book gains when the S&P falls ($50 per 1%).", "short-delta, paying-theta book: %s" % M3["lines"])
+    c.close()
     # shares in the Greeks
     c = sqlite3.connect(db)
     c.execute("INSERT INTO stock_positions VALUES ('a','JPM',200,335.0)")
@@ -385,7 +513,7 @@ def _selftest():
        "shares with no reading are priced at cost and the limits say so")
     ok(("YYY", "SHARES") not in P2 and abs(v2["totals"]["delta_sh"] - v["totals"]["delta_sh"] - 400) < 1e-9,
        "shares already carried as a stock leg are not counted twice (200 JPM + 100 ZZZ + YYY's leg 100)")
-    print("bookview selftest:", "PASS (%d checks)" % 22 if not fails else "%d FAIL" % len(fails))
+    print("bookview selftest:", "PASS (%d checks)" % 32 if not fails else "%d FAIL" % len(fails))
     return 1 if fails else 0
 
 
