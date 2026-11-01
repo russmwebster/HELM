@@ -9,11 +9,17 @@
     helm calls --force              run inside a snapshot window anyway
     helm calls --selftest           the rules' self-test
 
-Rules: strike at or above the effective basis (strike paid less put premium),
-0.20-0.35 delta, 30-45 days, spread under 10% of mid, no earnings inside the
-trade (failing closed). Three choices per holding, ranked by the premium's
-yearly return on the shares' value -- the first is the likeliest to be called
-away. HELM never places anything. The rules are helm/calltool.py.
+Rules on shares: strike at or above the effective basis (strike paid less put
+premium), 0.20-0.35 delta, 30-45 days, spread under 10% of mid, no earnings
+inside the trade (failing closed). Three choices per holding, ranked by the
+premium's yearly return on the shares' value -- the first is the likeliest to be
+called away.
+
+PMCCs with no short (s146): the next short at 0.20-0.30 delta, 30-45 days, spread
+under 10%, strike passing the width test (above the long's strike + what the long
+has cost net of rent banked); earnings inside the short allowed and flagged;
+yearly return on the long's cost. HELM never places anything. The rules are
+helm/calltool.py.
 """
 from __future__ import annotations
 
@@ -33,22 +39,25 @@ def _usd(x):
 
 def _show(run, why=False):
     mk = {1: "market open", 0: "market closed -- last quotes"}.get(run.get("market_open"), "")
-    kind = "IF ASSIGNED -- nothing is booked" if run.get("hypothetical") else "HELM's shares"
+    kind = "IF ASSIGNED -- nothing is booked" if run.get("hypothetical") else "HELM's shares and PMCCs"
     console.print()
     console.print("[bold]Covered calls[/bold]  %s  %s  ·  %s" % (run["run_at"], ("(" + mk + ")") if mk else "", kind))
     if run.get("note"):
         console.print("[dim]%s[/dim]" % run["note"])
     if not run["n_holdings"] and not run["rejects"]:
-        console.print("\n  HELM holds no shares, so there is nothing to cover. "
+        console.print("\n  HELM holds no shares and no PMCC, so there is nothing to sell a call on. "
                       "[dim](--if-assigned TICKER shows an open put as if assigned.)[/dim]\n")
         return
     by = {}
     for c in run["candidates"]:
-        by.setdefault(c["ticker"], []).append(c)
-    for tk in sorted(by):
-        cs = by[tk]
+        by.setdefault((c.get("kind") or "shares", c["ticker"]), []).append(c)
+    for kd, tk in sorted(by, key=lambda k: (k[0] != "shares", k[1])):
+        cs = by[(kd, tk)]
         h = cs[0]
         console.print()
+        if kd == "pmcc":
+            _show_pmcc(tk, cs)
+            continue
         console.print("[bold]%s[/bold]  %d shares · %d contract%s to sell · cost $%.2f · effective basis $%.2f%s" % (
             tk, h["shares"], h["contracts"], "" if h["contracts"] == 1 else "s", h["cost_basis"],
             h["effective_basis"], "" if not h.get("basis_note") else "  [dim](%s)[/dim]" % h["basis_note"]))
@@ -65,14 +74,46 @@ def _show(run, why=False):
                       _usd(c["if_called"]), "$%.2f" % c["rest_price"], c.get("exdiv") or "")
         console.print(t)
     rej = run.get("rejects") or {}
+    pm = any((c.get("kind") == "pmcc") for c in run["candidates"])
     if rej:
         console.print("[dim]No call: %s[/dim]" % ", ".join(sorted(rej)) + ("" if why else "  [dim](--why)[/dim]"))
         if why:
             for tk in sorted(rej):
                 console.print("  %-6s %s" % (tk, rej[tk]))
-    console.print("[dim]Choice 1 pays most and is the likeliest to be called away; a higher strike keeps the "
-                  "shares more often. 'If called' = (strike - effective basis) x shares + the premium.[/dim]")
+    if any((c.get("kind") or "shares") == "shares" for c in run["candidates"]) or not pm:
+        console.print("[dim]Choice 1 pays most and is the likeliest to be called away; a higher strike keeps the "
+                      "shares more often. 'If called' = (strike - effective basis) x shares + the premium.[/dim]")
+    if pm:
+        console.print("[dim]PMCC: 'A year' is on what the long cost. 'If called, at least' = (strike - the "
+                      "width-test floor) x 100 x contracts + the premium -- the whole trade's result with the long "
+                      "sold for no more than its intrinsic value; its time value left is extra.[/dim]")
     console.print()
+
+
+def _show_pmcc(tk, cs):
+    h = cs[0]
+    n = h["contracts"]
+    rent = (h["cost_basis"] - (h["floor_strike"] - h["long_strike"])) * 100 * n
+    console.print("[bold]%s PMCC[/bold]  long %g call · %d contract%s to sell against · long cost $%.2f · "
+                  "rent banked %s" % (tk, h["long_strike"], n, "" if n == 1 else "s", h["cost_basis"], _usd(rent)))
+    console.print("[dim]strike must be above $%.2f (the width test: %g + $%.2f the long has cost net of rent) "
+                  "· price %.2f[/dim]" % (h["floor_strike"], h["long_strike"], h["floor_strike"] - h["long_strike"],
+                                          h["spot"] or 0))
+    t = Table(box=box.SIMPLE_HEAD, pad_edge=False)
+    for col, j in (("#", "right"), ("Call", "left"), ("Days", "right"), ("Delta", "right"),
+                   ("Premium", "right"), ("Collect", "right"), ("A year", "right"),
+                   ("If called, at least", "right"), ("50% buy-back", "right"), ("Note", "left")):
+        t.add_column(col, justify=j, no_wrap=True)
+    for c in cs:
+        note = "; ".join(x for x in (c["earnings"] if "INSIDE" in (c["earnings"] or "") else None,
+                                     c.get("exdiv")) if x)
+        t.add_row(str(c["choice"]), "%s %g" % (c["expiry"], c["strike"]), str(c["dte"]),
+                  "%.2f" % c["delta"] if c["delta"] is not None else "", "$%.2f" % c["mid"],
+                  _usd(c["mid"] * 100 * n), "%.0f%%" % (100 * c["ann_return"]),
+                  _usd(c["if_called"]), "$%.2f" % c["rest_price"], note)
+    console.print(t)
+    if "INSIDE" not in (h["earnings"] or ""):
+        console.print("[dim]%s[/dim]" % h["earnings"])
 
 
 def run():

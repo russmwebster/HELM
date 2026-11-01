@@ -319,13 +319,15 @@ def _diag_family(conn, p, legs_all, today):
         return _rec(p, "REVIEW_LONG", "%s -- review the long: %d days left" % (what, l_dte),
                     "The rule reviews the long at 90 days. %s." % status.capitalize(), nums, as_of=as_of)
     if S0 is None:
-        width = (long_cost - rent) / ((L["multiplier"] or 100) * (L["contracts"] or 1))
+        from helm.fillopens import width_floor
+        width = width_floor(opts)[0]
         nums["width_floor"] = round(width, 2)
         return _rec(p, "SELL_CALL" if is_pmcc else "DECIDE",
                     "%s -- %s" % (what, "sell the next call" if is_pmcc else "the long has no short on it"),
                     "No short is open. %s." % status.capitalize(), nums,
-                    act="pick a 30-45 day, 0.20-0.30 delta call whose strike sits more than %s above the "
-                    "long's %g strike (the width test)" % (_p(width), L["strike"]), as_of=as_of)
+                    act="run `cd ~/Projects/helm && helm calls` for three choices -- a 30-45 day, 0.20-0.30 "
+                    "delta call whose strike sits more than %s above the long's %g strike (the width test)"
+                    % (_p(width), L["strike"]), as_of=as_of)
     pend = [d for d in EF.pending(conn, ensure=False) if d["position_id"] == p["id"]] if not is_pmcc else []
     if pend:
         d = pend[0]
@@ -757,8 +759,8 @@ def _share_entries(db, view_rows):
             t = h["ticker"]
             covered_by = [{"position_id": r["id"], "strategy": r["strategy"]} for r in conn.execute(
                 "SELECT DISTINCT p.id, p.strategy FROM positions p JOIN legs l ON l.position_id=p.id "
-                "WHERE p.book='REAL' AND p.status='OPEN' AND p.ticker=? AND l.status='OPEN' "
-                "AND l.direction='SHORT' AND l.option_type='CALL' ORDER BY p.id", (t,))]
+                "WHERE p.book='REAL' AND p.status='OPEN' AND p.strategy='COVERED_CALL' AND p.ticker=? "
+                "AND l.status='OPEN' AND l.direction='SHORT' AND l.option_type='CALL' ORDER BY p.id", (t,))]
             g = _grade(conn, t)
             v = px.get(t, {})
             out.append({"kind": "shares", "id": ids.get(t), "ticker": t, "shares": h["shares"],

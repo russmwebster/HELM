@@ -77,12 +77,14 @@ def _open_pmccs(conn, ticker):
     return out
 
 
-def width_test(legs, new_short_strike, new_short_contracts):
-    """(passes, floor, long_strike). The strike gap must exceed what the long has
-    cost net of rent banked, per share (rulebook v0.2 section 6)."""
+def width_floor(legs):
+    """(floor per share, long_strike), or (None, None) with no open long.
+    floor = what the long has cost net of rent banked (closed shorts' credit less
+    their buy-backs), per share. THE width test's arithmetic -- the import, helm
+    advise and helm calls all read it here (s146: one function, not three copies)."""
     L = [l for l in legs if l["direction"] == "LONG" and l["status"] == "OPEN"]
     if not L:
-        return None, None, None
+        return None, None
     L = L[0]
     mult = (L["multiplier"] or 100)
     long_cost = (L["open_price"] or 0) * mult * (L["contracts"] or 0)
@@ -91,9 +93,18 @@ def width_test(legs, new_short_strike, new_short_contracts):
         if l["direction"] == "SHORT" and l["status"] != "OPEN":
             m = (l["multiplier"] or 100) * (l["contracts"] or 0)
             rent += (l["open_price"] or 0) * m - (l["close_price"] or 0) * m
-    floor = (long_cost - rent) / (mult * (L["contracts"] or 1))
-    gap = float(new_short_strike) - float(L["strike"])
-    return gap > floor, round(floor, 2), float(L["strike"])
+    return (long_cost - rent) / (mult * (L["contracts"] or 1)), float(L["strike"])
+
+
+def width_test(legs, new_short_strike, new_short_contracts):
+    """(passes, floor, long_strike). The strike gap must exceed what the long has
+    cost net of rent banked, per share (rulebook v0.2 section 6)."""
+    floor, lk = width_floor(legs)
+    if floor is None:
+        return None, None, None
+    gap = float(new_short_strike) - lk
+    # s146: "must exceed" -- a strike exactly at the floor read 62.900000000000006 > 62.9 and passed
+    return gap > floor + 1e-9, round(floor, 2), lk
 
 
 def _freed(conn, position_id):
