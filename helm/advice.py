@@ -27,6 +27,7 @@ Not yet possible: the covered-call ex-dividend flag (HELM stores no ex-dividend
 dates). Said in the output, never guessed.
 
     helm advise                       python3 -m helm.advice --selftest
+    helm advise --json                (s143) writes Claude outputs/advice.json + advice-status.json
 """
 import os
 import sqlite3
@@ -661,10 +662,265 @@ def _report():
               "Not yet available: ex-dividend dates (none stored).[/dim]")
 
 
+# ---------------------------------------------------------------- advice.json (s143)
+# The Book of Books' combined view (HELM + Factor Lab) reads HELM's advice from a
+# file HELM writes after each scheduled snapshot (Russ, 2026-10-31). READ-ONLY for
+# the Book; `helm advise` and the board are unchanged. Built from the same advise()
+# call, so the three can't disagree.
+#   advice.json         the last GOOD advice (kept as is when a slot fails)
+#   advice-status.json  written every slot: run time, ok / failed / skipped, reason
+# Written to a temp file in the same folder, then swapped in (os.replace), so a
+# reader never sees half a file. Nothing here writes the database.
+
+SCHEMA_VERSION = 1
+ADVICE_FILE = "advice.json"
+STATUS_FILE = "advice-status.json"
+BOOK_FLAG_KEYS = ("SLEEVE", "THETA", "DELTA", "LIMITS")
+
+
+def _now_iso():
+    return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def out_dir():
+    """HELM_ADVICE_DIR, else <HELM folder>/Claude outputs."""
+    from pathlib import Path
+    d = os.environ.get("HELM_ADVICE_DIR")
+    if d:
+        return Path(d).expanduser()
+    from helm.config import PROJECT_ROOT
+    return PROJECT_ROOT / "Claude outputs"
+
+
+def writes_allowed():
+    """(ok, why). A run on a database COPY (HELM_DB pointed elsewhere) must never
+    overwrite the Book's live file, unless HELM_ADVICE_DIR says where to write."""
+    if os.environ.get("HELM_ADVICE_DIR"):
+        return True, None
+    from helm.config import DB_PATH, DATA_DIR
+    if os.path.realpath(str(DB_PATH)) == os.path.realpath(str(DATA_DIR / "helm.db")):
+        return True, None
+    return False, "HELM_DB is a copy (%s) and HELM_ADVICE_DIR is not set" % DB_PATH
+
+
+def slot_of(when_iso):
+    """The scheduled slot ('10:00', '12:30', '15:15') a run started in, else None."""
+    if not when_iso:
+        return None
+    try:
+        t = datetime.fromisoformat(str(when_iso)[:19])
+    except ValueError:
+        return None
+    for s in SNAPSHOT_SLOTS:
+        h, m = (int(x) for x in s.split(":"))
+        start = t.replace(hour=h, minute=m, second=0, microsecond=0)
+        if 0 <= (t - start).total_seconds() <= SLOT_WINDOW_MIN * 60:
+            return s
+    return None
+
+
+def _share_line(h, covered_by, grade):
+    """HELM's line for HELM-held shares -- the covered-call rules (rulebook v0.2 s5)."""
+    t, sh, free = h["ticker"], h["shares"], h["free_shares"]
+    basis = h["effective_basis"]
+    b = _p(basis) if basis is not None else "unknown"
+    cov = (" Covered by: %s." % ", ".join("%s (%s)" % (c["position_id"], _PLAIN.get(c["strategy"], c["strategy"].lower()))
+                                          for c in covered_by)) if covered_by else ""
+    if h["contracts"] >= 1:
+        verb, head = "SELL_CALL", "%s %d shares -- sell a covered call" % (t, sh)
+        reason = ("%d of %d shares have no call on them; effective basis %s, so the strike must be at or above it "
+                  "(0.20-0.35 delta, 30-45 days, no earnings inside the trade).%s" % (free, sh, b, cov))
+        act = "see three choices: cd ~/Projects/helm && helm calls"
+    elif free > 0:
+        verb, head = "HOLD", "%s %d shares -- hold" % (t, sh)
+        reason = "%d shares have no call on them, fewer than 100, so no call can be sold on them.%s" % (free, cov)
+        act = None
+    else:
+        verb, head = "HOLD", "%s %d shares -- hold" % (t, sh)
+        reason = "All %d shares have a call on them; that position's line is the advice.%s" % (sh, cov)
+        act = None
+    needs, prio, label = VERBS[verb]
+    return {"verb": verb, "label": label, "needs_you": needs, "priority": prio,
+            "headline": head, "reason": reason, "act": act, "lean": None}
+
+
+def _share_entries(db, view_rows):
+    from helm import calltool as C
+    conn = S._conn(db)
+    try:
+        out = []
+        ids = {r["ticker"]: r["id"] for r in conn.execute("SELECT id, ticker FROM stock_positions")} \
+            if S._has_table(conn, "stock_positions") else {}
+        hs = C.holdings(conn) if ids else []
+        px = {r["ticker"]: r for r in view_rows if r.get("strategy") == "SHARES"}
+        for h in hs:
+            t = h["ticker"]
+            covered_by = [{"position_id": r["id"], "strategy": r["strategy"]} for r in conn.execute(
+                "SELECT DISTINCT p.id, p.strategy FROM positions p JOIN legs l ON l.position_id=p.id "
+                "WHERE p.book='REAL' AND p.status='OPEN' AND p.ticker=? AND l.status='OPEN' "
+                "AND l.direction='SHORT' AND l.option_type='CALL' ORDER BY p.id", (t,))]
+            g = _grade(conn, t)
+            v = px.get(t, {})
+            out.append({"kind": "shares", "id": ids.get(t), "ticker": t, "shares": h["shares"],
+                        "effective_basis": h["effective_basis"], "cost_basis": h["cost_basis"],
+                        "basis_note": h.get("basis_note"), "grade": g,
+                        "call_on_them": h["free_shares"] < h["shares"], "shares_without_call": h["free_shares"],
+                        "covered_by": covered_by, "price": v.get("spot"), "price_as_of": v.get("as_of"),
+                        "price_note": v.get("price_note"),
+                        "recommendation": _share_line(h, covered_by, g), "rule_flags": []})
+        return out
+    finally:
+        conn.close()
+
+
+def _flag_out(f, kind):
+    return {"kind": kind, "key": f["ticker"], "headline": f["headline"], "reason": f["reason"],
+            "act": f["act"], "numbers": f["numbers"]}
+
+
+def build(db=None, today=None, snapshot=None, source="helm advise --json"):
+    """The advice.json document. Read-only. Raises on any failure (the caller keeps
+    the last good file)."""
+    from helm import bookview as V
+    today = today or date.today()
+    recs = advise(db=db, today=today)
+    v = V.view(None, db)
+    b, L = v["sleeve"], v["limits"]
+    entries = {}
+    for r in recs:
+        if r["position_id"] is None:
+            continue
+        entries[r["position_id"]] = {
+            "kind": "position", "id": r["position_id"], "ticker": r["ticker"], "strategy": r["strategy"],
+            "recommendation": {k: r[k] for k in ("verb", "label", "needs_you", "priority", "headline", "reason",
+                                                 "act", "lean")},
+            "numbers": r["numbers"], "marks": r["marks"], "reading_as_of": r["as_of"], "rule_flags": []}
+    for e in _share_entries(db, v["positions"]):
+        entries[e["id"] or ("shares:" + e["ticker"])] = e
+    # every open real position must have its entry -- a missing one is a failure, not a gap
+    conn = S._conn(db)
+    try:
+        open_ids = {r[0] for r in conn.execute("SELECT id FROM positions WHERE book='REAL' AND status='OPEN'")}
+    finally:
+        conn.close()
+    missing = sorted(open_ids - {k for k, e in entries.items() if e["kind"] == "position"})
+    if missing:
+        raise RuntimeError("no advice line for open position(s): %s" % ", ".join(missing))
+    sectors = set(b["by_sector"])
+    book_flags = []
+    for f in (r for r in recs if r["position_id"] is None):
+        if f["ticker"] in BOOK_FLAG_KEYS:
+            book_flags.append(_flag_out(f, "book"))
+            continue
+        if f["ticker"] in sectors:
+            book_flags.append(_flag_out(f, "sector"))
+            continue
+        hit = [e for e in entries.values() if S.name_key(e["ticker"]) == S.name_key(f["ticker"])]
+        for e in hit:
+            e["rule_flags"].append(_flag_out(f, "name"))
+        if not hit:
+            book_flags.append(_flag_out(f, "name"))
+    order = sorted(entries.values(), key=lambda e: (e["recommendation"]["priority"], e["ticker"], e["kind"]))
+    share = b["share"]
+    pct = lambda x: round(x / share, 4) if share else None
+    r2 = lambda x: None if x is None else round(x, 2)
+    limits = {
+        "sleeve": {"share": r2(share), "in_use": r2(b["used"]), "free": r2(b["free"]), "basis": b["basis"],
+                   "state": "over" if b["used"] > share + 1e-6 else "ok"},
+        "name": {"limit_pct": S.NAME_PCT, "limit": r2(b["name_cap"]), "over": b["over_name"],
+                 "by_name": {k: {"in_use": r2(x), "pct_of_sleeve": pct(x),
+                                 "state": "over" if k in b["over_name"] else "ok"}
+                             for k, x in sorted(b["by_name"].items(), key=lambda kv: -kv[1])}},
+        "sector": {"limit_pct": S.SECTOR_PCT, "limit": r2(b["sector_cap"]), "over": b["over_sector"],
+                   "by_sector": {k: {"in_use": r2(x), "pct_of_sleeve": pct(x),
+                                     "state": "over" if k in b["over_sector"] else "ok"}
+                                 for k, x in sorted(b["by_sector"].items(), key=lambda kv: -kv[1])},
+                   "unsectored": b["unsectored"]},
+        "beta_weighted_delta": {"value": r2(L["bw_delta"]), "limit": r2(L["delta_cap"]), "state": L["delta_state"],
+                                "meaning": "the book moves like this many dollars of the S&P 500",
+                                "beta_assumed_1": v["beta_assumed"]},
+        "theta": {"per_day": r2(L["theta"]),
+                  "pct_of_sleeve": None if L["theta_pct"] is None else round(L["theta_pct"], 6),
+                  "range_low": r2(L["theta_lo"]), "range_high": r2(L["theta_hi"]), "state": L["theta_state"]},
+        "readings": {"as_of": list(v["as_of"]) if v["as_of"] else None, "notes": L["stale"]},
+    }
+    return {"schema_version": SCHEMA_VERSION, "generated_at": _now_iso(), "source": source,
+            "slot": slot_of((snapshot or {}).get("started")) if snapshot else None,
+            "snapshot": snapshot, "book": "REAL", "today": today.isoformat(),
+            "entries": {e["id"] if e["kind"] == "position" else (e["id"] or "shares:" + e["ticker"]): e for e in order},
+            "book_flags": book_flags, "limits": limits,
+            "note": "Advice only, from stored readings: Russ decides and places every trade; HELM never acts. "
+                    "Ex-dividend dates are not stored."}
+
+
+def _atomic_write(path, doc):
+    import json
+    import tempfile
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix="." + path.name + ".", suffix=".tmp", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w") as fh:
+            json.dump(doc, fh, indent=2, default=str)
+            fh.write("\n")
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _last_good(d):
+    import json
+    try:
+        with open(d / ADVICE_FILE) as fh:
+            j = json.load(fh)
+        return {"generated_at": j.get("generated_at"), "slot": j.get("slot")}
+    except Exception:      # noqa: BLE001 -- none yet, or unreadable
+        return {"generated_at": None, "slot": None}
+
+
+def write_files(db=None, today=None, snapshot=None, source="helm advise --json", skipped=None, error=None):
+    """Write advice.json (only when good) and advice-status.json (always).
+    Returns the status document. Never raises -- a failure is the status."""
+    ok_w, why_not = writes_allowed()
+    if not ok_w:
+        return {"status": "not written", "reason": why_not}
+    d = out_dir()
+    run_at = _now_iso()
+    st = {"schema_version": SCHEMA_VERSION, "run_at": run_at, "source": source,
+          "slot": slot_of((snapshot or {}).get("started") or datetime.now().isoformat()),
+          "snapshot": snapshot}
+    if skipped:
+        st.update(status="skipped", ok=False, reason=skipped)
+    elif error:
+        st.update(status="failed", ok=False, reason=error)
+    else:
+        try:
+            doc = build(db=db, today=today, snapshot=snapshot, source=source)
+            _atomic_write(d / ADVICE_FILE, doc)
+            st.update(status="ok", ok=True, reason=None)
+        except Exception as exc:      # noqa: BLE001 -- the status file carries it
+            st.update(status="failed", ok=False, reason="%s: %s" % (type(exc).__name__, exc))
+    st["advice"] = _last_good(d)
+    st["advice"]["file"] = ADVICE_FILE
+    try:
+        _atomic_write(d / STATUS_FILE, st)
+    except Exception as exc:          # noqa: BLE001
+        st["status_write_error"] = "%s: %s" % (type(exc).__name__, exc)
+    return st
+
+
+
 def run():
     import sys
     if "--selftest" in sys.argv:
         return _selftest()
+    if "--json" in sys.argv:          # s143: write advice.json + advice-status.json now
+        st = write_files(source="helm advise --json")
+        print("advice.json: %s%s  (%s)" % (st["status"], (" -- " + st["reason"]) if st.get("reason") else "", out_dir()))
+        return
     _report()
 
 

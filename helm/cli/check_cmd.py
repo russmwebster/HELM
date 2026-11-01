@@ -523,6 +523,10 @@ from helm.verdict import band_for, _ns_pos, _ns_leg
 # claiming every position was "processed".
 VERDICT_FAILURES = []
 
+# s143: what the last cmd_snapshot run did, for the advice.json post-pass in
+# run_snapshot (helm.advice.write_files). Filled by cmd_snapshot, read once.
+SNAPSHOT_INFO = {}
+
 
 def core_verdict(pos, legs, opt_legs, primary, opt_data, leg_marks):
     """Decision-core verdict for a check-side position, or None if the core
@@ -2975,6 +2979,7 @@ def cmd_snapshot(args):
     if not _run_ok:
         print("snapshot: market closed (%s) -- standing down" % _why)
         stand_down(AGENT_SNAPSHOT, _snap_started, _why)
+        SNAPSHOT_INFO["stood_down"] = "market closed (%s)" % _why
         return
     conn = get_conn()
     account_id = get_active_account()
@@ -2985,6 +2990,7 @@ def cmd_snapshot(args):
     ).fetchall()]
     conn.close()
     if not positions:
+        SNAPSHOT_INFO.update(started=_snap_started, attempted=0, journaled=0)
         return
     # W21 (s90): "processed" used to mean "attempted". The counter was
     # incremented once per position regardless of whether a row reached the
@@ -3040,6 +3046,8 @@ def cmd_snapshot(args):
         conn.close()
     except Exception:
         pass
+
+    SNAPSHOT_INFO.update(started=_started, finished=_finished, attempted=attempted, journaled=journaled)
 
     # W91 / HELM-143: exit-improvement alert post-pass. Notify-only; a
     # failure here must never cost the snapshot itself.
@@ -3120,7 +3128,30 @@ def run_snapshot():
     if not get_active_account():
         console.print("[red]No active account. Run helm setup first.[/red]")
         return
-    cmd_snapshot(args)
+    SNAPSHOT_INFO.clear()
+    _err = None
+    try:
+        cmd_snapshot(args)
+    except BaseException as _e:
+        _err = "snapshot failed: %s: %s" % (type(_e).__name__, _e)
+        raise
+    finally:
+        _advice_after_snapshot(_err)
+
+
+def _advice_after_snapshot(err=None):
+    """s143 (Russ, 2026-10-31): after every snapshot, write HELM's advice for the
+    Book of Books -- Claude outputs/advice.json (only when good) and
+    advice-status.json (every slot). Read-only on the database; a failure here
+    never costs the snapshot -- it is the status file's reason and one log line."""
+    try:
+        from helm import advice as _adv
+        _info = dict(SNAPSHOT_INFO)
+        _skip = _info.pop("stood_down", None)
+        _st = _adv.write_files(snapshot=_info or None, source="helm snapshot", skipped=_skip, error=err)
+        print("advice.json: %s%s" % (_st.get("status"), (" -- %s" % _st["reason"]) if _st.get("reason") else ""))
+    except Exception as _e:
+        print("advice.json post-pass FAILED: %s: %s" % (type(_e).__name__, _e))
 
 
 def run():
