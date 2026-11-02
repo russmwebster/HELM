@@ -7,7 +7,7 @@ future session builds; most sessions add nothing.*
 
 *First cut 2026-09-20, curated from the lessons list and the decisions scattered
 through `claude/HELM-worklist.md` (frozen). Russ reads it once before it is trusted.
-Last updated 2026-11-01 (s145: IBKR's daily bars reach a year, not 120 days). Before that 2026-11-01 (s144: the book's market exposure shown in dollars, display only; device-VM harness notes). Before that 2026-10-31 (s142: no double entry as built; partial closes; called-away shares and dividends; net of fees from 10/24; retired lines moved to the history file; two harness lessons). Before that 2026-10-31 (s141: a process that called `get_ib()` holds client 11; the snapshot is on its own client numbers). Before that 2026-10-30 (s140: HELM commands are shown with `cd ~/Projects/helm &&` in front). Before that 2026-10-28 (s138: proposal tools are commands, recorded; earnings fail closed; assignment accounting; three covered-call choices; book limits built; a screen casts a wider net than its rules; -B on a perturbation). Before that 2026-10-27 (s137: Greeks follow trader practice; quality is the main risk control; the book's theta range and delta limit). Before that 2026-10-27 (rank-bar review: real trades only; CSP band 0.30 included; long-call bar review closed). Before that 2026-10-25 (s135: never REPLACE a cascading parent; a write test compares every table; HELM advises in plain words and flags every rule overstepped; paper book frozen, paper exit agent retired; how `helm settle --date` reads its date). Before that 2026-10-24 (s134: the revision — rulebook v0.2 approved: strategy set, sleeve limits, paper book retired, universe, net P&L, no double entry). Before that 2026-10-23 (s133: a named contract is a record, not a selection). Before that 2026-10-14 (s130: the device shell never writes the live database). Before that 2026-10-12 (s129: plain language, no rule or task numbers when talking to Russ). Before that 2026-10-12 (s128: explain first, wait for the go-ahead). Before that 2026-10-10 (s127: PG archived as a product; the board is HELM's interface). Before that 2026-10-10 (s126: the handover replaces the live list). Before that 2026-10-01 (s125: net rent banked, the diagonal loss limit, the four-question
+Last updated 2026-11-01 (s146: one width test; put rolls keep the earnings veto; TMPDIR in the device VM). Before that 2026-11-01 (s145: IBKR's daily bars reach a year, not 120 days). Before that 2026-11-01 (s144: the book's market exposure shown in dollars, display only; device-VM harness notes). Before that 2026-10-31 (s142: no double entry as built; partial closes; called-away shares and dividends; net of fees from 10/24; retired lines moved to the history file; two harness lessons). Before that 2026-10-31 (s141: a process that called `get_ib()` holds client 11; the snapshot is on its own client numbers). Before that 2026-10-30 (s140: HELM commands are shown with `cd ~/Projects/helm &&` in front). Before that 2026-10-28 (s138: proposal tools are commands, recorded; earnings fail closed; assignment accounting; three covered-call choices; book limits built; a screen casts a wider net than its rules; -B on a perturbation). Before that 2026-10-27 (s137: Greeks follow trader practice; quality is the main risk control; the book's theta range and delta limit). Before that 2026-10-27 (rank-bar review: real trades only; CSP band 0.30 included; long-call bar review closed). Before that 2026-10-25 (s135: never REPLACE a cascading parent; a write test compares every table; HELM advises in plain words and flags every rule overstepped; paper book frozen, paper exit agent retired; how `helm settle --date` reads its date). Before that 2026-10-24 (s134: the revision — rulebook v0.2 approved: strategy set, sleeve limits, paper book retired, universe, net P&L, no double entry). Before that 2026-10-23 (s133: a named contract is a record, not a selection). Before that 2026-10-14 (s130: the device shell never writes the live database). Before that 2026-10-12 (s129: plain language, no rule or task numbers when talking to Russ). Before that 2026-10-12 (s128: explain first, wait for the go-ahead). Before that 2026-10-10 (s127: PG archived as a product; the board is HELM's interface). Before that 2026-10-10 (s126: the handover replaces the live list). Before that 2026-10-01 (s125: net rent banked, the diagonal loss limit, the four-question
 diagonal card, two keep reasons; one base per percentage; live state in render harnesses). **Kept as a mirror on the Mac at
 `~/Projects/helm/_records/HELM-standing-rules.md` — edit that copy, publish with
 `project_write local_path`.***
@@ -138,6 +138,11 @@ Any of them comes back unchanged if it is needed again.*
   the strike; the **effective basis** (strike − premium per share) is stored as a number on
   `stock_positions`. The import books it only with its share row and one matching CSP.
   *(Russ, 2026-10-28; `helm/assignment.py`.)*
+- **Rolls (Russ, 2026-11-01, s146 — `helm roll`):** priced at the bid/ask, a net credit after both legs' fees;
+  new short 30–45 days, delta up to 0.50 (flagged outside its band); each strategy keeps its own strike and earnings
+  rules — **a put roll keeps the 10-day earnings veto**, a covered call no earnings inside, a PMCC short earnings flagged
+  and the width test counting the buy-back. A below-C name's put roll is shown, flagged. HELM shows the alternatives
+  beside the rolls, in dollars; it never places or books — the import books a roll.
 - **Covered calls: three choices per holding**, ranked by the premium's yearly return on the
   shares' value; **the spread < 10% rule applies to calls too.** Booking called-away shares
   waits for import stage 2 (before the first covered call can expire). *(Russ, 2026-10-28.)*
@@ -268,6 +273,9 @@ Any of them comes back unchanged if it is needed again.*
   been a no." When a written rule and its source conversation could differ, check the
   archive/study doc — or ask — before choosing the narrower reading. *(2026-09-27.)*
 - **Search the project before recommending a change.** `project_search` first.
+- **The PMCC width test lives in one place: `helm/fillopens.py` `width_floor` / `width_test`.** The import, `helm advise`,
+  `helm calls` and `helm roll` all call it; never write the arithmetic again. Three copies had grown; one let a strike
+  exactly at the floor pass (a float: 62.900000000000006 > 62.9). *(s146, 2026-11-01.)*
 - **A screen casts a wider net than its rules and applies the rules itself, so every
   rejection carries its true reason.** s138's put tool first borrowed `evaluate_contracts`
   with the rule band as its filter: an empty band read as "IBKR chain unavailable", fell back
@@ -433,6 +441,8 @@ Any of them comes back unchanged if it is needed again.*
   VM; IBKR's daily bars go back at least a year (s145: NVDA 10-20-2025 → 10-30-2026 on a
   one-year request; the old "at most 120 days" was wrong for daily bars) — enough for a 200-day average. **Longer
   history comes from `_s122/px/`, refreshed by Russ on the Mac.**
+- **Device VM, s146: run harnesses with `TMPDIR=/tmp`** — the session's TMPDIR is on a full disk, and SQLite's
+  sort files for an `ORDER BY` over a big table fail there with "database or disk is full".
 - **Device VM, s144:** its home disk can be full — put database copies in `/tmp`; install with
   `pip3 install --user rich flask`; the board on a copy needs `~/.helm_profile` holding the account id
   (`get_active_account` reads it), or every page redirects to Setup.

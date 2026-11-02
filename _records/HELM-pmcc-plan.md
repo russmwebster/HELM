@@ -2,7 +2,7 @@
 
 *Russ asked (11-01) whether PMCC screening and recommendations — new entries, selling the next short on a long,
 and rolling shorts — need a plan. They do: the PMCC screen on disk is the old diagonal code and can't be reused.
-**Russ approved the session's lean on the universe and trend, and settled the step decisions, on 11-01 (below). Nothing is built.** Each step is
+**Russ approved the session's lean on the universe and trend, and settled the step decisions, on 11-01 (below). Steps 1 and 2 are BUILT (s146, 2026-11-01: helm `5cd130b`, `52a8002`; helm-pg `5cc5cd4`) — see the handover's s146 entry. Step 3 is not.** Each step is
 explained and waits for Russ's go-ahead; live chains need market hours to test.
 Mirror: `~/Projects/helm/_records/HELM-pmcc-plan.md` → project `claude/HELM-pmcc-plan.md`.*
 
@@ -45,7 +45,7 @@ Mirror: `~/Projects/helm/_records/HELM-pmcc-plan.md` → project `claude/HELM-pm
 
 ## Build order (most urgent first)
 
-### Step 1 — the next short on a PMCC long: fold PMCC longs into `helm calls`
+### Step 1 — the next short on a PMCC long: fold PMCC longs into `helm calls` — BUILT s146
 
 A call sold against a long call is the same job as a covered call against shares, and `helm/calltool.py` already
 does it: IBKR quotes, a wider net with true reasons, **three choices per holding**, every run recorded
@@ -63,7 +63,7 @@ does it: IBKR quotes, a wider net with true reasons, **three choices per holding
 - Test on copies with faked chains (NVDA with its short removed; a re-sell after banked rent lowers the floor; a
   strike one cent under the floor is left off with the reason); live chains in market hours.
 
-### Step 2 — rolls: the choices side by side
+### Step 2 — rolls: the choices side by side — BUILT s146 as `helm roll TICKER` (not `helm calls --roll`; Russ 11-01)
 
 When the advice says the short is tested (in the money near expiry, or delta ≥ 0.50 inside 21 days), at its 50% take,
 or at 21 days, `helm calls --roll NVDA` (name to settle) shows, with the numbers for each:
