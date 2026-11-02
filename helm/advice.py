@@ -86,6 +86,11 @@ def _dte(exp, today):
     return (date.fromisoformat(str(exp)[:10]) - today).days
 
 
+def _roll_hint(ticker):
+    """s146: where the roll choices are priced."""
+    return " -- `cd ~/Projects/helm && helm roll %s` prices the rolls" % ticker
+
+
 def _grade(conn, ticker):
     if S._has_table(conn, "approved_funds") and conn.execute(
             "SELECT 1 FROM approved_funds WHERE ticker=?", (ticker,)).fetchone():
@@ -195,7 +200,8 @@ def _single_short(conn, p, legs, today):
                         "%s is at %s, %s %s the %g strike%s." % (
                             p["ticker"], _p(spot), _p(through), "above" if spot >= k else "below", k,
                             "" if delta is None else " (delta %.2f)" % abs(delta)),
-                        nums, act="buy back now at about %s; or let the shares go at %g" % (_p(mark), k),
+                        nums, act="buy back now at about %s; or let the shares go at %g" % (_p(mark), k)
+                        + _roll_hint(p["ticker"]),
                         lean=None, marks=marks, as_of=as_of)
         g = _grade(conn, p["ticker"])
         basis = k - credit
@@ -209,7 +215,7 @@ def _single_short(conn, p, legs, today):
                         p["ticker"], _p(spot), _p(through), "below" if spot <= k else "above", k,
                         "" if delta is None else " (delta %.2f)" % abs(delta)),
                     nums, act="buy back now at about %s (%s); assignment would cost %s" % (
-                        _p(mark), _m(pnl, sign=True), _m(k * 100 * n)),
+                        _p(mark), _m(pnl, sign=True), _m(k * 100 * n)) + _roll_hint(p["ticker"]),
                     lean=lean, marks=marks, as_of=as_of)
     if kept is not None and kept >= PROFIT_TAKE:
         return _rec(p, "TAKE_PROFIT", "%s -- take the profit" % what,
@@ -219,7 +225,8 @@ def _single_short(conn, p, legs, today):
     if dte is not None and dte <= TIME_EXIT_DTE:
         return _rec(p, "TIME_21", "%s -- close or roll: %d days left" % (what, dte),
                     "The rule closes at 21 days; %s." % status, nums,
-                    act="buy back at about %s (%s)" % (_p(mark), _m(pnl, sign=True)), marks=marks, as_of=as_of)
+                    act="buy back at about %s (%s)" % (_p(mark), _m(pnl, sign=True)) + _roll_hint(p["ticker"]),
+                    marks=marks, as_of=as_of)
     return _rec(p, "HOLD", "%s -- hold" % what, status + ("; " + ", ".join(marks) if marks else "") + ".",
                 nums, act="resting buy-back at %s" % _p(buy_half), marks=marks, as_of=as_of)
 
@@ -290,14 +297,15 @@ def _diag_family(conn, p, legs_all, today):
                             p["ticker"], _p(spot), _p(abs(spot - S0["strike"])), S0["strike"], s_dte),
                         nums, act="buy it back at about %s (%s for %d), or roll it out; if it's left, "
                         "expect assignment -- %d shares called away at %g against your long" % (
-                            _p(s_mark), _m(s_mark * 100 * n), n, 100 * n, S0["strike"]),
+                            _p(s_mark), _m(s_mark * 100 * n), n, 100 * n, S0["strike"])
+                        + (_roll_hint(p["ticker"]) if is_pmcc else ""),
                         as_of=as_of)
         if "breach" in firing:
             return _rec(p, "DECIDE", "%s -- the short is breached" % what,
                         "%s at %s is through the %g short for two days running. %s." % (
                             p["ticker"], _p(spot), S0["strike"], status.capitalize()),
                         nums, act="roll the short, buy it back at about %s, or close the whole trade"
-                        % _p(s_mark), as_of=as_of)
+                        % _p(s_mark) + (_roll_hint(p["ticker"]) if is_pmcc else ""), as_of=as_of)
         s_kept = (S0["open_price"] - s_mark) / S0["open_price"] if S0["open_price"] else None
         if s_kept is not None and s_kept >= PROFIT_TAKE:
             bb = _half_up(S0["open_price"] * (1 - PROFIT_TAKE))
@@ -309,7 +317,8 @@ def _diag_family(conn, p, legs_all, today):
         if is_pmcc and s_dte is not None and s_dte <= TIME_EXIT_DTE:
             return _rec(p, "TIME_21", "%s -- close or roll the short: %d days left" % (what, s_dte),
                         "The rule closes the short at 21 days.", nums,
-                        act="buy it back at about %s, or roll up and out for a credit" % _p(s_mark), as_of=as_of)
+                        act="buy it back at about %s, or roll up and out for a credit" % _p(s_mark)
+                        + _roll_hint(p["ticker"]), as_of=as_of)
     long_kinds = [k for k in ("long_stop", "long_giveback", "long_dte7", "long_dte21") if k in firing]
     if long_kinds:
         return _rec(p, "LONG_RULE", "%s -- %s" % (what, EF.KIND_LABEL[long_kinds[0]]),
@@ -930,7 +939,10 @@ def _selftest():
     import tempfile
     fails = []
 
+    ran = []
+
     def ok(c, m):
+        ran.append(m)
         if not c:
             fails.append(m)
             print("FAIL", m)
@@ -1047,6 +1059,11 @@ def _selftest():
     ok(v("PM") == "SELL_CALL" and R["PM"]["numbers"]["width_floor"] == 28.5 and "$28.50 above" in R["PM"]["act"],
        "PMCC: sell the next call; width floor = (3000 - 150)/100: %s" % R["PM"]["numbers"].get("width_floor"))
     ok(v("PMX") == "REVIEW_LONG", "PMCC long at 83 days -> review")
+    # s146: the acts point to the tools
+    ok("helm calls" in R["PM"]["act"], "PMCC with no short points to helm calls")
+    ok("helm roll %s" % R["T21"]["ticker"] in R["T21"]["act"] and "helm roll %s" % R["TB"]["ticker"] in R["TB"]["act"],
+       "a put at 21 days and a tested put point to helm roll")
+    ok("helm roll" not in R["DG"]["act"], "a run-off diagonal does not (helm roll covers puts, covered calls, PMCCs)")
     ok(all(R[t]["reason"] for t in R), "every recommendation carries a reason")
     pr = sorted(R.values(), key=lambda r: (r["priority"], r["ticker"]))
     ok(pr[0]["verb"] == "STALE" and pr[-1]["verb"] == "HOLD", "sorted most urgent first")
@@ -1091,7 +1108,7 @@ def _selftest():
        "delta over half the sleeve: flagged with the excess, the largest and the stale readings: %s" % (f and f[0]["reason"]))
     ok(book_limit_flags(view={"limits": fv(0, 0)["limits"], "positions": []}) == [],
        "an empty book is not called idle")
-    print("advice selftest:", "PASS (%d checks)" % 26 if not fails else "%d FAIL" % len(fails))
+    print("advice selftest:", "PASS (%d checks)" % len(ran) if not fails else "%d FAIL" % len(fails))
     return 1 if fails else 0
 
 

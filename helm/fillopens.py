@@ -208,8 +208,10 @@ def classify(conn, opens, ctx):
             txt = "%s PMCC opened on %s: long %g %s x%d at %s (cost %s)" % (
                 as_of, tk, L[0][5], L[0][3], q, _fmt(L[1]["price"]), _money(cost))
             if S:
-                gap, floor = float(S[0][5]) - float(L[0][5]), L[1]["price"]
-                ok = gap > floor
+                gap = float(S[0][5]) - float(L[0][5])
+                ok, floor, _lk = width_test([{"direction": "LONG", "status": "OPEN", "multiplier": 100,
+                                              "contracts": q, "open_price": L[1]["price"], "strike": float(L[0][5])}],
+                                            S[0][5], q)       # s146: the one width test
                 txt += "; short %g %s x%d at %s; 50%% buy-back %s" % (
                     S[0][5], S[0][3], S[1]["contracts"], _fmt(S[1]["price"]), _fmt(_half_up(S[1]["price"] / 2)))
                 if not ok:

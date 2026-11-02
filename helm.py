@@ -13,7 +13,7 @@ COMMANDS = {
     'watchlist': ('helm.cli.watchlist', 'run',  'Manage your ticker watchlist'),
     'health':    ('helm.cli.health_cmd', 'run',  'Portfolio CSP health map (opens in browser)'),
     'close':     ('helm.cli.close_cmd', 'run',  'Close a position'),
-    'roll':      ('helm.cli.roll',      'run',  'Roll a position'),
+    'roll':      ('helm.cli.roll_cmd',  'run',  'The roll choices for a short put, covered call or PMCC short, at the bid/ask (s146)'),
     'settings':  ('helm.cli.settings',  'run',  'View or edit strategy settings'),
     'analyze':   ('helm.cli.analyze',   'run',  'Analyze historical outcomes'),
     'import':    ('helm.cli.import_cmd', 'run',  'RETIRED -- trades come in with helm fills'),
@@ -57,7 +57,7 @@ COMMANDS = {
 # them -- but are listed only by `helm legacy`, and go on LEGACY_UNTIL unless Russ
 # says otherwise.
 MAIN = (
-    ("Trading", ("advise", "puts", "calls", "open", "quality", "book", "sleeve")),
+    ("Trading", ("advise", "puts", "calls", "roll", "open", "quality", "book", "sleeve")),
     ("Booking", ("fills",)),
     ("Data and checks", ("check", "snapshot", "ivr", "watchlist", "reconcile", "audit")),
     ("Running HELM", ("ibkr", "gwwatch", "restart")),
@@ -67,7 +67,7 @@ LEGACY = (
     ("Replaced by the import (still run, as fallbacks)", ("close", "assign", "settle", "resell",
                                                           "import", "confirm-fills", "activity")),
     ("Replaced by the board or other commands", ("status", "positions", "health", "pending", "workflow", "guide")),
-    ("Retired strategies and old tools", ("scan", "paper", "roll", "theme", "exposure", "risk", "stock",
+    ("Retired strategies and old tools", ("scan", "paper", "theme", "exposure", "risk", "stock",
                                           "analyze", "settings", "setup")),
 )
 
