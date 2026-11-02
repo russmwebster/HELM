@@ -264,8 +264,12 @@ def fetch_roll(ticker, opt_type, strike, expiry, long_pin=None, today=None):
     targets = list(exps_in)
     if exp not in [e for e, _ in targets]:
         targets.append((exp, (P._d(exp) - today).days))
+    from helm import strikewindow as SW   # s148: strikes from the stock's IV, not 3 x ATR
+    lo, hi = SW.delta_range(spot, SW.latest_iv(ticker, today), [d for _, d in targets], opt_type, SW.ROLL_NET)
+    rng = (min(lo, float(strike)), max(hi, float(strike)))   # the current contract always in range
     rows = oc.fetch_chain_from_ibkr(ticker, opt_type, targets, spot, atr, NET_DELTA[0], NET_DELTA[1],
-                                    BANDS["pmcc"], spread_threshold=P.NET_SPREAD, pin=(float(strike), exp))
+                                    BANDS["pmcc"], spread_threshold=P.NET_SPREAD, pin=(float(strike), exp),
+                                    strike_range=rng)
     cur = next((r for r in rows if r["expiration"] == exp and abs(r["strike"] - float(strike)) < 1e-6), None)
     new = [r for r in rows if r["expiration"] in {e for e, _ in exps_in}]
     long_q = None

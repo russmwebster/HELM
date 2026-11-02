@@ -289,8 +289,10 @@ def fetch_contracts(ticker, today=None):
                 atr = a
     except Exception:
         pass
+    from helm import strikewindow as SW   # s148: strikes from the stock's IV, not 3 x ATR
+    rng = SW.delta_range(spot, SW.latest_iv(ticker, today), [d for _, d in exps_in], "PUT", SW.PUT_NET)
     rows = oc.fetch_chain_from_ibkr(ticker, "PUT", exps_in, spot, atr, NET_DELTA[0], NET_DELTA[1],
-                                    (DELTA_MIN, DELTA_MAX), spread_threshold=NET_SPREAD)
+                                    (DELTA_MIN, DELTA_MAX), spread_threshold=NET_SPREAD, strike_range=rng)
     return rows, spot, None
 
 

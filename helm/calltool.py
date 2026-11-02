@@ -274,8 +274,10 @@ def fetch_calls(ticker, today=None):
                 atr = a
     except Exception:
         pass
+    from helm import strikewindow as SW   # s148: strikes from the stock's IV, not 3 x ATR
+    rng = SW.delta_range(spot, SW.latest_iv(ticker, today), [d for _, d in exps_in], "CALL", SW.CALL_NET)
     rows = oc.fetch_chain_from_ibkr(ticker, "CALL", exps_in, spot, atr, 0.15, 0.40,
-                                    (DELTA_MIN, DELTA_MAX), spread_threshold=P.NET_SPREAD)
+                                    (DELTA_MIN, DELTA_MAX), spread_threshold=P.NET_SPREAD, strike_range=rng)
     return rows, spot, exdiv, None
 
 

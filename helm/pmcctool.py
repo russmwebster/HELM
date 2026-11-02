@@ -240,23 +240,19 @@ def expiries(exps, today, band):
 
 def long_strike_range(spot, sigma, dte):
     """Strikes to read for the long: about 0.98 down to 0.60 delta (Black-Scholes with the
-    stock's current IV; 50% when unknown) -- wider than the 0.75-0.85 rule."""
-    s = sigma if sigma and sigma > 0 else 0.5
-    T = dte / 365.0
-    v, drift = s * math.sqrt(T), (RATE + 0.5 * s * s) * T
-    return spot * math.exp(-2.0 * v + drift), spot * math.exp(-0.25 * v + drift)
+    stock's current IV; 50% when unknown) -- wider than the 0.75-0.85 rule. s148: the
+    arithmetic lives in helm/strikewindow.py, shared with the put, call and roll tools."""
+    from helm import strikewindow as SW
+    return SW.z_range(spot, sigma, [dte], -2.0, -0.25)
 
 
 def short_strike_range(spot, sigma, dtes):
     """Strikes to read for the short: about 0.44 down to 0.10 delta across the short expiries
     (Black-Scholes with the stock's current IV; 50% when unknown) -- wider than 0.20-0.30. The
     reader's own +/-3xATR window stops short of 0.20-0.30 calls on calm stocks (AAPL 11-02:
-    the band was 6-7% above the price, the window ended at 0.33)."""
-    s = sigma if sigma and sigma > 0 else 0.5
-    def k(d, z):
-        T = d / 365.0
-        return spot * math.exp(z * s * math.sqrt(T) + (RATE + 0.5 * s * s) * T)
-    return k(min(dtes), 0.15), k(max(dtes), 1.3)
+    the band was 6-7% above the price, the window ended at 0.33). s148: helm/strikewindow.py."""
+    from helm import strikewindow as SW
+    return SW.z_range(spot, sigma, dtes, 0.15, 1.3)
 
 
 def trend(closes, k=TREND_SLOPE_BARS):
