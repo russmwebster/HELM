@@ -16,4 +16,5 @@ run two_per_co    helm/pmcctool.py '        if k in firsts:' '        if False:'
 run open_pmcc_ok  helm/pmcctool.py '        if k in held:' '        if False:'
 run no_range      helm/cli/open_cmd.py 'if strike_range is not None:' 'if False:'
 run no_entry_trend helm/fillopens.py 'lab += "; trend at entry: " + record_entry_trend(pid, tk, as_of)' 'pass'
+run short_window helm/pmcctool.py '                                      strike_range=short_strike_range(spot, sigma, [d for _, d in sx]))' '                                      )'
 out=$(python3 -B $REPO/_s147/verify_pmcc.py "$DB" 2>&1); echo "control (last): $(echo "$out" | tail -1)"

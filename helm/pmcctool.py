@@ -247,6 +247,18 @@ def long_strike_range(spot, sigma, dte):
     return spot * math.exp(-2.0 * v + drift), spot * math.exp(-0.25 * v + drift)
 
 
+def short_strike_range(spot, sigma, dtes):
+    """Strikes to read for the short: about 0.44 down to 0.10 delta across the short expiries
+    (Black-Scholes with the stock's current IV; 50% when unknown) -- wider than 0.20-0.30. The
+    reader's own +/-3xATR window stops short of 0.20-0.30 calls on calm stocks (AAPL 11-02:
+    the band was 6-7% above the price, the window ended at 0.33)."""
+    s = sigma if sigma and sigma > 0 else 0.5
+    def k(d, z):
+        T = d / 365.0
+        return spot * math.exp(z * s * math.sqrt(T) + (RATE + 0.5 * s * s) * T)
+    return k(min(dtes), 0.15), k(max(dtes), 1.3)
+
+
 def trend(closes, k=TREND_SLOPE_BARS):
     """Pure. closes oldest first."""
     n = len(closes)
@@ -356,7 +368,8 @@ def fetch_pairs(ticker, today=None, sigma=None):
     except Exception:
         pass
     shorts = oc.fetch_chain_from_ibkr(ticker, "CALL", sx, spot, atr, NET_SHORT_DELTA[0], NET_SHORT_DELTA[1],
-                                      SHORT_DELTA, spread_threshold=P.NET_SPREAD)
+                                      SHORT_DELTA, spread_threshold=P.NET_SPREAD,
+                                      strike_range=short_strike_range(spot, sigma, [d for _, d in sx]))
     if not [c for c in shorts if leg_reason(c, "short") is None]:
         return [], shorts, spot, None
     longs = []
@@ -650,6 +663,15 @@ def _selftest():
             if not (_bs_call_delta(100.0, a, sg, d) > 0.95 and _bs_call_delta(100.0, b, sg, d) < 0.65):
                 good = False
     ok(good, "the strike range reaches past 0.95 and below 0.65 delta at 15-60% IV, 270 and 730 days")
+    good = True
+    for sg in (0.15, 0.30, 0.60):
+        a, b = short_strike_range(100.0, sg, [30, 45])
+        for d in (30, 45):
+            if not (_bs_call_delta(100.0, a, sg, d) > 0.40 and _bs_call_delta(100.0, b, sg, d) < 0.15):
+                good = False
+    ok(good, "the short's strike range reaches past 0.40 and below 0.15 delta at 15-60% IV, 30 and 45 days")
+    a, b = short_strike_range(340.93, 0.26, [32, 39])
+    ok(a < 355 and b > 375, "AAPL 11-02 (0.20-0.30 calls at 360-365): the range %.0f-%.0f covers them" % (a, b))
     # trend
     up = [100 + i * 0.1 for i in range(252)]
     dn = [200 - i * 0.2 for i in range(252)]

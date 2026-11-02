@@ -147,7 +147,36 @@ ok(ks and all(rng[0] <= k <= rng[1] for k in ks) and any(0.75 <= x["delta"] <= 0
 a = old.fetch_chain_from_ibkr("TST", "CALL", [("2027-12-17", 410)], 100.0, 2.5, 0.65, 0.95, (0.75, 0.85), spread_threshold=10.0)
 ok(not any(0.75 <= x["delta"] <= 0.85 for x in a),
    "C  (control: the plain +/-3xATR window misses the 0.75-0.85 band -- why the range is needed)")
-del sys.modules["ib_insync"]
+# F (added after the 11-02 live run) -- fetch_pairs reads the 0.20-0.30 short calls on a calm stock.
+# AAPL 11-02: price 340.93, IV 26%, a 14-day range of about $5, so the plain +/-3xATR window ends near 356.
+from datetime import date as _date
+class _FS:
+    def __init__(self, v): self.v = v
+    def __sub__(self, o): return _FS([a - b for a, b in zip(self.v, o.v)])
+    def rolling(self, n): return _FR(self.v, n)
+class _FR:
+    def __init__(self, v, n): self.v, self.n = v, n
+    def mean(self): return _O(iloc=[sum(self.v[-self.n:]) / self.n])
+class _H:
+    empty = False
+    def __len__(self): return 20
+    def __getitem__(self, k): return _FS([343.0] * 20 if k == "High" else [338.0] * 20)
+yf = types.ModuleType("yfinance")
+yf.Ticker = lambda t: _O(fast_info=_O(last_price=340.93), options=("2026-12-04", "2026-12-11", "2027-12-17"),
+                         history=lambda **k: _H(), info={})
+sys.modules["yfinance"] = yf
+mod2, IB2 = fake_ib_module(340.93, [float(k) for k in range(150, 420, 5)], 0.26)
+IB2._exps = ["20261204", "20261211", "20271217"]
+sys.modules["ib_insync"] = mod2
+import importlib
+sys.modules["helm.cli.open_cmd"] = new
+pm = SourceFileLoader("pm_new", os.path.join(CODE, "helm/pmcctool.py")).load_module()
+longs, shorts, spot, err = pm.fetch_pairs("AAPL", _date(2026, 11, 2), 0.26)
+inb = sorted((x["strike"], round(x["delta"], 2)) for x in shorts if 0.20 <= x["delta"] <= 0.30)
+ok(err is None and inb, "F  the short calls in the 0.20-0.30 band are read on a calm stock: %s" % inb)
+pair, why = pm.best_pair(longs, shorts, spot)
+ok(longs and any(0.75 <= x["delta"] <= 0.85 for x in longs), "F  and the longs are read once a short passes (%d longs)" % len(longs))
+del sys.modules["ib_insync"], sys.modules["yfinance"], sys.modules["helm.cli.open_cmd"]
 
 # D
 db = copy("d.db")
@@ -157,10 +186,14 @@ r = subprocess.run([sys.executable, "-B", os.path.join(CODE, "helm.py"), "pmcc",
 after = dump(db)
 ch = changed(before, after)
 ok(r.returncode == 0 and "New PMCCs" in r.stdout, "D  helm pmcc runs on a copy (rc %s)" % r.returncode)
-ok(ch == ["pmcc_candidates", "pmcc_entry_trend", "pmcc_runs"] and after["pmcc_entry_trend"][1] == 0,
-   "D  only its own tables change (the entry-trend table is created empty): %s" % ch)
+_n = lambda d, t: d.get(t, ((), 0, ""))[1]
+ok(set(ch) <= {"pmcc_candidates", "pmcc_entry_trend", "pmcc_runs"} and "pmcc_runs" in ch
+   and _n(after, "pmcc_runs") == _n(before, "pmcc_runs") + 1
+   and _n(after, "pmcc_entry_trend") == _n(before, "pmcc_entry_trend"),
+   "D  only its own tables change -- one run added, no entry trend (works whether or not the copy already has runs): %s" % ch)
 c = sqlite3.connect(db)
-rj = json.loads(c.execute("SELECT rejects_json FROM pmcc_runs").fetchone()[0])
+rj = json.loads(c.execute("SELECT rejects_json FROM pmcc_runs WHERE note='partial run: NVDA,SPY,HD' "
+                          "ORDER BY run_at DESC, rowid DESC LIMIT 1").fetchone()[0])
 c.close()
 ok(set(rj) == {"NVDA", "SPY", "HD"} and all(v for v in rj.values()),
    "D  every name left off carries a reason (no network here): %s" % rj)
