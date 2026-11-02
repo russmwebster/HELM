@@ -737,8 +737,11 @@ def suggest_contracts(strategy: str, strike: float, mid: float,
 
 def fetch_chain_from_ibkr(ticker, opt_type, target_exps, spot, atr,
                            delta_min, delta_max, delta_sweet,
-                           spread_threshold=0.25, pin=None):
+                           spread_threshold=0.25, pin=None, strike_range=None):
     # Fetch live/frozen options chain from IBKR.
+    # s147: strike_range=(lo, hi), when given, replaces the spot +/- 3xATR strike
+    # window (helm pmcc reads deep in-the-money LEAPS strikes for the long). None
+    # (every other caller) leaves the window exactly as it was.
     # Live when market open; frozen (2) when closed (type 1 returns -1 quotes outside RTH).
     # Returns list of contract dicts. Empty list = fallback to yfinance.
     import math
@@ -778,10 +781,16 @@ def fetch_chain_from_ibkr(ticker, opt_type, target_exps, spot, atr,
 
             # Filter to spot +/- 3xATR
             atr_buf = atr * 3
-            filtered = sorted(s for s in all_strikes
-                               if (spot - atr_buf) <= s <= (spot + atr_buf))
-            if not filtered:
-                filtered = sorted(all_strikes, key=lambda s: abs(s - spot))[:20]
+            if strike_range is not None:
+                filtered = sorted(s for s in all_strikes
+                                  if strike_range[0] <= s <= strike_range[1])
+                if not filtered:
+                    continue
+            else:
+                filtered = sorted(s for s in all_strikes
+                                   if (spot - atr_buf) <= s <= (spot + atr_buf))
+                if not filtered:
+                    filtered = sorted(all_strikes, key=lambda s: abs(s - spot))[:20]
             # s130 (2026-10-14): a PINNED strike is always fetched, inside the
             # window or not. W97 made a pin an identity, not a candidate, but
             # the 3xATR window still decided what was pulled, so a put sold

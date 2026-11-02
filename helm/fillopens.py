@@ -437,6 +437,14 @@ def book(it, now_label, fill_time):
         pid, lids, _ = open_multileg_with_snapshot(
             ticker=tk, strategy="PMCC", legs=legs, contracts=q, spot=spot, book="REAL", position_fields=pf,
             pricing_source="fidelity-fill", opened_at=when, open_date=as_of, notes=lab)
+        _release_ib()
+        # s147 (Russ 11-01/11-02): every PMCC records its trend at entry -- the 200-day and the
+        # 50-day's slope measured to the fill date from IBKR daily bars. Never stops the booking.
+        try:
+            from helm.pmcctool import record_entry_trend
+            lab += "; trend at entry: " + record_entry_trend(pid, tk, as_of)
+        except Exception as e:
+            lab += "; trend at entry not recorded: %s" % str(e)[:60]
     elif o["strategy"] == "PMCC_SHORT":
         from helm.models.position import Position
         from helm.models.leg import Leg
