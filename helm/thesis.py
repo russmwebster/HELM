@@ -20,7 +20,7 @@ See claude/HELM-W88-slice1-backtest-findings.md.
 from __future__ import annotations
 
 import json
-from datetime import date
+from datetime import date, timedelta
 
 # ── belief state vocabulary ──────────────────────────────────────────────────
 HOLDS, FRAYING, BROKEN, BROKEN_LOUD = "HOLDS", "FRAYING", "BROKEN", "BROKEN_LOUD"
@@ -1819,6 +1819,60 @@ def diag_rule_state(legs, rows, flags, book="REAL"):
             "read": read, "pill": pill, "stamp": stamp, "fires": bool(firing)}
 
 
+def pmcc_rule_state(legs, rows, book="REAL", today=None):
+    """s148 (Russ, 2026-11-02): what the PMCC rules read on the LATEST check, in the shape
+    diag_rule_state returns, so the four-question card can show it. The rows are
+    helm.advice.pmcc_rule_rows -- the rules `helm advise` applies to a PMCC, not the run-off
+    diagonals' exit_flags rules (breach, worthless, 25% harvest). Display only."""
+    from helm import advice as A
+    from helm.fillopens import width_floor
+    if not rows:
+        return None
+    opt = [l for l in legs or [] if l.get("option_type") not in (None, "STOCK")]
+    longs = [l for l in opt if str(l.get("direction") or "").upper() == "LONG" and str(l.get("status") or "").upper() == "OPEN"]
+    if len(longs) != 1:
+        return None
+    L = longs[0]
+    shorts = [l for l in opt if str(l.get("direction") or "").upper() == "SHORT" and str(l.get("status") or "").upper() == "OPEN"]
+    S0 = shorts[0] if shorts else None
+    last = rows[-1]
+    marks = last.get("marks") or {}
+    today = str(today or last["checked_at"])[:10]
+    long_cost = (_f(L.get("open_price")) or 0) * (_f(L.get("multiplier")) or 100) * (_f(L.get("contracts")) or 0)
+    wf = None
+    if S0 is None:
+        try:
+            wf = width_floor([dict(l, direction=str(l.get("direction") or "").upper(),
+                                   status=str(l.get("status") or "").upper()) for l in opt])[0]
+        except Exception:
+            wf = None
+    rows_out = A.pmcc_rule_rows(_f(last.get("pnl_unrealized")), long_cost, _f(L["strike"]),
+                                _dd(today, L.get("expiration")), _f(last.get("spot_price")),
+                                short=S0, short_mark=_f(marks.get(S0["id"])) if S0 else None,
+                                short_dte=_dd(today, S0.get("expiration")) if S0 else None, width_floor=wf)
+    for x in rows_out:
+        x["status"] = ("HELM's advice on Today: %s" % A.PMCC_RULE_VERB[x["kind"]].replace("_", " ").lower()
+                       if x["firing"] else None)
+    mode = "SHORT ON" if S0 is not None else "LONG ONLY"
+    firing = [x for x in rows_out if x["firing"]]
+    exits_note = ("The PMCC rules: the loss limit; take the short's profit at 50% with a resting order; close or "
+                  "roll the short at 21 days; decide when it is in the money in its last week; review the long at "
+                  "90 days; every new short passes the width test. They are the rules HELM's advice reads on Today.")
+    book_note = "HELM advises; you decide and place every trade."
+    if firing:
+        read = "The PMCC rules (%s) ask for: %s. %s" % (mode, "; ".join("%s (%s)" % (x["label"], x["reading"])
+                                                                        for x in firing), book_note)
+    else:
+        read = "The PMCC rules (%s) have nothing asking on the latest check. %s" % (mode, book_note)
+    return {"mode": mode, "asof": last.get("checked_at"), "rows": rows_out, "firing": [x["kind"] for x in firing],
+            "headline": "%s — %s" % (mode, ("asking: " + ", ".join(x["label"] for x in firing)) if firing
+                                     else "nothing is asking"),
+            "exits_note": exits_note, "book_note": book_note, "read": read,
+            "pill": "%s · %s" % (mode, ("%d asking" % len(firing)) if firing else "nothing asking"),
+            "stamp": "BROKEN" if any(x["kind"] == "pos_stop" for x in firing) else ("FRAYING" if firing else "HOLDS"),
+            "fires": bool(firing), "pmcc": True}
+
+
 # ── the diagonal card, organised around four questions (s125, 2026-10-01) ────
 # Agreed with Russ from three mockups: At a glance → Is anything asking for a
 # decision? → Your moves → Where do I stand? (a dollar ledger) → What is this
@@ -2051,7 +2105,13 @@ def diag_view(pos, legs, rows, flags, quotes=None, entry_spot=None, earnings_nex
                         "paid": s["open_price"], "now": px, "state": st, "live": live})
 
     # --- the rule --------------------------------------------------------------
-    rs = diag_rule_state(legs, rows, flags, book=book) if not closed else None
+    is_pmcc = str(pos.get("strategy") or "").upper() == "PMCC"   # s148: a PMCC reads the PMCC rules
+    if closed:
+        rs = None
+    elif is_pmcc:
+        rs = pmcc_rule_state(legs, rows, book=book, today=today)
+    else:
+        rs = diag_rule_state(legs, rows, flags, book=book)
     n_sold = b["n_sold"]
     n_back = sum(1 for s in shorts if str(s.get("status") or "").upper() != "OPEN")
     v = {"ticker": tk, "book": book, "closed": closed, "position_id": pos.get("id"),
@@ -2094,7 +2154,35 @@ def diag_view(pos, legs, rows, flags, quotes=None, entry_spot=None, earnings_nex
 
     # --- next line to watch ----------------------------------------------------
     nxt = []
-    if rs and live_short is not None and smark is not None:
+    if rs and is_pmcc:
+        # s148: the PMCC's next lines -- its own rules, the same numbers as advice
+        from helm import advice as _A
+        fired = set(rs["firing"])
+        if live_short is not None and smark is not None:
+            op = live_short["open_price"]
+            kept = (op - smark) / op * 100.0 if op else None
+            bb = _A._half_up(op * (1 - _A.PROFIT_TAKE))
+            if "pmcc_take_profit" not in fired:
+                nxt.append({"head": "Take the profit at 50%", "text": "your resting buy-back at $%.2f — the short is at $%.2f now" % (bb, smark),
+                            "meter": {"kept": max(0.0, min(100.0, kept or 0.0)), "open": op, "half": bb, "pmcc": True}})
+            sdte = _dd(today, live_short.get("expiration"))
+            if sdte is not None and sdte > _A.TIME_EXIT_DTE:
+                try:
+                    on = date.fromisoformat(str(live_short.get("expiration"))[:10]) - timedelta(days=_A.TIME_EXIT_DTE)
+                    when = "on %s, %d days from now" % (_md(on.isoformat()), sdte - _A.TIME_EXIT_DTE)
+                except (ValueError, TypeError):
+                    when = "in %d days" % (sdte - _A.TIME_EXIT_DTE)
+                nxt.append({"head": "21 days left on the short", "text": "close or roll it %s" % when})
+            bf = buffer_pct([live_short], sp) if sp else None
+            if bf:
+                nxt.append({"head": "The short's strike", "text": ("%s would have to %s %.1f%% to the $%g strike" %
+                                                                    (tk, "rise" if live_short.get("option_type") != "PUT" else "fall",
+                                                                     abs(bf[0]), live_short["strike"])) if bf[0] >= 0 else
+                            ("%s is %.1f%% through the $%g strike" % (tk, -bf[0], live_short["strike"]))})
+        ld = _dd(today, lg.get("expiration"))
+        if ld is not None and _A.PMCC_LONG_REVIEW_DTE < ld <= _A.PMCC_LONG_REVIEW_DTE + 60:
+            nxt.append({"head": "Review the long", "text": "at %d days left, in %d days" % (_A.PMCC_LONG_REVIEW_DTE, ld - _A.PMCC_LONG_REVIEW_DTE)})
+    elif rs and live_short is not None and smark is not None:
         op = live_short["open_price"]
         kept = (op - smark) / op * 100.0 if op else None
         fired = set(rs["firing"])

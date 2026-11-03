@@ -132,6 +132,68 @@ def _spot(conn, pos_id):
     return dict(r) if r else None
 
 
+# s148 (Russ, 2026-11-02): the PMCC rules as rows, for the PMCC card. Same constants and the
+# same comparisons as the PMCC path of _diag_advice below, so the card and Today can't disagree;
+# the verb each row stands for is in VERB. Pure. Display only.
+PMCC_RULE_VERB = {"pos_stop": "LOSS_LIMIT", "pmcc_itm_expiry": "DECIDE", "pmcc_take_profit": "TAKE_PROFIT",
+                  "pmcc_21": "TIME_21", "pmcc_long_review": "REVIEW_LONG", "pmcc_no_short": "SELL_CALL"}
+
+
+def pmcc_rule_rows(whole, long_cost, long_strike, long_dte, spot, short=None, short_mark=None,
+                   short_dte=None, width_floor=None):
+    """[{kind, label, rule, reading, firing, layer}] — every PMCC rule with its reading.
+    short: the open short leg (strike, open_price, option_type) or None."""
+    out = []
+
+    def add(kind, label, rule, reading, firing, layer):
+        out.append({"kind": kind, "label": label, "rule": rule, "reading": reading,
+                    "firing": bool(firing), "layer": layer})
+
+    lim = LOSS_LIMIT_FRAC * long_cost
+    if whole is not None:
+        gap = -whole - lim
+        add("pos_stop", "loss limit", "the whole trade loses half of what the long cost (%s)" % _m(lim),
+            "whole trade %s · %s" % (_m(whole, sign=True), ("%s past it" % _m(gap)) if gap >= 0
+                                      else ("%s to go" % _m(-gap))),
+            whole <= -lim, "whole")
+    else:
+        add("pos_stop", "loss limit", "the whole trade loses half of what the long cost (%s)" % _m(lim),
+            "whole trade not read", False, "whole")
+    if short is not None:
+        k = short["strike"]
+        call = short.get("option_type") != "PUT"
+        itm = None if spot is None else ((spot > k) if call else (spot < k))
+        where = ("spot unread" if spot is None else
+                 "%s %s, %.1f%% %s the %g strike" % ("spot", _p(spot), abs(spot - k) / spot * 100.0,
+                                                    "through" if itm else "inside", k))
+        add("pmcc_itm_expiry", "in the money near expiry",
+            "the short in the money with %d days or less left — decide: buy back, roll, or be assigned"
+            % SHORT_EXPIRY_SOON_DAYS,
+            "%s, %s days left" % (where, "—" if short_dte is None else short_dte),
+            short_dte is not None and short_dte <= SHORT_EXPIRY_SOON_DAYS and bool(itm), "short")
+        op = short.get("open_price")
+        kept = (op - short_mark) / op if (op and short_mark is not None) else None
+        add("pmcc_take_profit", "take the profit at 50%",
+            "%.0f%% of the short's %s credit kept — your resting buy-back at %s"
+            % (PROFIT_TAKE * 100, _p(op) if op else "—", _p(_half_up(op * (1 - PROFIT_TAKE))) if op else "—"),
+            "kept %s · short at %s" % ("—" if kept is None else "%.0f%%" % (kept * 100),
+                                       "—" if short_mark is None else _p(short_mark)),
+            kept is not None and kept >= PROFIT_TAKE, "short")
+        add("pmcc_21", "21 days left on the short", "close or roll the short at %d days left" % TIME_EXIT_DTE,
+            "%s days left" % ("—" if short_dte is None else short_dte),
+            short_dte is not None and short_dte <= TIME_EXIT_DTE, "short")
+    else:
+        floor = width_floor
+        add("pmcc_no_short", "sell the next call",
+            "no short is open — the next one's strike must sit more than %s above the long's %g strike (the width test)"
+            % ("—" if floor is None else _p(floor), long_strike),
+            "strike above %s" % ("—" if floor is None else _p(long_strike + floor)), True, "short")
+    add("pmcc_long_review", "review the long", "at %d days left on the long" % PMCC_LONG_REVIEW_DTE,
+        "%s days left" % ("—" if long_dte is None else long_dte),
+        long_dte is not None and long_dte <= PMCC_LONG_REVIEW_DTE, "long")
+    return out
+
+
 def _rec(p, verb, headline, reason, numbers=None, act=None, lean=None, marks=None, as_of=None):
     needs, prio, label = VERBS[verb]
     return {"position_id": p["id"], "ticker": p["ticker"], "strategy": p["strategy"],
