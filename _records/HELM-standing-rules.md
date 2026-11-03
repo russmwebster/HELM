@@ -7,7 +7,7 @@ future session builds; most sessions add nothing.*
 
 *First cut 2026-09-20, curated from the lessons list and the decisions scattered
 through `claude/HELM-worklist.md` (frozen). Russ reads it once before it is trusted.
-Last updated 2026-11-02 (s147: new PMCC entries rank by rent cover; the delta limit kept at half the sleeve, reviewed in January). Before that 2026-11-01 (s146: one width test; put rolls keep the earnings veto; TMPDIR in the device VM). Before that 2026-11-01 (s145: IBKR's daily bars reach a year, not 120 days). Before that 2026-11-01 (s144: the book's market exposure shown in dollars, display only; device-VM harness notes). Before that 2026-10-31 (s142: no double entry as built; partial closes; called-away shares and dividends; net of fees from 10/24; retired lines moved to the history file; two harness lessons). Before that 2026-10-31 (s141: a process that called `get_ib()` holds client 11; the snapshot is on its own client numbers). Before that 2026-10-30 (s140: HELM commands are shown with `cd ~/Projects/helm &&` in front). Before that 2026-10-28 (s138: proposal tools are commands, recorded; earnings fail closed; assignment accounting; three covered-call choices; book limits built; a screen casts a wider net than its rules; -B on a perturbation). Before that 2026-10-27 (s137: Greeks follow trader practice; quality is the main risk control; the book's theta range and delta limit). Before that 2026-10-27 (rank-bar review: real trades only; CSP band 0.30 included; long-call bar review closed). Before that 2026-10-25 (s135: never REPLACE a cascading parent; a write test compares every table; HELM advises in plain words and flags every rule overstepped; paper book frozen, paper exit agent retired; how `helm settle --date` reads its date). Before that 2026-10-24 (s134: the revision — rulebook v0.2 approved: strategy set, sleeve limits, paper book retired, universe, net P&L, no double entry). Before that 2026-10-23 (s133: a named contract is a record, not a selection). Before that 2026-10-14 (s130: the device shell never writes the live database). Before that 2026-10-12 (s129: plain language, no rule or task numbers when talking to Russ). Before that 2026-10-12 (s128: explain first, wait for the go-ahead). Before that 2026-10-10 (s127: PG archived as a product; the board is HELM's interface). Before that 2026-10-10 (s126: the handover replaces the live list). Before that 2026-10-01 (s125: net rent banked, the diagonal loss limit, the four-question
+Last updated 2026-11-02 (s148: the proposal tools read strikes from the stock's IV; a card shows the rules the advice applies; device-VM installs; random chart ids). Before that 2026-11-02 (s147: new PMCC entries rank by rent cover; the delta limit kept at half the sleeve, reviewed in January). Before that 2026-11-01 (s146: one width test; put rolls keep the earnings veto; TMPDIR in the device VM). Before that 2026-11-01 (s145: IBKR's daily bars reach a year, not 120 days). Before that 2026-11-01 (s144: the book's market exposure shown in dollars, display only; device-VM harness notes). Before that 2026-10-31 (s142: no double entry as built; partial closes; called-away shares and dividends; net of fees from 10/24; retired lines moved to the history file; two harness lessons). Before that 2026-10-31 (s141: a process that called `get_ib()` holds client 11; the snapshot is on its own client numbers). Before that 2026-10-30 (s140: HELM commands are shown with `cd ~/Projects/helm &&` in front). Before that 2026-10-28 (s138: proposal tools are commands, recorded; earnings fail closed; assignment accounting; three covered-call choices; book limits built; a screen casts a wider net than its rules; -B on a perturbation). Before that 2026-10-27 (s137: Greeks follow trader practice; quality is the main risk control; the book's theta range and delta limit). Before that 2026-10-27 (rank-bar review: real trades only; CSP band 0.30 included; long-call bar review closed). Before that 2026-10-25 (s135: never REPLACE a cascading parent; a write test compares every table; HELM advises in plain words and flags every rule overstepped; paper book frozen, paper exit agent retired; how `helm settle --date` reads its date). Before that 2026-10-24 (s134: the revision — rulebook v0.2 approved: strategy set, sleeve limits, paper book retired, universe, net P&L, no double entry). Before that 2026-10-23 (s133: a named contract is a record, not a selection). Before that 2026-10-14 (s130: the device shell never writes the live database). Before that 2026-10-12 (s129: plain language, no rule or task numbers when talking to Russ). Before that 2026-10-12 (s128: explain first, wait for the go-ahead). Before that 2026-10-10 (s127: PG archived as a product; the board is HELM's interface). Before that 2026-10-10 (s126: the handover replaces the live list). Before that 2026-10-01 (s125: net rent banked, the diagonal loss limit, the four-question
 diagonal card, two keep reasons; one base per percentage; live state in render harnesses). **Kept as a mirror on the Mac at
 `~/Projects/helm/_records/HELM-standing-rules.md` — edit that copy, publish with
 `project_write local_path`.***
@@ -105,6 +105,12 @@ Any of them comes back unchanged if it is needed again.*
   cost; both shown, with the trend flag. *(Russ, 2026-11-02, s147 — practitioner reasoning, not
   evidence: yearly return would steer to the dearest options, where the long costs most. One PMCC per
   name builds a record slowly.)*
+- **A position's card shows the rules HELM's advice applies to it, from the same place.** The PMCC card
+  reads `helm/advice.py` `pmcc_rule_rows` (loss limit, 50% on the short with the resting price, 21 days,
+  in the money in its last week, the long at 90 days, the next short's width floor) — the same constants
+  and comparisons as the advice; the run-off diagonals keep their exit_flags rules on their cards.
+  *(Russ, 2026-11-02, s148 — the NVDA card had shown the diagonals' breach, worthless and 25% harvest,
+  which the advice never reads for a PMCC.)*
 - **Measurement:** **net of fees is the P&L of record** (gross beside it; trades before
   7/13 stay gross, labelled "fees not recorded"); capital-weighted annualized return on
   capital at risk; benchmarks the money-market yield on the same cash and days and Cboe's
@@ -283,6 +289,12 @@ Any of them comes back unchanged if it is needed again.*
   been a no." When a written rule and its source conversation could differ, check the
   archive/study doc — or ask — before choosing the narrower reading. *(2026-09-27.)*
 - **Search the project before recommending a change.** `project_search` first.
+- **The chain reader reads only strikes near the price** (`open_cmd.fetch_chain_from_ibkr`: ±3× the 14-day
+  range) unless it is given a `strike_range`. On calm stocks that stops short of the bands: no 0.20–0.30
+  short call on AAPL or XLE (s147), XLC/TGT/NVDA/VALE left off the put list with only a higher delta
+  "nearest" (10-28 → 10-30). **Every proposal tool passes `helm/strikewindow.py`'s range, worked out from the
+  stock's stored IV** (puts below the price, calls above, rolls always including the current contract;
+  50% when no IV) — one function for `helm puts`, `helm calls`, `helm roll` and `helm pmcc`. *(s148.)*
 - **The PMCC width test lives in one place: `helm/fillopens.py` `width_floor` / `width_test`.** The import, `helm advise`,
   `helm calls` and `helm roll` all call it; never write the arithmetic again. Three copies had grown; one let a strike
   exactly at the floor pass (a float: 62.900000000000006 > 62.9). *(s146, 2026-11-01.)*
@@ -398,7 +410,8 @@ Any of them comes back unchanged if it is needed again.*
 - **A render harness reads more than the database copy.** PG's card nav (previous / next /
   "N of M on the board") comes from the live board cache; a baseline and a candidate rendered
   minutes apart differ there with no code change. Strip it before a byte compare.
-  *(2026-10-01.)*
+  *(2026-10-01.)* **The cards' charts also draw their clipPath ids from a random number** (`ca21174`):
+  normalise them too. *(s148.)*
 
 ## While operating
 
@@ -454,7 +467,8 @@ Any of them comes back unchanged if it is needed again.*
 - **Device VM, s146: run harnesses with `TMPDIR=/tmp`** — the session's TMPDIR is on a full disk, and SQLite's
   sort files for an `ORDER BY` over a big table fail there with "database or disk is full".
 - **Device VM, s144:** its home disk can be full — put database copies in `/tmp`; install with
-  `pip3 install --user rich flask`; the board on a copy needs `~/.helm_profile` holding the account id
+  `pip3 install --target /tmp/pylib rich flask` and run with `PYTHONPATH=/tmp/pylib` (s147: `--user`
+  fails on the full disk); the board on a copy needs `~/.helm_profile` holding the account id
   (`get_active_account` reads it), or every page redirects to Setup.
 - **Device-shell rules:** set `HELM_ROOT="$HOME/mnt/helm"` (without it `helm.config`
   falls back to a `~/Projects/helm` path that does not exist in the VM: "unable to

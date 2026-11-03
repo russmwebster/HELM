@@ -2,7 +2,7 @@
 
 *Russ asked (11-01) whether PMCC screening and recommendations — new entries, selling the next short on a long,
 and rolling shorts — need a plan. They do: the PMCC screen on disk is the old diagonal code and can't be reused.
-**Russ approved the session's lean on the universe and trend, and settled the step decisions, on 11-01 (below). Steps 1 and 2 are BUILT (s146, 2026-11-01: helm `5cd130b`, `52a8002`; helm-pg `5cc5cd4`) — see the handover's s146 entry. Step 3 is not.** Each step is
+**Russ approved the session's lean on the universe and trend, and settled the step decisions, on 11-01 (below). Steps 1 and 2 are BUILT (s146, 2026-11-01: helm `5cd130b`, `52a8002`; helm-pg `5cc5cd4`) — see the handover's s146 entry. **Step 3 is BUILT (s147, 2026-11-02: helm `4b711af`, `1a0f017`), ranked by rent cover (Russ 11-02); s148 widened the strikes every proposal tool reads and gave the PMCC card the PMCC rules.** Each step is
 explained and waits for Russ's go-ahead; live chains need market hours to test.
 Mirror: `~/Projects/helm/_records/HELM-pmcc-plan.md` → project `claude/HELM-pmcc-plan.md`.*
 
@@ -80,7 +80,7 @@ the PMCC as its next short) — untested today.
 **Tested puts too (Russ 11-01):** the same roll engine prices rolls for tested CSPs — out (and down) for a net credit
 at the bid/ask, against taking the shares (HELM's lean while A–C) — GOOGL showed the need.
 
-### Step 3 — new PMCC entries: `helm pmcc`
+### Step 3 — new PMCC entries: `helm pmcc` — BUILT s147
 
 A command Russ runs, like `helm puts` (not scheduled; refused in the snapshot windows unless `--force`), on the
 `helm/puttool.py` pattern:
@@ -97,8 +97,8 @@ A command Russ runs, like `helm puts` (not scheduled; refused in the snapshot wi
 - **Shown, not gates:** trend (200-day and 50-day, the downtrend flag), **IV rank (no rule — Russ 11-01: a PMCC is
   net long volatility, so dear options make the long dearer; that shows up as lower rent cover, which the flag
   catches)**, earnings inside the short (flagged).
-- **Ranked** — proposed: by rent cover (the number that says whether a flat stock still pays); to confirm at step 3.
-  Top 5, one per name.
+- **Ranked by rent cover** (Russ 11-02, s147), ties by yearly return on the long's cost; both shown. Top 5, one per
+  name.
 - **Recorded:** every name's best pair and each left-off name's true reason; the trend, IV rank, both legs' Greeks.
 - **Quotes from IBKR only**, a wider net than the rules, the rules applied by the tool (standing rule: a screen
   casts a wider net than its rules).
@@ -117,7 +117,27 @@ A command Russ runs, like `helm puts` (not scheduled; refused in the snapshot wi
 4. **IV rank at entry:** no rule; shown.
 5. **Trend source:** IBKR daily bars (a year is available); Yahoo not needed.
 
-**Still open:** the ranking for new entries (proposed: rent cover) — confirm at step 3.
+6. **Ranking (11-02):** rent cover, ties by yearly return on the long's cost.
+
+## Live findings (s147–s148, 11-02)
+
+- **The strike window:** the chain reader's ±3× 14-day-range window stopped short of the 0.20–0.30 short calls on
+  calm stocks (AAPL, XLE). Fixed in `helm pmcc` (s147) and, through `helm/strikewindow.py`, in every proposal tool
+  (s148).
+- **First full run, 11-02 13:10–13:41 (31 minutes, 101 names):** 23 had a pair inside every rule. Top five: TLT 8.6×
+  (downtrend), XLE 4.6× (width passes by $0.15), SLV 4.3× (downtrend), AMD 4.2× (declined: Technology sector; reports
+  11-03), QCOM 3.9× (reports 11-04). Rent cover favours calm funds, whose deep in-the-money longs carry little time
+  value — two of the top three were in downtrends (shown, not a gate).
+- **Index funds rarely pass the width test** at normal vol: SPY, DIA and XLF fail; QQQ passed by $0.10 earlier that
+  day. This cuts against "funds are natural PMCC names".
+- **65 names were left off for the short call's spread (≥ 10% of mid)**, including MSFT 11%, WMT 11%, KO 16%, JPM 18%.
+  Not yet known whether those spreads are real or the reader's quotes not having settled (it waits 3 seconds). To
+  check during market hours: `helm pmcc MSFT,WMT,KO,JPM --why` against the same contracts read at the same moment
+  through the separate read-only IBKR reader (client 84). Only found pairs are recorded, so the records can't answer it.
+- **A width pass by cents isn't reflected in the ranking** (the room is shown).
+- **The PMCC card (s148)** is titled PMCC and lists the PMCC rules from `helm/advice.py` (`pmcc_rule_rows`).
+- **A board button for `helm pmcc`:** Russ is considering it (11-02). A full run takes ~30 minutes, so it would run in
+  the background and show "running since …", unlike the put list's button.
 
 ## How each step is verified (standing rules)
 
