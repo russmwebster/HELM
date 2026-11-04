@@ -396,7 +396,7 @@ def _diag_family(conn, p, legs_all, today):
         return _rec(p, "SELL_CALL" if is_pmcc else "DECIDE",
                     "%s -- %s" % (what, "sell the next call" if is_pmcc else "the long has no short on it"),
                     "No short is open. %s." % status.capitalize(), nums,
-                    act="run `cd ~/Projects/helm && helm calls` for three choices -- a 30-45 day, 0.20-0.30 "
+                    act="run `cd ~/Projects/helm && helm calls` for three choices -- a 30-60 day, 0.20-0.30 "
                     "delta call whose strike sits more than %s above the long's %g strike (the width test)"
                     % (_p(width), L["strike"]), as_of=as_of)
     pend = [d for d in EF.pending(conn, ensure=False) if d["position_id"] == p["id"]] if not is_pmcc else []
@@ -802,7 +802,7 @@ def _share_line(h, covered_by, grade):
     if h["contracts"] >= 1:
         verb, head = "SELL_CALL", "%s %d shares -- sell a covered call" % (t, sh)
         reason = ("%d of %d shares have no call on them; effective basis %s, so the strike must be at or above it "
-                  "(0.20-0.35 delta, 30-45 days, no earnings inside the trade).%s" % (free, sh, b, cov))
+                  "(0.20-0.35 delta, 30-60 days, no earnings inside the trade).%s" % (free, sh, b, cov))
         act = "see three choices: cd ~/Projects/helm && helm calls"
     elif free > 0:
         verb, head = "HOLD", "%s %d shares -- hold" % (t, sh)
@@ -965,15 +965,25 @@ def write_files(db=None, today=None, snapshot=None, source="helm advise --json",
     st = {"schema_version": SCHEMA_VERSION, "run_at": run_at, "source": source,
           "slot": slot_of((snapshot or {}).get("started") or datetime.now().isoformat()),
           "snapshot": snapshot}
+    # s149 (Russ 2026-11-03): a snapshot that read none of its positions is a failed slot --
+    # 11-03 15:15 read 0 of 7 during a gateway outage and was reported "ok". A partial read
+    # stays ok, with how many were read as its reason. No positions open: unchanged.
+    att = (snapshot or {}).get("attempted") or 0
+    jrn = (snapshot or {}).get("journaled")
     if skipped:
         st.update(status="skipped", ok=False, reason=skipped)
     elif error:
         st.update(status="failed", ok=False, reason=error)
+    elif att > 0 and jrn == 0:
+        st.update(status="failed", ok=False,
+                  reason="the snapshot read none of the %d open positions -- advice.json is the last good one" % att)
     else:
         try:
             doc = build(db=db, today=today, snapshot=snapshot, source=source)
             _atomic_write(d / ADVICE_FILE, doc)
-            st.update(status="ok", ok=True, reason=None)
+            st.update(status="ok", ok=True,
+                      reason=("the snapshot read %d of %d positions" % (jrn, att))
+                      if (att > 0 and jrn is not None and jrn < att) else None)
         except Exception as exc:      # noqa: BLE001 -- the status file carries it
             st.update(status="failed", ok=False, reason="%s: %s" % (type(exc).__name__, exc))
     st["advice"] = _last_good(d)

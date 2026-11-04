@@ -735,9 +735,14 @@ def suggest_contracts(strategy: str, strike: float, mid: float,
 # ── Main fetch and evaluation ─────────────────────────────────────────────────
 
 
+class ChainReadError(Exception):
+    """s149: raised by fetch_chain_from_ibkr(report_errors=True) when IB Gateway could not be
+    reached, or the read failed -- so a proposal tool can say so instead of "no quotes"."""
+
+
 def fetch_chain_from_ibkr(ticker, opt_type, target_exps, spot, atr,
                            delta_min, delta_max, delta_sweet,
-                           spread_threshold=0.25, pin=None, strike_range=None):
+                           spread_threshold=0.25, pin=None, strike_range=None, report_errors=False):
     # Fetch live/frozen options chain from IBKR.
     # s147: strike_range=(lo, hi), when given, replaces the spot +/- 3xATR strike
     # window (helm pmcc reads deep in-the-money LEAPS strikes for the long). None
@@ -749,8 +754,10 @@ def fetch_chain_from_ibkr(ticker, opt_type, target_exps, spot, atr,
 
     results = []
     ib = IB()
+    _connected = False      # s149: report_errors tells a refused connection from a failed read
     try:
         ib.connect("127.0.0.1", 4002, clientId=15, readonly=True, timeout=15)
+        _connected = True
         ib.RequestTimeout = 45  # HELM-009: hung IBKR request raises/returns bounded instead of stalling the batch (caught upstream as a skip)
         from helm.cli.check_cmd import is_market_open
         ib.reqMarketDataType(2)  # HELM-076: frozen; IBKR upgrades to live when a live session exists
@@ -900,8 +907,19 @@ def fetch_chain_from_ibkr(ticker, opt_type, target_exps, spot, atr,
                     "source": "ibkr",
                 })
 
-    except Exception:
-        pass
+        # s149: a connection that dropped mid-read returns empty tickers, not an error
+        if report_errors and not ib.isConnected():
+            raise ChainReadError("IB Gateway connection lost while reading")
+    except ChainReadError:
+        raise
+    except Exception as _e:
+        # s149: report_errors=True (the proposal tools) -- say what failed. Without it (every
+        # older caller) an error still reads as an empty chain, exactly as before.
+        if report_errors:
+            if not _connected:
+                raise ChainReadError("IB Gateway not reachable on client 15 (%s%s)"
+                                     % (type(_e).__name__, (": %s" % _e) if str(_e) else ""))
+            raise ChainReadError("chain read failed after connecting (%s: %s)" % (type(_e).__name__, _e))
     finally:
         try: ib.disconnect()
         except Exception: pass

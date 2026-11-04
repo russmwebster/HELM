@@ -92,13 +92,13 @@ def selftest():
     d1 = (math.log(S / Kc) + (RATE + 0.5 * sg * sg) * T) / (sg * math.sqrt(T))
     ok(abs(NormalDist().cdf(d1) - 0.20) < 1e-9, "a 0.20 call strike prices back to 0.20 delta (K %.2f)" % Kc)
     # Puts read below the price only to the near bound; the range covers the band
-    lo, hi = delta_range(S, sg, [30, 45], "PUT", PUT_NET)
-    b_lo = min(strike_at(S, sg, x, z_for(0.30, "PUT")) for x in (30, 45))
-    b_hi = max(strike_at(S, sg, x, z_for(0.25, "PUT")) for x in (30, 45))
-    ok(lo < b_lo and hi > b_hi and hi < S + 1.0, "the put range covers 0.25-0.30 at 30 and 45 days (%.2f-%.2f)" % (lo, hi))
-    lo, hi = delta_range(S, sg, [30, 45], "CALL", CALL_NET)
-    ok(lo < strike_at(S, sg, 30, z_for(0.35, "CALL")) and hi > strike_at(S, sg, 45, z_for(0.20, "CALL")),
-       "the call range covers 0.20-0.35 at 30 and 45 days (%.2f-%.2f)" % (lo, hi))
+    lo, hi = delta_range(S, sg, [30, 60], "PUT", PUT_NET)
+    b_lo = min(strike_at(S, sg, x, z_for(0.30, "PUT")) for x in (30, 60))
+    b_hi = max(strike_at(S, sg, x, z_for(0.25, "PUT")) for x in (30, 60))
+    ok(lo < b_lo and hi > b_hi and hi < S + 1.0, "the put range covers 0.25-0.30 at 30 and 60 days (%.2f-%.2f)" % (lo, hi))
+    lo, hi = delta_range(S, sg, [30, 60], "CALL", CALL_NET)
+    ok(lo < strike_at(S, sg, 30, z_for(0.35, "CALL")) and hi > strike_at(S, sg, 60, z_for(0.20, "CALL")),
+       "the call range covers 0.20-0.35 at 30 and 60 days (%.2f-%.2f)" % (lo, hi))
     # XLC 11-02: $114 spot, IV 22.7%; the 3xATR window (~$3.5) missed 0.25 puts
     lo, hi = delta_range(114.0, 0.227, [32, 39], "PUT", PUT_NET)
     k25 = strike_at(114.0, 0.227, 32, z_for(0.25, "PUT"))

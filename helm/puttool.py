@@ -10,7 +10,7 @@ The rules (rulebook v0.2; Russ 2026-10-24, 10-27, 10-28):
     date is offered only when it reported within the last LAST_REPORT_OK_DAYS days
     (so it cannot report again inside 10); otherwise it is left off with the reason.
     Funds have no earnings.
-  * contract -- 0.25-0.30 delta (0.30 included), 30-45 DTE, bid-ask spread < 10% of
+  * contract -- 0.25-0.30 delta (0.30 included), 30-60 DTE, bid-ask spread < 10% of
     mid, a live IBKR two-sided quote. The contract per name is the one with the
     highest annualized return on collateral (mid / strike x 365 / DTE).
   * the list -- one contract per name, ranked by that return, top 5 shown. Every
@@ -28,16 +28,18 @@ import json
 import uuid
 from datetime import date, datetime, timedelta
 
-RULE_VERSION = "puts-v1 (rulebook v0.2; band 0.25-0.30 incl.; earnings fail closed)"
+RULE_VERSION = "puts-v2 (rulebook v0.2; band 0.25-0.30 incl.; earnings fail closed; 30-60 days, Russ 2026-11-03)"
 
 PASSING = ("A", "B", "C", "FUND")
 IVR_MIN = 50.0
 IVR_STALE_DAYS = 3
 DELTA_MIN, DELTA_MAX = 0.25, 0.30
-DTE_MIN, DTE_MAX = 30, 45
+DTE_MIN, DTE_MAX = 30, 60       # s149 (Russ 2026-11-03): was 30 to 45; widened so a monthly expiry is nearly always inside
+DTE_REASON = "outside %d-%d days" % (DTE_MIN, DTE_MAX)   # every tool's reason text reads this
 SPREAD_MAX_PCT = 10.0            # strictly below; 10.0% is refused, as everywhere else
 EARN_VETO_DAYS = 10
 LAST_REPORT_OK_DAYS = 60         # a quarterly reporter that printed <= 60 days ago
+GATEWAY_STOP_AFTER = 3           # s149: this many names in a row unreadable -> the run stops
 QUARTER_DAYS = 91                # is not due again inside 10 (next ~ last + 91)
 TOP_N = 5
 PROFIT_TAKE = 0.50
@@ -117,7 +119,7 @@ def contract_reason(c):
     if d is None or not (DELTA_MIN - 1e-9 <= abs(d) <= DELTA_MAX + 1e-9):
         return "delta outside 0.25-0.30"
     if dte is None or not (DTE_MIN <= dte <= DTE_MAX):
-        return "outside 30-45 days"
+        return DTE_REASON
     if sp is None or sp >= SPREAD_MAX_PCT:
         return "spread 10% of mid or wider"
     return None
@@ -141,7 +143,7 @@ def best_contract(contracts):
     live = [c for c in contracts if contract_reason(c) not in ("no live IBKR quote", "no two-sided market")]
     if not live:
         return None, "no contract passes: " + "; ".join(sorted({contract_reason(c) for c in contracts}))
-    inband = [c for c in live if contract_reason(c) not in ("delta outside 0.25-0.30", "outside 30-45 days")]
+    inband = [c for c in live if contract_reason(c) not in ("delta outside 0.25-0.30", DTE_REASON)]
     if not inband:
         ds = sorted(abs(c["delta"]) for c in live if c.get("delta") is not None)
         lo = max((d for d in ds if d < DELTA_MIN), default=None)
@@ -153,7 +155,7 @@ def best_contract(contracts):
 
 
 def target_expiries(expirations, today):
-    """[(expiry, dte)] inside 30-45 days, and a reason when there are none."""
+    """[(expiry, dte)] inside 30-60 days, and a reason when there are none."""
     out = []
     for e in expirations or ():
         d = (_d(e) - today).days
@@ -165,7 +167,7 @@ def target_expiries(expirations, today):
     before = [x for x in near if x[0] < DTE_MIN][-1:]
     after = [x for x in near if x[0] > DTE_MAX][:1]
     nb = ", ".join("%s is %d days" % (e[5:], d) for d, e in before + after)
-    return [], "no expiry between 30 and 45 days" + (" (%s)" % nb if nb else "")
+    return [], "no expiry between %d and %d days" % (DTE_MIN, DTE_MAX) + (" (%s)" % nb if nb else "")
 
 
 def rank(bests):
@@ -291,9 +293,28 @@ def fetch_contracts(ticker, today=None):
         pass
     from helm import strikewindow as SW   # s148: strikes from the stock's IV, not 3 x ATR
     rng = SW.delta_range(spot, SW.latest_iv(ticker, today), [d for _, d in exps_in], "PUT", SW.PUT_NET)
-    rows = oc.fetch_chain_from_ibkr(ticker, "PUT", exps_in, spot, atr, NET_DELTA[0], NET_DELTA[1],
-                                    (DELTA_MIN, DELTA_MAX), spread_threshold=NET_SPREAD, strike_range=rng)
+    try:
+        rows = oc.fetch_chain_from_ibkr(ticker, "PUT", exps_in, spot, atr, NET_DELTA[0], NET_DELTA[1],
+                                        (DELTA_MIN, DELTA_MAX), spread_threshold=NET_SPREAD, strike_range=rng,
+                                        report_errors=True)
+    except oc.ChainReadError as e:                 # s149: say so, never "no quotes"
+        return [], spot, str(e)
     return rows, spot, None
+
+
+def gateway_down(err):
+    """s149: True when a fetch error means IB Gateway could not be read (not a market reason)."""
+    return bool(err) and ("IB Gateway not reachable" in err or "IB Gateway connection lost" in err
+                          or "chain read failed after connecting" in err)
+
+
+def stop_rest(rejects, names_left, streak):
+    """s149: mark the names after a stop. Returns the names the rerun should cover (the
+    unreadable streak plus the rest), in order."""
+    why = "not read: run stopped -- IB Gateway unreachable (%d names in a row)" % len(streak)
+    for t in names_left:
+        rejects[t] = why
+    return list(streak) + list(names_left)
 
 
 def build(conn, today, tickers=None, fetch=fetch_contracts, book=None, db=None):
@@ -303,12 +324,18 @@ def build(conn, today, tickers=None, fetch=fetch_contracts, book=None, db=None):
     checked, rejects, ivr_date, n_universe = screen(conn, today, tickers)
     b = book if book is not None else S.book()
     bests = []
-    for ch in checked:
+    streak, stopped = [], None
+    for i, ch in enumerate(checked):
         t = ch["ticker"]
         rows, spot, err = fetch(t)
         if err:
             rejects[t] = err if err.startswith("no expiry") else "chain not read: %s" % err
+            streak = streak + [t] if gateway_down(err) else []
+            if len(streak) >= GATEWAY_STOP_AFTER:
+                stopped = stop_rest(rejects, [c["ticker"] for c in checked[i + 1:]], streak)
+                break
             continue
+        streak = []
         best, why = best_contract(rows)
         if best is None:
             rejects[t] = why
@@ -346,7 +373,7 @@ def build(conn, today, tickers=None, fetch=fetch_contracts, book=None, db=None):
             "market_open": _market_open(), "n_universe": n_universe,
             "n_checked": len(checked), "n_found": len(ranked),
             "sleeve_free": b["share"] - b["used"], "rejects": rejects,
-            "candidates": ranked}
+            "candidates": ranked, "stopped": stopped}
 
 
 def _market_open():
@@ -450,8 +477,8 @@ def _selftest():
     ok(contract_reason({**base, "delta": 0.249}) is not None, "0.249 delta fails")
     ok(contract_reason({**base, "spread_pct": 10.0}) is not None, "a 10.0% spread fails")
     ok(contract_reason({**base, "spread_pct": 9.9}) is None, "a 9.9% spread passes")
-    ok(contract_reason({**base, "dte": 29}) is not None and contract_reason({**base, "dte": 46}) is not None,
-       "29 and 46 days fail")
+    ok(contract_reason({**base, "dte": 29}) is not None and contract_reason({**base, "dte": 61}) is not None
+       and contract_reason({**base, "dte": 46}) is None, "29 and 61 days fail; 46 passes (s149: 30-60)")
     ok(contract_reason({**base, "source": "yfinance"}) is not None, "a Yahoo-only quote fails")
     ok(contract_reason({**base, "delta": None}) is not None, "no delta fails closed")
     # choice and ranking
@@ -470,10 +497,15 @@ def _selftest():
     ok(best_contract([{**base, "source": "yfinance"}])[1] == "no contract passes: no live IBKR quote",
        "a Yahoo-only chain still fails closed")
     ex, why = target_expiries(["2026-11-20", "2026-12-18"], T)
-    ok(ex == [] and why == "no expiry between 30 and 45 days (11-20 is 23 days, 12-18 is 51 days)",
+    ok([e for e, _ in ex] == ["2026-12-18"] and why is None,
+       "s149: a monthly 51 days out is now inside the window: %s %s" % (ex, why))
+    ex, why = target_expiries(["2026-11-20", "2027-01-15"], T)
+    ok(ex == [] and why == "no expiry between 30 and 60 days (11-20 is 23 days, 01-15 is 79 days)",
        "monthly-only names say which expiries miss: %s" % why)
-    ex, _ = target_expiries(["2026-11-20", "2026-11-27", "2026-12-04", "2026-12-12", "2026-12-18"], T)
-    ok([d for _, d in ex] == [30, 37, 45], "30 and 45 days are both inside the window")
+    ex, _ = target_expiries(["2026-11-26", "2026-11-27", "2026-12-12", "2026-12-27", "2026-12-28"], T)
+    ok([d for _, d in ex] == [30, 45, 60], "29 days out, 30 and 60 in, 61 out: %s" % [d for _, d in ex])
+    ok(contract_reason({**base, "dte": 60}) is None and contract_reason({**base, "dte": 61}) == "outside 30-60 days"
+       and contract_reason({**base, "dte": 29}) == "outside 30-60 days", "a contract at 60 days passes; 29 and 61 fail")
     r = rank([{"ticker": "X", "ann_return": .1}, {"ticker": "Y", "ann_return": .3}, {"ticker": "Z", "ann_return": .2}])
     ok([x["ticker"] for x in r] == ["Y", "Z", "X"], "ranked by annualized return")
     ok(earnings_in_trade(date(2026, 12, 1), "2026-12-04") and not earnings_in_trade(date(2026, 12, 5), "2026-12-04"),

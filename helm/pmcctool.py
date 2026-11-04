@@ -4,7 +4,7 @@ The rules (rulebook v0.2 section 6; Russ 2026-11-01 and 11-02; claude/HELM-pmcc-
   * universe -- grade A, B or C, or an approved fund (FUND). Not a company that
     already has a PMCC (or run-off diagonal) open: one per name (GOOG + GOOGL are one).
   * long -- 270-730 days, 0.75-0.85 delta, spread < 10% of mid, a live IBKR quote.
-  * short -- 30-45 days, 0.20-0.30 delta, spread < 10% of mid, expiring before the long.
+  * short -- 30-60 days, 0.20-0.30 delta, spread < 10% of mid, expiring before the long.
   * the width test passes at entry, with the long priced at its ASK (the price you are
     likely to pay): the strike gap must exceed the long's cost a share. One function --
     helm.fillopens.width_test -- never a copy. A pair that passes only at the mid is
@@ -36,12 +36,12 @@ from datetime import date, datetime
 
 from helm import puttool as P
 
-RULE_VERSION = "pmcc-v1 (rulebook v0.2 s6; ranked by rent cover, Russ 2026-11-02)"
+RULE_VERSION = "pmcc-v2 (rulebook v0.2 s6; ranked by rent cover, Russ 2026-11-02; short 30-60 days, Russ 2026-11-03)"
 
 PASSING = P.PASSING
 LONG_DTE = (270, 730)
 LONG_DELTA = (0.75, 0.85)
-SHORT_DTE = (30, 45)
+SHORT_DTE = (30, 60)             # s149 (Russ 2026-11-03): was 30 to 45
 SHORT_DELTA = (0.20, 0.30)
 SPREAD_MAX_PCT = 10.0             # strictly below, as everywhere
 RENT_COVER_FLAG = 2.0
@@ -363,16 +363,20 @@ def fetch_pairs(ticker, today=None, sigma=None):
                 atr = a
     except Exception:
         pass
-    shorts = oc.fetch_chain_from_ibkr(ticker, "CALL", sx, spot, atr, NET_SHORT_DELTA[0], NET_SHORT_DELTA[1],
-                                      SHORT_DELTA, spread_threshold=P.NET_SPREAD,
-                                      strike_range=short_strike_range(spot, sigma, [d for _, d in sx]))
-    if not [c for c in shorts if leg_reason(c, "short") is None]:
-        return [], shorts, spot, None
-    longs = []
-    for e, d in lx:
-        longs += oc.fetch_chain_from_ibkr(ticker, "CALL", [(e, d)], spot, atr, NET_LONG_DELTA[0],
-                                          NET_LONG_DELTA[1], LONG_DELTA, spread_threshold=P.NET_SPREAD,
-                                          strike_range=long_strike_range(spot, sigma, d))
+    try:                                            # s149: a gateway failure says so
+        shorts = oc.fetch_chain_from_ibkr(ticker, "CALL", sx, spot, atr, NET_SHORT_DELTA[0], NET_SHORT_DELTA[1],
+                                          SHORT_DELTA, spread_threshold=P.NET_SPREAD,
+                                          strike_range=short_strike_range(spot, sigma, [d for _, d in sx]),
+                                          report_errors=True)
+        if not [c for c in shorts if leg_reason(c, "short") is None]:
+            return [], shorts, spot, None
+        longs = []
+        for e, d in lx:
+            longs += oc.fetch_chain_from_ibkr(ticker, "CALL", [(e, d)], spot, atr, NET_LONG_DELTA[0],
+                                              NET_LONG_DELTA[1], LONG_DELTA, spread_threshold=P.NET_SPREAD,
+                                              strike_range=long_strike_range(spot, sigma, d), report_errors=True)
+    except oc.ChainReadError as e:
+        return [], [], spot, str(e)
     return longs, shorts, spot, None
 
 
@@ -438,13 +442,20 @@ def build(conn, today, tickers=None, fetch=fetch_pairs, trends=None, book=None, 
     b = book if book is not None else S.book()
     tr = trends if trends is not None else fetch_trends([c["ticker"] for c in checked])
     bests = []
-    for ch in checked:
+    streak, stopped = [], None
+    for i, ch in enumerate(checked):
         t = ch["ticker"]
         t0 = time.time()
         sigma = (ch["iv_current"] / 100.0) if ch.get("iv_current") else None
         longs, shorts, spot, err = fetch(t, today, sigma)
+        streak = streak + [t] if P.gateway_down(err) else []      # s149
         if err:
             rejects[t] = err if err.startswith("no expiry") else "chain not read: %s" % err
+            if len(streak) >= P.GATEWAY_STOP_AFTER:
+                if progress:
+                    progress(t, rejects.get(t), time.time() - t0)
+                stopped = P.stop_rest(rejects, [c["ticker"] for c in checked[i + 1:]], streak)
+                break
         else:
             pair, why = best_pair(longs, shorts, spot)
             if pair is None:
@@ -510,7 +521,7 @@ def build(conn, today, tickers=None, fetch=fetch_pairs, trends=None, book=None, 
             "rule_version": RULE_VERSION, "ivr_date": ivr_date, "market_open": P._market_open(),
             "n_universe": nu, "n_checked": len(checked), "n_found": len(ranked),
             "sleeve_free": b["share"] - b["used"], "elapsed_s": round(time.time() - t_start, 1),
-            "rejects": rejects, "candidates": ranked}
+            "rejects": rejects, "candidates": ranked, "stopped": stopped}
 
 
 def record(conn, run, note=None):
@@ -650,8 +661,11 @@ def _selftest():
     ex, why = expiries(["2026-12-04", "2027-06-17", "2027-12-17", "2029-01-19"], T, LONG_DTE)
     ok([e for e, _ in ex] == ["2027-12-17"], "long expiries inside 270-730 only")
     ex, why = expiries(["2026-11-20", "2027-01-15"], T, SHORT_DTE)
-    ok(ex == [] and why == "no expiry between 30 and 45 days (2026-11-20 is 18 days, 2027-01-15 is 74 days)",
+    ok(ex == [] and why == "no expiry between 30 and 60 days (2026-11-20 is 18 days, 2027-01-15 is 74 days)",
        "an empty window names the nearest expiries: %s" % why)
+    ex, why = expiries(["2026-11-20", "2026-12-04", "2026-12-18", "2027-01-15"], T, SHORT_DTE)
+    ok([e for e, _ in ex] == ["2026-12-04", "2026-12-18"],
+       "s149: the 12-18 monthly (46 days on 11-02) is inside the short's window; 01-15 (74) is not: %s" % ex)
     good = True
     for sg in (0.15, 0.30, 0.60):
         for d in (270, 730):
@@ -661,11 +675,11 @@ def _selftest():
     ok(good, "the strike range reaches past 0.95 and below 0.65 delta at 15-60% IV, 270 and 730 days")
     good = True
     for sg in (0.15, 0.30, 0.60):
-        a, b = short_strike_range(100.0, sg, [30, 45])
-        for d in (30, 45):
+        a, b = short_strike_range(100.0, sg, [30, 60])
+        for d in (30, 60):
             if not (_bs_call_delta(100.0, a, sg, d) > 0.40 and _bs_call_delta(100.0, b, sg, d) < 0.15):
                 good = False
-    ok(good, "the short's strike range reaches past 0.40 and below 0.15 delta at 15-60% IV, 30 and 45 days")
+    ok(good, "the short's strike range reaches past 0.40 and below 0.15 delta at 15-60% IV, 30 and 60 days")
     a, b = short_strike_range(340.93, 0.26, [32, 39])
     ok(a < 355 and b > 375, "AAPL 11-02 (0.20-0.30 calls at 360-365): the range %.0f-%.0f covers them" % (a, b))
     # trend

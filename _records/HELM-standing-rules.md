@@ -7,7 +7,7 @@ future session builds; most sessions add nothing.*
 
 *First cut 2026-09-20, curated from the lessons list and the decisions scattered
 through `claude/HELM-worklist.md` (frozen). Russ reads it once before it is trusted.
-Last updated 2026-11-03 (s149: the back-burner list is not the universe). Before that 2026-11-02 (s148: the proposal tools read strikes from the stock's IV; a card shows the rules the advice applies; device-VM installs; random chart ids). Before that 2026-11-02 (s147: new PMCC entries rank by rent cover; the delta limit kept at half the sleeve, reviewed in January). Before that 2026-11-01 (s146: one width test; put rolls keep the earnings veto; TMPDIR in the device VM). Before that 2026-11-01 (s145: IBKR's daily bars reach a year, not 120 days). Before that 2026-11-01 (s144: the book's market exposure shown in dollars, display only; device-VM harness notes). Before that 2026-10-31 (s142: no double entry as built; partial closes; called-away shares and dividends; net of fees from 10/24; retired lines moved to the history file; two harness lessons). Before that 2026-10-31 (s141: a process that called `get_ib()` holds client 11; the snapshot is on its own client numbers). Before that 2026-10-30 (s140: HELM commands are shown with `cd ~/Projects/helm &&` in front). Before that 2026-10-28 (s138: proposal tools are commands, recorded; earnings fail closed; assignment accounting; three covered-call choices; book limits built; a screen casts a wider net than its rules; -B on a perturbation). Before that 2026-10-27 (s137: Greeks follow trader practice; quality is the main risk control; the book's theta range and delta limit). Before that 2026-10-27 (rank-bar review: real trades only; CSP band 0.30 included; long-call bar review closed). Before that 2026-10-25 (s135: never REPLACE a cascading parent; a write test compares every table; HELM advises in plain words and flags every rule overstepped; paper book frozen, paper exit agent retired; how `helm settle --date` reads its date). Before that 2026-10-24 (s134: the revision — rulebook v0.2 approved: strategy set, sleeve limits, paper book retired, universe, net P&L, no double entry). Before that 2026-10-23 (s133: a named contract is a record, not a selection). Before that 2026-10-14 (s130: the device shell never writes the live database). Before that 2026-10-12 (s129: plain language, no rule or task numbers when talking to Russ). Before that 2026-10-12 (s128: explain first, wait for the go-ahead). Before that 2026-10-10 (s127: PG archived as a product; the board is HELM's interface). Before that 2026-10-10 (s126: the handover replaces the live list). Before that 2026-10-01 (s125: net rent banked, the diagonal loss limit, the four-question
+Last updated 2026-11-03 (s149: the back-burner list is not the universe; new shorts open 30–60 days out). Before that 2026-11-02 (s148: the proposal tools read strikes from the stock's IV; a card shows the rules the advice applies; device-VM installs; random chart ids). Before that 2026-11-02 (s147: new PMCC entries rank by rent cover; the delta limit kept at half the sleeve, reviewed in January). Before that 2026-11-01 (s146: one width test; put rolls keep the earnings veto; TMPDIR in the device VM). Before that 2026-11-01 (s145: IBKR's daily bars reach a year, not 120 days). Before that 2026-11-01 (s144: the book's market exposure shown in dollars, display only; device-VM harness notes). Before that 2026-10-31 (s142: no double entry as built; partial closes; called-away shares and dividends; net of fees from 10/24; retired lines moved to the history file; two harness lessons). Before that 2026-10-31 (s141: a process that called `get_ib()` holds client 11; the snapshot is on its own client numbers). Before that 2026-10-30 (s140: HELM commands are shown with `cd ~/Projects/helm &&` in front). Before that 2026-10-28 (s138: proposal tools are commands, recorded; earnings fail closed; assignment accounting; three covered-call choices; book limits built; a screen casts a wider net than its rules; -B on a perturbation). Before that 2026-10-27 (s137: Greeks follow trader practice; quality is the main risk control; the book's theta range and delta limit). Before that 2026-10-27 (rank-bar review: real trades only; CSP band 0.30 included; long-call bar review closed). Before that 2026-10-25 (s135: never REPLACE a cascading parent; a write test compares every table; HELM advises in plain words and flags every rule overstepped; paper book frozen, paper exit agent retired; how `helm settle --date` reads its date). Before that 2026-10-24 (s134: the revision — rulebook v0.2 approved: strategy set, sleeve limits, paper book retired, universe, net P&L, no double entry). Before that 2026-10-23 (s133: a named contract is a record, not a selection). Before that 2026-10-14 (s130: the device shell never writes the live database). Before that 2026-10-12 (s129: plain language, no rule or task numbers when talking to Russ). Before that 2026-10-12 (s128: explain first, wait for the go-ahead). Before that 2026-10-10 (s127: PG archived as a product; the board is HELM's interface). Before that 2026-10-10 (s126: the handover replaces the live list). Before that 2026-10-01 (s125: net rent banked, the diagonal loss limit, the four-question
 diagonal card, two keep reasons; one base per percentage; live state in render harnesses). **Kept as a mirror on the Mac at
 `~/Projects/helm/_records/HELM-standing-rules.md` — edit that copy, publish with
 `project_write local_path`.***
@@ -92,19 +92,25 @@ Any of them comes back unchanged if it is needed again.*
   (`helm quality … --json`, run by Russ; the session updates the file). A name moves to the watchlist only by Russ's
   decision and only once it grades A–C, with a sector and an exposure group set. *(Russ, 2026-11-03, s149 — from the
   Book's GATE comparison; started with 16 data-center names.)*
-- **CSPs:** 0.25–0.30 delta **(0.30 included — Russ, 2026-10-27)**, 30–45 DTE, IV rank ≥ 50, spread < 10% of mid; no entry within
+- **CSPs:** 0.25–0.30 delta **(0.30 included — Russ, 2026-10-27)**, **30–60 DTE (was 30–45; Russ, 2026-11-03)**, IV rank ≥ 50, spread < 10% of mid; no entry within
   10 days of earnings, earnings later in the trade allowed and shown; the contract is
   chosen (highest annualized return on collateral); the daily list is the **top 5**, one
   per name. **50% profit-take as a resting order Russ places at entry** (the Book page
   shows the price); 21 DTE; no stop. Tested → a flag showing both roll and assignment.
   **Assignment accepted by default while the name grades A–C.**
 - **Covered calls:** strike ≥ the **effective basis** (strike paid − put premium); 0.20–
-  0.35 Δ, 30–45 DTE; **no earnings inside the trade**; ex-dividend flag; 50% resting order;
+  0.35 Δ, **30–60 DTE**; **no earnings inside the trade**; ex-dividend flag; 50% resting order;
   **21 DTE** (was 7).
-- **PMCC:** long 270–730 DTE, 0.75–0.85 Δ, mostly intrinsic; short 30–45 DTE, 0.20–0.30 Δ;
+- **PMCC:** long 270–730 DTE, 0.75–0.85 Δ, mostly intrinsic; short **30–60 DTE**, 0.20–0.30 Δ;
   **the width test on every short, re-sells included** (strike gap > what the long has
   cost net of rent banked); review the long at 90 days left; loss limit half the long's
   cost; one contract per name until there is a record.
+- **New short options open 30–60 days out — puts, covered calls, PMCC shorts and rolls (Russ, 2026-11-03, s149; was
+  30–45, the rulebook's number, superseded here).** Monthly expiries carry the tight spreads; a 30–45 window held no monthly
+  for about two weeks a month (11-02: Dec 18 was 46 days out, and most of the 65 names left off `helm pmcc` failed on the weeklies' spreads).
+  The 21-day close-or-roll, the bands, the spread rule, the earnings rules and the rankings are unchanged; the yearly-return
+  ranking weighs a longer trade against a shorter one. One constant: `puttool.DTE_MIN/DTE_MAX` (calls and rolls read it),
+  `pmcctool.SHORT_DTE`. Review with the January limits review.
 - **New PMCC entries rank by rent cover** — the short's monthly credit ÷ the long's monthly loss of
   time value — among names graded A–C or approved funds; ties broken by yearly return on the long's
   cost; both shown, with the trend flag. *(Russ, 2026-11-02, s147 — practitioner reasoning, not
@@ -124,7 +130,7 @@ Any of them comes back unchanged if it is needed again.*
 - **Greeks (Russ, 2026-10-27, s137) — from trader practice, not from HELM's own trades.**
   Per trade: **delta** picks the strike (the CSP band above); **vega** is the per-name
   "are its options rich" decision (IV rank ≥ 50) plus the size limits; **gamma** is handled
-  by the 30–45 DTE entry and the 21-DTE exit; **theta** is the ranking (annualized return on
+  by the 30–60 DTE entry (30–45 before 2026-11-03) and the 21-DTE exit; **theta** is the ranking (annualized return on
   collateral). No other per-trade Greek rule. **The ownership grade is the main risk
   control: rank by annualized return only among names graded A–C or approved funds** —
   ranked across all names, premium steers to the weak, high-volatility names that made
@@ -160,7 +166,7 @@ Any of them comes back unchanged if it is needed again.*
   `stock_positions`. The import books it only with its share row and one matching CSP.
   *(Russ, 2026-10-28; `helm/assignment.py`.)*
 - **Rolls (Russ, 2026-11-01, s146 — `helm roll`):** priced at the bid/ask, a net credit after both legs' fees;
-  new short 30–45 days, delta up to 0.50 (flagged outside its band); each strategy keeps its own strike and earnings
+  new short 30–60 days (s149), delta up to 0.50 (flagged outside its band); each strategy keeps its own strike and earnings
   rules — **a put roll keeps the 10-day earnings veto**, a covered call no earnings inside, a PMCC short earnings flagged
   and the width test counting the buy-back. A below-C name's put roll is shown, flagged. HELM shows the alternatives
   beside the rolls, in dollars; it never places or books — the import books a roll.

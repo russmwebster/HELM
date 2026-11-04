@@ -10,12 +10,12 @@
     helm calls --selftest           the rules' self-test
 
 Rules on shares: strike at or above the effective basis (strike paid less put
-premium), 0.20-0.35 delta, 30-45 days, spread under 10% of mid, no earnings
+premium), 0.20-0.35 delta, 30-60 days, spread under 10% of mid, no earnings
 inside the trade (failing closed). Three choices per holding, ranked by the
 premium's yearly return on the shares' value -- the first is the likeliest to be
 called away.
 
-PMCCs with no short (s146): the next short at 0.20-0.30 delta, 30-45 days, spread
+PMCCs with no short (s146): the next short at 0.20-0.30 delta, 30-60 days, spread
 under 10%, strike passing the width test (above the long's strike + what the long
 has cost net of rent banked); earnings inside the short allowed and flagged;
 yearly return on the long's cost. HELM never places anything. The rules are

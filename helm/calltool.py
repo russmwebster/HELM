@@ -7,7 +7,7 @@ The rules (rulebook v0.2; Russ 2026-10-24, 10-28):
     (shares at the strike, effective basis after its premium) -- labelled, so the
     calls can be seen before the assignment decision.
   * strike >= the EFFECTIVE BASIS (strike paid less put premium, per share).
-  * 0.20-0.35 delta, 30-45 DTE, spread < 10% of mid (Russ 10-28: as for puts),
+  * 0.20-0.35 delta, 30-60 DTE, spread < 10% of mid (Russ 10-28: as for puts),
     a live IBKR two-sided quote -- no Yahoo quotes.
   * NO EARNINGS INSIDE THE TRADE, failing closed: a known report on or before the
     expiry rules the contract out; with no upcoming date, a stock that reported
@@ -23,7 +23,7 @@ The rules (rulebook v0.2; Russ 2026-10-24, 10-28):
     (helm advise carries both once the call is booked).
 
 PMCC longs (s146, Russ 2026-11-01 -- the PMCC plan, step 1): an open PMCC with no
-short is a holding too. Its next short: 0.20-0.30 delta (the PMCC band), 30-45 DTE,
+short is a holding too. Its next short: 0.20-0.30 delta (the PMCC band), 30-60 DTE,
 spread < 10%, live IBKR quote; the strike must pass THE WIDTH TEST (fillopens.width_test:
 strike - long strike > what the long cost net of rent banked, per share); earnings
 inside the short are ALLOWED and flagged (not failed closed); the yearly return is on
@@ -40,8 +40,8 @@ from datetime import date, datetime, timedelta
 
 from helm import puttool as P
 
-RULE_VERSION = ("calls-v2 (rulebook v0.2; shares 0.20-0.35, strike >= effective basis, earnings fail closed; "
-                "PMCC 0.20-0.30, strike passes the width test, earnings flagged)")
+RULE_VERSION = ("calls-v3 (rulebook v0.2; shares 0.20-0.35, strike >= effective basis, earnings fail closed; "
+                "PMCC 0.20-0.30, strike passes the width test, earnings flagged; 30-60 days, Russ 2026-11-03)")
 
 DELTA_MIN, DELTA_MAX = 0.20, 0.35
 PMCC_DELTA_MIN, PMCC_DELTA_MAX = 0.20, 0.30
@@ -117,7 +117,7 @@ def contract_reason(c, eff_basis, latest_expiry, kind="shares", strike_ok=None):
     if d is None or not (lo - 1e-9 <= abs(d) <= hi + 1e-9):
         return "delta outside %.2f-%.2f" % (lo, hi)
     if dte is None or not (DTE_MIN <= dte <= DTE_MAX):
-        return "outside 30-45 days"
+        return P.DTE_REASON
     if kind == "pmcc":
         if not strike_ok(c["strike"]):
             return "strike not above the width-test floor"
@@ -149,7 +149,7 @@ def choose(contracts, eff_basis, latest_expiry, spot, n=CHOICES, kind="shares", 
         return [], "IBKR returned no two-sided call quotes near %.2f-%.2f delta" % (lo, hi)
     order = ("strike below the effective basis", "strike not above the width-test floor",
              "earnings inside the trade", "delta outside %.2f-%.2f" % (lo, hi),
-             "spread 10% of mid or wider", "outside 30-45 days", "no two-sided market", "no live IBKR quote")
+             "spread 10% of mid or wider", P.DTE_REASON, "no two-sided market", "no live IBKR quote")
     why = {id(c): reason(c) for c in contracts}
     # spread is checked last, so a contract failing only on spread met every other rule
     wide = [c for c in contracts if why[id(c)] == "spread 10% of mid or wider" and c.get("spread_pct") is not None]
@@ -276,8 +276,12 @@ def fetch_calls(ticker, today=None):
         pass
     from helm import strikewindow as SW   # s148: strikes from the stock's IV, not 3 x ATR
     rng = SW.delta_range(spot, SW.latest_iv(ticker, today), [d for _, d in exps_in], "CALL", SW.CALL_NET)
-    rows = oc.fetch_chain_from_ibkr(ticker, "CALL", exps_in, spot, atr, 0.15, 0.40,
-                                    (DELTA_MIN, DELTA_MAX), spread_threshold=P.NET_SPREAD, strike_range=rng)
+    try:
+        rows = oc.fetch_chain_from_ibkr(ticker, "CALL", exps_in, spot, atr, 0.15, 0.40,
+                                        (DELTA_MIN, DELTA_MAX), spread_threshold=P.NET_SPREAD, strike_range=rng,
+                                        report_errors=True)
+    except oc.ChainReadError as e:                 # s149: say so, never "no quotes"
+        return [], spot, exdiv, str(e)
     return rows, spot, exdiv, None
 
 
@@ -473,6 +477,8 @@ def _selftest():
        "0.19 and 0.36 fail")
     ok(contract_reason({**base, "spread_pct": 10.0}, 1, L) is not None, "a 10.0% spread fails")
     ok(contract_reason({**base, "source": "yfinance"}, 1, L) is not None, "a Yahoo quote fails")
+    ok(contract_reason({**base, "dte": 60}, 1, L) is None and contract_reason({**base, "dte": 61}, 1, L) == "outside 30-60 days"
+       and contract_reason({**base, "dte": 29}, 1, L) == "outside 30-60 days", "s149: 60 days passes; 29 and 61 fail")
     # choosing
     a = {**base, "strike": 340.0, "mid": 3.0, "delta": 0.35}
     b = {**base, "strike": 350.0, "mid": 2.0, "delta": 0.28}

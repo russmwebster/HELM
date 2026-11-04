@@ -1,0 +1,944 @@
+
+[
+  {
+    "ticker": "EQIX",
+    "name": "Equinix, Inc.",
+    "sector": "Real Estate",
+    "grade": "D",
+    "composite": 44.7,
+    "lean": "LEAN BAIL \u2014 low quality; prefer to close before owning it.",
+    "gates_failed": [],
+    "gates_warned": [
+      "balance_sheet_safety"
+    ],
+    "confidence": "high",
+    "themes": {
+      "returns_on_capital": {
+        "score": 25.0,
+        "gate": null,
+        "roic_latest_pct": 4.4,
+        "roic_avg_pct": 3.5,
+        "invested_capital": 35155000000.0
+      },
+      "moat": {
+        "score": 98.0,
+        "gate": null,
+        "op_margin_pct": 21.3,
+        "gross_margin_pct": 51.1,
+        "op_margin_stdev": 1.7
+      },
+      "cash_quality": {
+        "score": 5.0,
+        "gate": "pass",
+        "fcf_latest": -400000000.0,
+        "fcf_conversion": -0.3,
+        "negative_fcf_years": 1,
+        "fcf_years_available": 4
+      },
+      "growth": {
+        "score": 92.0,
+        "gate": null,
+        "basis": "operating_income",
+        "profit_latest": 1966000000.0,
+        "profit_oldest": 1226000000.0,
+        "profit_cagr_pct": 17.0
+      },
+      "balance_sheet_safety": {
+        "score": 45.0,
+        "gate": "warn",
+        "net_debt_to_ebitda": 5.12,
+        "interest_coverage": 3.7,
+        "current_ratio": 1.32,
+        "cash_runway_years": 4.3,
+        "negative_equity": false
+      },
+      "capital_discipline": {
+        "score": 45.4,
+        "gate": null,
+        "share_count_cagr_pct": 2.3
+      }
+    },
+    "method": "standard"
+  },
+  {
+    "ticker": "CRWV",
+    "name": "CoreWeave, Inc.",
+    "sector": "Technology",
+    "grade": "F",
+    "composite": 13.9,
+    "lean": "BAIL \u2014 fragile underlying; treat as premium-only, avoid assignment.",
+    "gates_failed": [
+      "cash_quality",
+      "balance_sheet_safety"
+    ],
+    "gates_warned": [],
+    "confidence": "high",
+    "themes": {
+      "returns_on_capital": {
+        "score": 10.0,
+        "gate": null,
+        "roic_latest_pct": -0.1,
+        "roic_avg_pct": 0.2,
+        "invested_capital": 30030000000.0
+      },
+      "moat": {
+        "score": 8.0,
+        "gate": null,
+        "op_margin_pct": -0.9,
+        "gross_margin_pct": 71.7,
+        "op_margin_stdev": 64.6
+      },
+      "cash_quality": {
+        "score": 5.0,
+        "gate": "fail",
+        "fcf_latest": -7251000000.0,
+        "fcf_conversion": null,
+        "negative_fcf_years": 4,
+        "fcf_years_available": 4
+      },
+      "growth": {
+        "score": 12.0,
+        "gate": null,
+        "basis": "operating_income",
+        "profit_latest": -46000000.0,
+        "profit_oldest": -22880000.0,
+        "note": "losses deepening"
+      },
+      "balance_sheet_safety": {
+        "score": 18.3,
+        "gate": "fail",
+        "net_debt_to_ebitda": 10.82,
+        "interest_coverage": -0.0,
+        "current_ratio": 0.46,
+        "cash_runway_years": 0.4,
+        "negative_equity": false
+      },
+      "capital_discipline": {
+        "score": 43.1,
+        "gate": null,
+        "share_count_cagr_pct": 2.6
+      }
+    },
+    "method": "standard"
+  },
+  {
+    "ticker": "NBIS",
+    "name": "",
+    "sector": "Communication Services",
+    "grade": "F",
+    "composite": 28.1,
+    "lean": "BAIL \u2014 fragile underlying; treat as premium-only, avoid assignment.",
+    "gates_failed": [
+      "balance_sheet_safety"
+    ],
+    "gates_warned": [
+      "cash_quality"
+    ],
+    "confidence": "high",
+    "themes": {
+      "returns_on_capital": {
+        "score": 18.5,
+        "gate": null,
+        "roic_latest_pct": -8.2,
+        "roic_avg_pct": -4.9,
+        "invested_capital": 5889000000.0
+      },
+      "moat": {
+        "score": 8.0,
+        "gate": null,
+        "op_margin_pct": -115.5,
+        "gross_margin_pct": 68.6,
+        "op_margin_stdev": 1083.4
+      },
+      "cash_quality": {
+        "score": 5.0,
+        "gate": "warn",
+        "fcf_latest": -3681200000.0,
+        "fcf_conversion": -44.62,
+        "negative_fcf_years": 2,
+        "fcf_years_available": 4
+      },
+      "growth": {
+        "score": 12.0,
+        "gate": null,
+        "basis": "operating_income",
+        "profit_latest": -611700000.0,
+        "profit_oldest": -158000000.0,
+        "note": "losses deepening"
+      },
+      "balance_sheet_safety": {
+        "score": 57.6,
+        "gate": "fail",
+        "net_debt_to_ebitda": 2.38,
+        "interest_coverage": -9.9,
+        "current_ratio": 3.08,
+        "cash_runway_years": 1.0,
+        "negative_equity": false
+      },
+      "capital_discipline": {
+        "score": 85.0,
+        "gate": null,
+        "share_count_cagr_pct": -11.0
+      }
+    },
+    "method": "standard"
+  },
+  {
+    "ticker": "CORZ",
+    "name": "Core Scientific, Inc.",
+    "sector": "Technology",
+    "grade": "F",
+    "composite": 25.3,
+    "lean": "BAIL \u2014 fragile underlying; treat as premium-only, avoid assignment.",
+    "gates_failed": [
+      "cash_quality",
+      "balance_sheet_safety"
+    ],
+    "gates_warned": [],
+    "confidence": "medium",
+    "themes": {
+      "returns_on_capital": {
+        "score": null,
+        "gate": null,
+        "roic_latest_pct": null,
+        "roic_avg_pct": null,
+        "invested_capital": -111595000.0
+      },
+      "moat": {
+        "score": 8.0,
+        "gate": null,
+        "op_margin_pct": -70.4,
+        "gross_margin_pct": 11.9,
+        "op_margin_stdev": 29.7
+      },
+      "cash_quality": {
+        "score": 5.0,
+        "gate": "fail",
+        "fcf_latest": -460961000.0,
+        "fcf_conversion": null,
+        "negative_fcf_years": 3,
+        "fcf_years_available": 4
+      },
+      "growth": {
+        "score": 30.0,
+        "gate": null,
+        "basis": "operating_income",
+        "profit_latest": -224550000.0,
+        "profit_oldest": -244573000.0,
+        "note": "losses narrowing"
+      },
+      "balance_sheet_safety": {
+        "score": 29.4,
+        "gate": "fail",
+        "net_debt_to_ebitda": null,
+        "interest_coverage": null,
+        "current_ratio": 1.15,
+        "cash_runway_years": 0.7,
+        "negative_equity": true
+      },
+      "capital_discipline": {
+        "score": 79.1,
+        "gate": null,
+        "share_count_cagr_pct": -2.2
+      }
+    },
+    "method": "standard"
+  },
+  {
+    "ticker": "WULF",
+    "name": "TeraWulf Inc.",
+    "sector": "Financial Services",
+    "grade": "F",
+    "composite": 20.4,
+    "lean": "BAIL \u2014 fragile underlying; treat as premium-only, avoid assignment.",
+    "gates_failed": [
+      "balance_sheet_safety"
+    ],
+    "gates_warned": [],
+    "confidence": "high",
+    "themes": {
+      "returns_on_capital": {
+        "score": 20.0,
+        "gate": null,
+        "method": "bank",
+        "roe_latest_pct": -470.9
+      },
+      "moat": {
+        "score": 8.0,
+        "gate": null,
+        "method": "bank",
+        "net_income_years": 4,
+        "loss_years": 4
+      },
+      "balance_sheet_safety": {
+        "score": 30.0,
+        "gate": "fail",
+        "method": "bank",
+        "note": "latest year a loss",
+        "equity_to_assets": 0.0214
+      },
+      "growth": {
+        "score": 12.0,
+        "gate": null,
+        "basis": "operating_income",
+        "profit_latest": -170309000.0,
+        "profit_oldest": -42857000.0,
+        "note": "losses deepening"
+      },
+      "capital_discipline": {
+        "score": 25.0,
+        "gate": null,
+        "share_count_cagr_pct": 86.5
+      }
+    },
+    "method": "bank"
+  },
+  {
+    "ticker": "IREN",
+    "name": "IREN Limited",
+    "sector": "Financial Services",
+    "grade": "F",
+    "composite": 32.0,
+    "lean": "BAIL \u2014 fragile underlying; treat as premium-only, avoid assignment.",
+    "gates_failed": [
+      "balance_sheet_safety"
+    ],
+    "gates_warned": [],
+    "confidence": "high",
+    "themes": {
+      "returns_on_capital": {
+        "score": 20.0,
+        "gate": null,
+        "method": "bank",
+        "roe_latest_pct": -16.8
+      },
+      "moat": {
+        "score": 8.0,
+        "gate": null,
+        "method": "bank",
+        "net_income_years": 4,
+        "loss_years": 3
+      },
+      "balance_sheet_safety": {
+        "score": 90.0,
+        "gate": "fail",
+        "method": "bank",
+        "note": "latest year a loss",
+        "equity_to_assets": 0.2651
+      },
+      "growth": {
+        "score": 12.0,
+        "gate": null,
+        "basis": "operating_income",
+        "profit_latest": -378751000.0,
+        "profit_oldest": -48558000.0,
+        "note": "losses deepening"
+      },
+      "capital_discipline": {
+        "score": 25.0,
+        "gate": null,
+        "share_count_cagr_pct": 159.0
+      }
+    },
+    "method": "bank"
+  },
+  {
+    "ticker": "CIFR",
+    "name": "Cipher Digital Inc.",
+    "sector": "Technology",
+    "grade": "F",
+    "composite": 18.6,
+    "lean": "BAIL \u2014 fragile underlying; treat as premium-only, avoid assignment.",
+    "gates_failed": [
+      "cash_quality",
+      "balance_sheet_safety"
+    ],
+    "gates_warned": [],
+    "confidence": "high",
+    "themes": {
+      "returns_on_capital": {
+        "score": 10.0,
+        "gate": null,
+        "roic_latest_pct": -9.1,
+        "roic_avg_pct": -3.8,
+        "invested_capital": 2944320000.0
+      },
+      "moat": {
+        "score": 8.0,
+        "gate": null,
+        "op_margin_pct": -150.7,
+        "gross_margin_pct": 28.4,
+        "op_margin_stdev": 996.6
+      },
+      "cash_quality": {
+        "score": 5.0,
+        "gate": "fail",
+        "fcf_latest": -702175000.0,
+        "fcf_conversion": null,
+        "negative_fcf_years": 4,
+        "fcf_years_available": 4
+      },
+      "growth": {
+        "score": 12.0,
+        "gate": null,
+        "basis": "operating_income",
+        "profit_latest": -337404000.0,
+        "profit_oldest": -72467000.0,
+        "note": "losses deepening"
+      },
+      "balance_sheet_safety": {
+        "score": 50.9,
+        "gate": "fail",
+        "net_debt_to_ebitda": null,
+        "interest_coverage": -9.2,
+        "current_ratio": 3.79,
+        "cash_runway_years": 0.9,
+        "negative_equity": false
+      },
+      "capital_discipline": {
+        "score": 25.0,
+        "gate": null,
+        "share_count_cagr_pct": 17.9
+      }
+    },
+    "method": "standard"
+  },
+  {
+    "ticker": "KEEL",
+    "name": "Keel Infrastructure Corp.",
+    "sector": "Technology",
+    "grade": "F",
+    "composite": 24.2,
+    "lean": "BAIL \u2014 fragile underlying; treat as premium-only, avoid assignment.",
+    "gates_failed": [
+      "cash_quality",
+      "balance_sheet_safety"
+    ],
+    "gates_warned": [],
+    "confidence": "high",
+    "themes": {
+      "returns_on_capital": {
+        "score": 23.2,
+        "gate": null,
+        "roic_latest_pct": -11.5,
+        "roic_avg_pct": -8.3,
+        "invested_capital": 670691000.0
+      },
+      "moat": {
+        "score": 14.6,
+        "gate": null,
+        "op_margin_pct": -42.4,
+        "gross_margin_pct": -8.2,
+        "op_margin_stdev": 9.0
+      },
+      "cash_quality": {
+        "score": 5.0,
+        "gate": "fail",
+        "fcf_latest": -347055000.0,
+        "fcf_conversion": null,
+        "negative_fcf_years": 4,
+        "fcf_years_available": 4
+      },
+      "growth": {
+        "score": 12.0,
+        "gate": null,
+        "basis": "operating_income",
+        "profit_latest": -97243000.0,
+        "profit_oldest": -47738000.0,
+        "note": "losses deepening"
+      },
+      "balance_sheet_safety": {
+        "score": 57.4,
+        "gate": "fail",
+        "net_debt_to_ebitda": null,
+        "interest_coverage": -8.3,
+        "current_ratio": 5.58,
+        "cash_runway_years": 1.7,
+        "negative_equity": false
+      },
+      "capital_discipline": {
+        "score": 25.0,
+        "gate": null,
+        "share_count_cagr_pct": 55.2
+      }
+    },
+    "method": "standard"
+  },
+  {
+    "ticker": "FRMI",
+    "name": "Fermi Inc.",
+    "sector": "Real Estate",
+    "grade": "N",
+    "composite": 28.5,
+    "lean": "CAN'T GRADE \u2014 too little data (3 of 6 measures).",
+    "gates_failed": [],
+    "gates_warned": [],
+    "confidence": "low",
+    "themes": {
+      "returns_on_capital": {
+        "score": 20.0,
+        "gate": null,
+        "roic_latest_pct": -17.2,
+        "roic_avg_pct": -17.2,
+        "invested_capital": 818462000.0
+      },
+      "moat": {
+        "score": null,
+        "gate": null,
+        "op_margin_pct": null,
+        "gross_margin_pct": null
+      },
+      "cash_quality": {
+        "score": 5.0,
+        "gate": "fail",
+        "fcf_latest": -603455000.0,
+        "fcf_conversion": null,
+        "negative_fcf_years": 1,
+        "fcf_years_available": 1
+      },
+      "growth": {
+        "score": null,
+        "gate": null,
+        "basis": "revenue(fallback)",
+        "growth_pct": null
+      },
+      "balance_sheet_safety": {
+        "score": 62.7,
+        "gate": "fail",
+        "net_debt_to_ebitda": null,
+        "interest_coverage": null,
+        "current_ratio": 2.31,
+        "cash_runway_years": 0.7,
+        "negative_equity": false
+      },
+      "capital_discipline": {
+        "score": null,
+        "gate": null,
+        "share_count_cagr_pct": null
+      }
+    },
+    "method": "standard"
+  },
+  {
+    "ticker": "GNRC",
+    "name": "Generac Holdings Inc.",
+    "sector": "Industrials",
+    "grade": "D",
+    "composite": 54.7,
+    "lean": "LEAN BAIL \u2014 low quality; prefer to close before owning it.",
+    "gates_failed": [],
+    "gates_warned": [],
+    "confidence": "high",
+    "themes": {
+      "returns_on_capital": {
+        "score": 31.4,
+        "gate": null,
+        "roic_latest_pct": 6.0,
+        "roic_avg_pct": 9.3,
+        "invested_capital": 3789272000.0
+      },
+      "moat": {
+        "score": 36.7,
+        "gate": null,
+        "op_margin_pct": 6.9,
+        "gross_margin_pct": 38.3,
+        "op_margin_stdev": 2.3
+      },
+      "cash_quality": {
+        "score": 92.0,
+        "gate": "pass",
+        "fcf_latest": 268128000.0,
+        "fcf_conversion": 1.68,
+        "negative_fcf_years": 1,
+        "fcf_years_available": 4
+      },
+      "growth": {
+        "score": 15.0,
+        "gate": null,
+        "basis": "operating_income",
+        "profit_latest": 289191000.0,
+        "profit_oldest": 566330000.0,
+        "profit_cagr_pct": -20.1
+      },
+      "balance_sheet_safety": {
+        "score": 65.8,
+        "gate": "pass",
+        "net_debt_to_ebitda": 2.49,
+        "interest_coverage": 4.1,
+        "current_ratio": 2.03,
+        "cash_runway_years": null,
+        "negative_equity": false
+      },
+      "capital_discipline": {
+        "score": 83.4,
+        "gate": null,
+        "share_count_cagr_pct": -2.8
+      }
+    },
+    "method": "standard"
+  },
+  {
+    "ticker": "INV",
+    "name": "Innventure, Inc.",
+    "sector": "Financial Services",
+    "grade": "F",
+    "composite": 19.2,
+    "lean": "BAIL \u2014 fragile underlying; treat as premium-only, avoid assignment.",
+    "gates_failed": [
+      "cash_quality",
+      "balance_sheet_safety"
+    ],
+    "gates_warned": [],
+    "confidence": "high",
+    "themes": {
+      "returns_on_capital": {
+        "score": 13.8,
+        "gate": null,
+        "roic_latest_pct": -17.0,
+        "roic_avg_pct": -8.7,
+        "invested_capital": 548762000.0
+      },
+      "moat": {
+        "score": 8.0,
+        "gate": null,
+        "op_margin_pct": -5746.2,
+        "gross_margin_pct": -815.9,
+        "op_margin_stdev": 1821.0
+      },
+      "cash_quality": {
+        "score": 5.0,
+        "gate": "fail",
+        "fcf_latest": -82100000.0,
+        "fcf_conversion": null,
+        "negative_fcf_years": 3,
+        "fcf_years_available": 3
+      },
+      "growth": {
+        "score": 12.0,
+        "gate": null,
+        "basis": "operating_income",
+        "profit_latest": -118142000.0,
+        "profit_oldest": -24669000.0,
+        "note": "losses deepening"
+      },
+      "balance_sheet_safety": {
+        "score": 49.1,
+        "gate": "fail",
+        "net_debt_to_ebitda": null,
+        "interest_coverage": -12.2,
+        "current_ratio": 1.09,
+        "cash_runway_years": 0.7,
+        "negative_equity": false
+      },
+      "capital_discipline": {
+        "score": 25.0,
+        "gate": null,
+        "share_count_cagr_pct": 9.2
+      }
+    },
+    "method": "standard"
+  },
+  {
+    "ticker": "CEG",
+    "name": "Constellation Energy Corporation",
+    "sector": "Utilities",
+    "grade": "D",
+    "composite": 50.0,
+    "lean": "LEAN BAIL \u2014 low quality; prefer to close before owning it.",
+    "gates_failed": [],
+    "gates_warned": [
+      "cash_quality"
+    ],
+    "confidence": "high",
+    "themes": {
+      "returns_on_capital": {
+        "score": 86.5,
+        "gate": null,
+        "roic_latest_pct": 16.7,
+        "roic_avg_pct": 11.0,
+        "invested_capital": 19868000000.0
+      },
+      "moat": {
+        "score": 69.4,
+        "gate": null,
+        "op_margin_pct": 16.4,
+        "gross_margin_pct": 18.4,
+        "op_margin_stdev": 8.4
+      },
+      "cash_quality": {
+        "score": 50.0,
+        "gate": "warn",
+        "fcf_latest": 1288000000.0,
+        "fcf_conversion": 0.56,
+        "negative_fcf_years": 3,
+        "fcf_years_available": 4
+      },
+      "growth": {
+        "score": 85.0,
+        "gate": null,
+        "basis": "operating_income",
+        "profit_latest": 4198000000.0,
+        "profit_oldest": -408000000.0,
+        "note": "turned profitable"
+      },
+      "balance_sheet_safety": {
+        "score": 82.4,
+        "gate": "pass",
+        "net_debt_to_ebitda": 0.9,
+        "interest_coverage": 8.2,
+        "current_ratio": 1.53,
+        "cash_runway_years": null,
+        "negative_equity": false
+      },
+      "capital_discipline": {
+        "score": 72.4,
+        "gate": null,
+        "share_count_cagr_pct": -1.3
+      }
+    },
+    "method": "standard"
+  },
+  {
+    "ticker": "TLN",
+    "name": "Talen Energy Corporation",
+    "sector": "Utilities",
+    "grade": "F",
+    "composite": 32.0,
+    "lean": "BAIL \u2014 fragile underlying; treat as premium-only, avoid assignment.",
+    "gates_failed": [
+      "balance_sheet_safety"
+    ],
+    "gates_warned": [
+      "cash_quality"
+    ],
+    "confidence": "high",
+    "themes": {
+      "returns_on_capital": {
+        "score": 10.0,
+        "gate": null,
+        "roic_latest_pct": 0.2,
+        "roic_avg_pct": -0.4,
+        "invested_capital": 7215000000.0
+      },
+      "moat": {
+        "score": 8.0,
+        "gate": null,
+        "op_margin_pct": 0.6,
+        "gross_margin_pct": 38.1,
+        "op_margin_stdev": 13.0
+      },
+      "cash_quality": {
+        "score": 60.0,
+        "gate": "warn",
+        "fcf_latest": 498000000.0,
+        "fcf_conversion": null,
+        "negative_fcf_years": 2,
+        "fcf_years_available": 4
+      },
+      "growth": {
+        "score": 85.0,
+        "gate": null,
+        "basis": "operating_income",
+        "profit_latest": 16000000.0,
+        "profit_oldest": -446000000.0,
+        "note": "turned profitable"
+      },
+      "balance_sheet_safety": {
+        "score": 27.4,
+        "gate": "fail",
+        "net_debt_to_ebitda": 11.96,
+        "interest_coverage": 0.1,
+        "current_ratio": 1.28,
+        "cash_runway_years": null,
+        "negative_equity": false
+      },
+      "capital_discipline": {
+        "score": 25.0,
+        "gate": null,
+        "share_count_cagr_pct": 3351.3
+      }
+    },
+    "method": "standard"
+  },
+  {
+    "ticker": "BE",
+    "name": "Bloom Energy Corporation",
+    "sector": "Industrials",
+    "grade": "F",
+    "composite": 32.0,
+    "lean": "BAIL \u2014 fragile underlying; treat as premium-only, avoid assignment.",
+    "gates_failed": [
+      "balance_sheet_safety"
+    ],
+    "gates_warned": [
+      "cash_quality"
+    ],
+    "confidence": "high",
+    "themes": {
+      "returns_on_capital": {
+        "score": 10.0,
+        "gate": null,
+        "roic_latest_pct": 4.4,
+        "roic_avg_pct": -5.7,
+        "invested_capital": 1306485000.0
+      },
+      "moat": {
+        "score": 10.5,
+        "gate": null,
+        "op_margin_pct": 3.6,
+        "gross_margin_pct": 29.0,
+        "op_margin_stdev": 10.9
+      },
+      "cash_quality": {
+        "score": 60.0,
+        "gate": "warn",
+        "fcf_latest": 57190000.0,
+        "fcf_conversion": null,
+        "negative_fcf_years": 2,
+        "fcf_years_available": 4
+      },
+      "growth": {
+        "score": 85.0,
+        "gate": null,
+        "basis": "operating_income",
+        "profit_latest": 72802000.0,
+        "profit_oldest": -260992000.0,
+        "note": "turned profitable"
+      },
+      "balance_sheet_safety": {
+        "score": 38.3,
+        "gate": "fail",
+        "net_debt_to_ebitda": 26.83,
+        "interest_coverage": 1.4,
+        "current_ratio": 5.98,
+        "cash_runway_years": null,
+        "negative_equity": false
+      },
+      "capital_discipline": {
+        "score": 25.0,
+        "gate": null,
+        "share_count_cagr_pct": 9.8
+      }
+    },
+    "method": "standard"
+  },
+  {
+    "ticker": "FLNC",
+    "name": "Fluence Energy, Inc.",
+    "sector": "Industrials",
+    "grade": "F",
+    "composite": 25.8,
+    "lean": "BAIL \u2014 fragile underlying; treat as premium-only, avoid assignment.",
+    "gates_failed": [
+      "cash_quality"
+    ],
+    "gates_warned": [],
+    "confidence": "high",
+    "themes": {
+      "returns_on_capital": {
+        "score": 10.0,
+        "gate": null,
+        "roic_latest_pct": -28.2,
+        "roic_avg_pct": -63.4,
+        "invested_capital": 129631000.0
+      },
+      "moat": {
+        "score": 13.3,
+        "gate": null,
+        "op_margin_pct": -2.0,
+        "gross_margin_pct": 13.1,
+        "op_margin_stdev": 9.6
+      },
+      "cash_quality": {
+        "score": 5.0,
+        "gate": "fail",
+        "fcf_latest": -175337000.0,
+        "fcf_conversion": null,
+        "negative_fcf_years": 3,
+        "fcf_years_available": 4
+      },
+      "growth": {
+        "score": 30.0,
+        "gate": null,
+        "basis": "operating_income",
+        "profit_latest": -46337000.0,
+        "profit_oldest": -283521000.0,
+        "note": "losses narrowing"
+      },
+      "balance_sheet_safety": {
+        "score": 73.8,
+        "gate": "pass",
+        "net_debt_to_ebitda": null,
+        "interest_coverage": null,
+        "current_ratio": 1.51,
+        "cash_runway_years": 3.9,
+        "negative_equity": false
+      },
+      "capital_discipline": {
+        "score": 25.0,
+        "gate": null,
+        "share_count_cagr_pct": 29.0
+      }
+    },
+    "method": "standard"
+  },
+  {
+    "ticker": "OKLO",
+    "name": "Oklo Inc.",
+    "sector": "Utilities",
+    "grade": "F",
+    "composite": 27.7,
+    "lean": "BAIL \u2014 fragile underlying; treat as premium-only, avoid assignment.",
+    "gates_failed": [
+      "cash_quality"
+    ],
+    "gates_warned": [],
+    "confidence": "medium",
+    "themes": {
+      "returns_on_capital": {
+        "score": 10.0,
+        "gate": null,
+        "roic_latest_pct": -16.0,
+        "roic_avg_pct": -6.3,
+        "invested_capital": 689215000.0
+      },
+      "moat": {
+        "score": null,
+        "gate": null,
+        "op_margin_pct": null,
+        "gross_margin_pct": null
+      },
+      "cash_quality": {
+        "score": 5.0,
+        "gate": "fail",
+        "fcf_latest": -115379000.0,
+        "fcf_conversion": null,
+        "negative_fcf_years": 4,
+        "fcf_years_available": 4
+      },
+      "growth": {
+        "score": 12.0,
+        "gate": null,
+        "basis": "operating_income",
+        "profit_latest": -139294000.0,
+        "profit_oldest": -10024811.0,
+        "note": "losses deepening"
+      },
+      "balance_sheet_safety": {
+        "score": 81.7,
+        "gate": "pass",
+        "net_debt_to_ebitda": null,
+        "interest_coverage": null,
+        "current_ratio": 49.08,
+        "cash_runway_years": 6.8,
+        "negative_equity": false
+      },
+      "capital_discipline": {
+        "score": 25.0,
+        "gate": null,
+        "share_count_cagr_pct": 36.0
+      }
+    },
+    "method": "standard"
+  }
+]

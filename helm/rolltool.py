@@ -6,7 +6,7 @@ option -- a cash-secured put, a covered call or a PMCC's short -- and shows:
   * up to three ROLLS: buy the current short back at its ASK, sell a new one at
     its BID (never the mid: a roll that is a credit at the mid can be a debit at
     the bid/ask -- GOOGL, 2026-10-30). Only a NET CREDIT after both legs' fees.
-      - new short 30-45 days, spread < 10% of mid, a live IBKR two-sided quote,
+      - new short 30-60 days, spread < 10% of mid, a live IBKR two-sided quote,
         delta up to 0.50 (Russ 2026-11-01: a tested short rarely rolls back into
         its band for a credit) -- outside the strategy's band is FLAGGED;
       - put: same or LOWER strike; the 10-day earnings veto and fail-closed rule
@@ -34,7 +34,7 @@ from datetime import date, datetime, timedelta
 
 from helm import puttool as P
 
-RULE_VERSION = ("rolls-v1 (s146: net credit at the bid/ask after fees; 30-45 days; new delta <= 0.50, "
+RULE_VERSION = ("rolls-v2 (s146: net credit at the bid/ask after fees; 30-60 days (s149); new delta <= 0.50, "
                 "flagged outside the band; each strategy's strike, earnings and width rules)")
 NEW_DELTA_MAX = 0.50
 NET_DELTA = (0.05, 0.60)              # the net cast before the rules, so reasons are true
@@ -82,7 +82,7 @@ def roll_reason(c, pos, cur_ask, ctx):
     if not c.get("bid") or not c.get("ask") or c["bid"] <= 0 or c["ask"] <= 0:
         return "no two-sided market"
     if dte is None or not (P.DTE_MIN <= dte <= P.DTE_MAX):
-        return "outside 30-45 days"
+        return P.DTE_REASON
     if kind == "put" and c["strike"] > k0 + 1e-9:
         return "strike above the current %g" % k0
     if kind != "put" and c["strike"] < k0 - 1e-9:
@@ -113,7 +113,7 @@ def net_credit(new_bid, cur_ask, n, fee):
 
 ORDER = ("no net credit after fees", "fails the width test (counting the buy-back)", "strike below the effective basis",
          "earnings inside the trade", "expires on or after the long", "delta above 0.50",
-         "spread 10% of mid or wider", "outside 30-45 days", "no two-sided market", "no live IBKR quote")
+         "spread 10% of mid or wider", P.DTE_REASON, "no two-sided market", "no live IBKR quote")
 
 
 def choose(rows, pos, cur_ask, ctx, n=CHOICES):
@@ -126,7 +126,7 @@ def choose(rows, pos, cur_ask, ctx, n=CHOICES):
     if ok:
         return ok[:n], None, why
     if not rows:
-        return [], "IBKR returned no two-sided quotes 30-45 days out", why
+        return [], "IBKR returned no two-sided quotes %d-%d days out" % (P.DTE_MIN, P.DTE_MAX), why
     seen = {w for w in why.values() if w}
     side = [w for w in seen if w.startswith("strike above the current") or w.startswith("strike below the current")]
     lead = [w for w in ORDER if w in seen]
@@ -229,7 +229,7 @@ def positions(conn, ticker, account_id=None):
 
 
 def fetch_roll(ticker, opt_type, strike, expiry, long_pin=None, today=None):
-    """IBKR quotes: the current short (pinned, any delta) and every contract 30-45
+    """IBKR quotes: the current short (pinned, any delta) and every contract 30-60
     days out in the wide net; for a PMCC also its long (pinned). Spot and the listed
     expiries come from Yahoo, as in the put and call tools.
     -> {rows, cur, long_q, spot, exdiv, err}"""
@@ -267,16 +267,24 @@ def fetch_roll(ticker, opt_type, strike, expiry, long_pin=None, today=None):
     from helm import strikewindow as SW   # s148: strikes from the stock's IV, not 3 x ATR
     lo, hi = SW.delta_range(spot, SW.latest_iv(ticker, today), [d for _, d in targets], opt_type, SW.ROLL_NET)
     rng = (min(lo, float(strike)), max(hi, float(strike)))   # the current contract always in range
-    rows = oc.fetch_chain_from_ibkr(ticker, opt_type, targets, spot, atr, NET_DELTA[0], NET_DELTA[1],
-                                    BANDS["pmcc"], spread_threshold=P.NET_SPREAD, pin=(float(strike), exp),
-                                    strike_range=rng)
+    try:                                            # s149: a gateway failure says so
+        rows = oc.fetch_chain_from_ibkr(ticker, opt_type, targets, spot, atr, NET_DELTA[0], NET_DELTA[1],
+                                        BANDS["pmcc"], spread_threshold=P.NET_SPREAD, pin=(float(strike), exp),
+                                        strike_range=rng, report_errors=True)
+    except oc.ChainReadError as e:
+        return {"rows": [], "cur": None, "long_q": None, "spot": spot, "exdiv": exdiv, "err": str(e)}
     cur = next((r for r in rows if r["expiration"] == exp and abs(r["strike"] - float(strike)) < 1e-6), None)
     new = [r for r in rows if r["expiration"] in {e for e, _ in exps_in}]
     long_q = None
     if long_pin:
         lk, le = float(long_pin[0]), str(long_pin[1])[:10]
-        lr = oc.fetch_chain_from_ibkr(ticker, "CALL", [(le, (P._d(le) - today).days)], spot, atr, 0.0, 1.0,
-                                      BANDS["pmcc"], spread_threshold=P.NET_SPREAD, pin=(lk, le))
+        try:
+            lr = oc.fetch_chain_from_ibkr(ticker, "CALL", [(le, (P._d(le) - today).days)], spot, atr, 0.0, 1.0,
+                                          BANDS["pmcc"], spread_threshold=P.NET_SPREAD, pin=(lk, le),
+                                          report_errors=True)
+        except oc.ChainReadError as e:
+            return {"rows": new, "cur": cur, "long_q": None, "spot": spot, "exdiv": exdiv,
+                    "err": "the PMCC long not read: %s" % e}
         long_q = next((r for r in lr if abs(r["strike"] - lk) < 1e-6), None)
     return {"rows": new, "cur": cur, "long_q": long_q, "spot": spot, "exdiv": exdiv,
             "err": None if exps_in else why}
@@ -464,7 +472,9 @@ def _selftest():
     ok(roll_reason(q(250, 14.0, 14.4, 0.55), put, cur_ask, ctx) == "strike above the current 245", "a put rolls down, never up")
     ok(roll_reason(q(245, 11.0, 11.4, 0.51), put, cur_ask, ctx) == "delta above 0.50", "delta 0.51 fails")
     ok(roll_reason(q(245, 11.0, 11.4, 0.50), put, cur_ask, ctx) is None, "delta 0.50 passes")
-    ok(roll_reason(q(245, 11.0, 11.4, 0.48, dte=29), put, cur_ask, ctx) == "outside 30-45 days", "29 days fails")
+    ok(roll_reason(q(245, 11.0, 11.4, 0.48, dte=29), put, cur_ask, ctx) == "outside 30-60 days", "29 days fails")
+    ok(roll_reason(q(245, 11.0, 11.4, 0.48, dte=61), put, cur_ask, ctx) == "outside 30-60 days", "61 days fails (s149)")
+    ok(roll_reason(q(245, 11.0, 11.4, 0.48, dte=60), put, cur_ask, ctx) is None, "60 days passes (s149)")
     # GOOGL 10-30: all intrinsic, no credit
     g = {"kind": "put", "ticker": "GOOGL", "strike": 335.0, "contracts": 1, "credit": 8.38, "dte": 21}
     _, why, _ = choose([q(335, 54.2, 55.6, 0.97), q(330, 49.0, 50.5, 0.96)], g, 54.60, ctx)

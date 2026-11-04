@@ -10,7 +10,7 @@
     helm puts --selftest      the rules' self-test (no network, no database)
 
 Offered: names graded A-C or approved funds, IV rank >= 50, no report within 10
-days (a stock with no reliable date is left off), 0.25-0.30 delta, 30-45 days,
+days (a stock with no reliable date is left off), 0.25-0.30 delta, 30-60 days,
 spread under 10% of mid. One contract per name -- the highest annualized return on
 collateral -- ranked. Each line is sized by the sleeve and its limits; HELM never
 places anything. The rules are helm/puttool.py.
@@ -80,7 +80,7 @@ def _show(run, show_all=False, why=False):
     rej = run.get("rejects") or {}
     if rej:
         def bucket(r):
-            for k in ("grade", "IV rank", "no entry within", "reliable", "spread", "delta band", "no expiry",
+            for k in ("IB Gateway", "grade", "IV rank", "no entry within", "reliable", "spread", "delta band", "no expiry",
                       "chain", "IBKR returned", "no contract"):
                 if k in r:
                     return k
@@ -89,8 +89,8 @@ def _show(run, show_all=False, why=False):
         lab = {"grade": "grade below C or none", "IV rank": "IV rank under 50 or missing",
                "no entry within": "earnings within 10 days", "reliable": "no reliable earnings date",
                "spread": "spread too wide", "delta band": "no put in the delta band",
-               "no expiry": "no expiry in 30-45 days", "IBKR returned": "no IBKR quotes",
-               "chain": "chain not read", "no contract": "no contract in the window", "other": "other"}
+               "no expiry": "no expiry in 30-60 days", "IBKR returned": "no IBKR quotes",
+               "IB Gateway": "not read: IB Gateway unreachable", "chain": "chain not read", "no contract": "no contract in the window", "other": "other"}
         console.print("[dim]Left off: " + " · ".join("%d %s" % (n, lab[k]) for k, n in cnt.most_common())
                       + ("" if why else "   (--why for each name)") + "[/dim]")
         if why:
@@ -129,11 +129,19 @@ def run():
         console.print("[dim]Reading the live put chains from IBKR (about 10-15 seconds a name)...[/dim]")
         r = P.build(conn, date.today(), tickers)
         note = ("partial run: " + ",".join(tickers)) if tickers else None
+        if r.get("stopped"):                     # s149: the gateway went away mid-run
+            note = ((note + "; ") if note else "") + (
+                "stopped: IB Gateway unreachable, %d names not read" % len(r["stopped"]))
         r["note"] = note
         if "--no-record" not in flags:
             P.record(conn, r, note)
         _show(r, "--all" in flags, "--why" in flags)
         if "--no-record" in flags:
             console.print("[dim]Not recorded (--no-record).[/dim]")
+        if r.get("stopped"):                     # s149
+            console.print("\n[bold yellow]Stopped early: IB Gateway could not be reached for %d names in a row, "
+                          "so %d names were not read.[/bold yellow] Check IB Gateway, then rerun just those:"
+                          % (P.GATEWAY_STOP_AFTER, len(r["stopped"])))
+            console.print("  cd ~/Projects/helm && helm puts %s --why" % ",".join(r["stopped"]), soft_wrap=True)
     finally:
         conn.close()

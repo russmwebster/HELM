@@ -10,7 +10,7 @@
     helm pmcc --selftest      the rules' self-test (no network, no database)
 
 Offered: names graded A-C or approved funds with no PMCC open. Long 270-730 days,
-0.75-0.85 delta; short 30-45 days, 0.20-0.30 delta; both spreads under 10% of mid;
+0.75-0.85 delta; short 30-60 days, 0.20-0.30 delta; both spreads under 10% of mid;
 the width test passes with the long at its ask. Per name, the pair with the highest
 rent cover (the short's monthly rent over the long's monthly loss of time value);
 ranked by rent cover, ties by yearly return on the long's cost. Trend, IV rank and
@@ -85,7 +85,7 @@ def _show(run, show_all=False, why=False):
     rej = run.get("rejects") or {}
     if rej:
         def bucket(r):
-            for k in ("grade", "already open", "same company", "width test", "short call", "long call",
+            for k in ("IB Gateway", "grade", "already open", "same company", "width test", "short call", "long call",
                       "no expiry", "chain not read"):
                 if k in r:
                     return k
@@ -93,7 +93,7 @@ def _show(run, show_all=False, why=False):
         lab = {"grade": "grade below C or none", "already open": "a PMCC already open",
                "same company": "same company ranks higher", "width test": "the width test",
                "short call": "no short call inside the rules", "long call": "no long call inside the rules",
-               "no expiry": "no expiry in the window", "chain not read": "chain not read", "other": "other"}
+               "no expiry": "no expiry in the window", "IB Gateway": "not read: IB Gateway unreachable", "chain not read": "chain not read", "other": "other"}
         cnt = Counter(bucket(r) for r in rej.values())
         console.print()
         console.print("[dim]Left off: " + " · ".join("%d %s" % (n, lab[k]) for k, n in cnt.most_common())
@@ -138,11 +138,19 @@ def run():
             console.print("[dim]  %-6s %4.0fs  %s[/dim]" % (t, secs, ("left off: " + why) if why else "pair found"))
         r = M.build(conn, date.today(), tickers, progress=prog)
         note = ("partial run: " + ",".join(tickers)) if tickers else None
+        if r.get("stopped"):                     # s149: the gateway went away mid-run
+            note = ((note + "; ") if note else "") + (
+                "stopped: IB Gateway unreachable, %d names not read" % len(r["stopped"]))
         r["note"] = note
         if "--no-record" not in flags:
             M.record(conn, r, note)
         _show(r, "--all" in flags, "--why" in flags)
         if "--no-record" in flags:
             console.print("[dim]Not recorded (--no-record).[/dim]")
+        if r.get("stopped"):                     # s149
+            console.print("\n[bold yellow]Stopped early: IB Gateway could not be reached for %d names in a row, "
+                          "so %d names were not read.[/bold yellow] Check IB Gateway, then rerun just those:"
+                          % (M.P.GATEWAY_STOP_AFTER, len(r["stopped"])))
+            console.print("  cd ~/Projects/helm && helm pmcc %s --why" % ",".join(r["stopped"]), soft_wrap=True)
     finally:
         conn.close()
