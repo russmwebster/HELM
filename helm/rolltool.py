@@ -440,6 +440,38 @@ def record(conn, run, note=None):
     conn.commit()
 
 
+def latest_for(conn, position_ids=None):
+    """s150: the newest recorded roll item for each position -- the board's reader, read-only.
+    {position_id: {run_id, run_at, market_open, ticker, kind, short_strike, short_expiry, contracts, credit,
+    cur_bid, cur_ask, spot, why_none, flags, alternatives, rolls: [chosen contracts, choice order]}}.
+    A position's newest item is the one from the latest run that read it (runs are per ticker). Never writes."""
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='roll_runs'").fetchone():
+        return {}
+    q = ("SELECT r.id, r.run_at, r.market_open, i.position_id, i.ticker, i.kind, i.short_strike, i.short_expiry, "
+         "i.contracts, i.credit, i.cur_bid, i.cur_ask, i.spot, i.why_none, i.flags_json, i.alternatives_json "
+         "FROM roll_items i JOIN roll_runs r ON r.id = i.run_id ORDER BY r.run_at, r.rowid")
+    keys = ("run_id", "run_at", "market_open", "position_id", "ticker", "kind", "short_strike", "short_expiry",
+            "contracts", "credit", "cur_bid", "cur_ask", "spot", "why_none", "flags", "alternatives")
+    out = {}
+    for row in conn.execute(q):
+        d = dict(zip(keys, tuple(row)))
+        if position_ids is not None and d["position_id"] not in position_ids:
+            continue
+        d["flags"] = json.loads(d["flags"] or "[]")
+        d["alternatives"] = json.loads(d["alternatives"] or "[]")
+        out[d["position_id"]] = d                      # later runs overwrite earlier ones
+    ck = ("expiry", "strike", "dte", "delta", "bid", "ask", "mid", "spread_pct", "net_credit", "fees", "choice",
+          "flags", "extra_json")
+    for pid, d in out.items():
+        d["rolls"] = []
+        for row in conn.execute("SELECT %s FROM roll_contracts WHERE run_id=? AND position_id=? AND choice IS NOT NULL "
+                                "ORDER BY choice" % ", ".join(ck), (d["run_id"], pid)):
+            c = dict(zip(ck, tuple(row)))
+            c.update(json.loads(c.pop("extra_json") or "{}"))
+            d["rolls"].append(c)
+    return out
+
+
 # ---------------------------------------------------------------- self-test
 def _selftest():
     import sqlite3
@@ -566,6 +598,21 @@ def _selftest():
     ok(conn.execute("SELECT COUNT(*) FROM roll_contracts").fetchone()[0] == 4
        and conn.execute("SELECT choice FROM roll_contracts WHERE strike=230").fetchone()[0] == 1,
        "a run records every contract, the chosen one numbered")
+    # s150: the board's reader
+    lf = latest_for(conn)
+    ok(list(lf) == ["N"] and [r["strike"] for r in lf["N"]["rolls"]] == [230] and lf["N"]["rolls"][0]["choice"] == 1
+       and lf["N"]["rolls"][0]["floor_strike_after"] == 228.5 and lf["N"]["run_id"] == run["id"],
+       "latest_for: the recorded item, its chosen roll and its extras: %s" % {k: v.get("rolls") for k, v in lf.items()})
+    ok([a["key"] for a in lf["N"]["alternatives"]] == ["buy_back", "close_all", "let_assigned"]
+       and "allowed for a PMCC" in lf["N"]["rolls"][0]["flags"], "latest_for: the alternatives and flags come back as recorded")
+    run2 = build(conn, T, ["NVDA"], fetch=lambda *a: dict(fk(*a), rows=[]))
+    run2["run_at"] = "2099-01-01 00:00:00"
+    record(conn, run2)
+    lf2 = latest_for(conn, {"N"})
+    ok(lf2["N"]["run_id"] == run2["id"] and lf2["N"]["rolls"] == [] and lf2["N"]["why_none"],
+       "latest_for: a newer run replaces the older one, its 'no roll' reason kept: %s" % lf2["N"]["why_none"])
+    ok(latest_for(conn, {"ZZZ"}) == {} and latest_for(sqlite3.connect(":memory:")) == {},
+       "latest_for: an unknown position or no roll tables -> nothing")
     print("\n%d failed" % len(fails) if fails else "\nall passed")
     return not fails
 

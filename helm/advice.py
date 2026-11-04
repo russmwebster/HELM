@@ -202,6 +202,14 @@ def _rec(p, verb, headline, reason, numbers=None, act=None, lean=None, marks=Non
             "act": act, "lean": lean, "marks": marks or [], "as_of": as_of}
 
 
+def _stale_headline(conn, p, what):
+    """s150 (Russ, 2026-11-03): a position no snapshot has read yet (no `checks` row at all -- e.g. booked by
+    the import after the day's last snapshot) says so; an old or bad reading keeps "no advice from an old reading"."""
+    never = conn.execute("SELECT 1 FROM checks WHERE position_id=? LIMIT 1", (p["id"],)).fetchone() is None
+    return "%s -- %s" % (what, "not read yet -- first reading at the next snapshot" if never
+                         else "no advice from an old reading")
+
+
 def _stale(rd, today):
     if rd is None:
         return "no stored reading"
@@ -231,7 +239,7 @@ def _single_short(conn, p, legs, today):
     exp_s = str(l["expiration"])[:10]
     what = "%s %s %g %s x%d" % (p["ticker"], "call" if is_cc else "put", k, exp_s[5:], n)
     if why:
-        return _rec(p, "STALE", "%s -- no advice from an old reading" % what, why)
+        return _rec(p, "STALE", _stale_headline(conn, p, what), why)
     mark, spot, delta = rd["current_price"], sp["spot_price"], rd.get("delta")
     kept = (credit - mark) / credit if credit else None
     pnl = (credit - mark) * 100 * n
@@ -316,7 +324,7 @@ def _diag_family(conn, p, legs_all, today):
                                   str(L["expiration"])[:10][5:])
     what += (", short %g %s)" % (shorts[0]["strike"], str(shorts[0]["expiration"])[:10][5:])) if shorts else ", no short)"
     if why:
-        return _rec(p, "STALE", "%s -- no advice from an old reading" % what, why)
+        return _rec(p, "STALE", _stale_headline(conn, p, what), why)
     spot = sp["spot_price"]
     # whole-trade P&L: closed legs at their close, open legs at their mark
     pnl, rent = 0.0, 0.0
@@ -1053,6 +1061,9 @@ def _selftest():
     csp('TD', 100, '2026-11-20', 2.00, 3.50, 98, -0.62)            # grade D (latest) -> no default
     csp('ER', 100, '2026-11-20', 2.00, 1.60, 109, -0.22)           # earnings in 4 days inside trade -> heads-up
     csp('OLD', 100, '2026-11-20', 2.00, 1.60, 109, -0.22, when='2026-10-12T15:15')  # stale
+    c.execute("INSERT INTO positions VALUES ('NEW','a','CSP','NEW','OPEN','REAL',NULL)")   # s150: booked after the last snapshot
+    c.execute("INSERT INTO legs VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+              ('NEWL', 'NEW', 'SHORT_PUT', 'PUT', 'SHORT', 100, '2026-11-20', 1, 100, 2.00, None, None, 'OPEN', '', ''))
     csp('BIG', 400, '2026-11-20', 8.00, 6.00, 440, -0.20)          # 2 x 400 = $80,000 > $60,000 name limit
     # covered call with earnings inside the trade -> a rule flag
     c.execute("INSERT INTO positions VALUES ('CC','a','COVERED_CALL','CC','OPEN','REAL',NULL)")
@@ -1125,6 +1136,9 @@ def _selftest():
     ok("CC covered call has earnings inside the trade" in FH, "covered call with earnings inside -> flag")
     ok(all(f["needs_you"] and f["reason"] and f["act"] for f in F), "every flag carries its reason and choices")
     ok(v("OLD") == "STALE" and "12 days old" in R["OLD"]["reason"], "stale reading not advised from: %s" % R["OLD"]["reason"])
+    ok(R["OLD"]["headline"].endswith("-- no advice from an old reading"), "an old reading keeps its headline: %s" % R["OLD"]["headline"])
+    ok(v("NEW") == "STALE" and R["NEW"]["headline"] == "NEW put 100 11-20 x1 -- not read yet -- first reading at the next snapshot"
+       and R["NEW"]["reason"] == "no stored reading", "s150: a never-read position says so: %s / %s" % (R["NEW"]["headline"], R["NEW"]["reason"]))
     ok(v("DG") == "DECIDE" and R["DG"]["lean"] is None and "$18.00 through" in R["DG"]["reason"]
        and "200 shares called away at 235" in R["DG"]["act"], "ITM short expiring this week: decide, no lean")
     ok(v("LL") == "LOSS_LIMIT" and R["LL"]["numbers"]["loss_limit"] == -1525.0, "loss limit at half the long's cost")
