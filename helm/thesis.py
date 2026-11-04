@@ -1993,6 +1993,220 @@ def diag_annualized(result, base, days, priced=None):
             "pct": round(pct, 1), "ann_pct": round(pct * 365.0 / days, 0), "priced": priced}
 
 
+# ── the PMCC at a glance (s151, Russ 2026-11-04) ─────────────────────────────
+# One picture answering the four questions of a PMCC on any day: where the stock
+# sits against the strikes, the money against the loss limit, the short's premium
+# kept against the 50% buy-back, and the short's calendar (today, the 21-day date,
+# earnings, expiry). Display only: every number is one diag_view already reads --
+# no rule, flag or advice reads this. The ruler is shared with Today's PMCC rows.
+_G_INK, _G_MUTED = "var(--viz-ink,#e6edf3)", "var(--viz-muted,#8b959d)"
+_G_GOOD, _G_WARN, _G_BAD = "var(--viz-good,#3fb950)", "var(--viz-warn,#d29922)", "var(--viz-bad,#f85149)"
+_G_DOT, _G_LONG = "var(--accent,#58a6ff)", "#a371f7"
+
+
+def pmcc_ruler(spot, long_k, short_k=None, floor_k=None):
+    """Where the stock sits against a PMCC's strikes, as plain numbers. Pure.
+    short_k: the open short's strike (None with no short open); floor_k: the strike the
+    NEXT short must exceed (fillopens.width_floor + the long's strike)."""
+    sp, lk = _f(spot), _f(long_k)
+    if not sp or lk is None:
+        return None
+    sk, fk = _f(short_k), _f(floor_k)
+    out = {"spot": sp, "long_k": lk, "short_k": sk, "floor_k": fk, "cushion_pct": None, "tested": False}
+    if sk is not None:
+        c = (sk - sp) / sp * 100.0
+        out["cushion_pct"] = round(c, 1)
+        out["tested"] = c < 0
+        out["text"] = ("%.1f%% cushion to the short" % c) if c >= 0 else ("%.1f%% through the short's strike" % -c)
+    elif fk is not None:
+        out["text"] = "no short open · the next short's strike must be above $%.2f" % fk
+    else:
+        out["text"] = "no short open"
+    return out
+
+
+def _ruler_els(r, x0, x1, y, compact=False):
+    """SVG elements for the ruler strip at height y (the bar's centre line)."""
+    vals = [r["spot"], r["long_k"]] + [v for v in (r["short_k"], r["floor_k"]) if v is not None]
+    lo, hi = min(vals), max(vals)
+    pad = (hi - lo) * (0.06 if compact else 0.05) or max(1.0, hi * 0.02)
+    lo, hi = lo - pad, hi + pad
+    X = lambda v: x0 + (x1 - x0) * (v - lo) / (hi - lo)
+    fs = 10.5 if compact else 11.5
+    e = []
+    top = r["short_k"]
+    if top is not None:
+        e.append('<rect x="%.1f" y="%.1f" width="%.1f" height="12" fill="%s" fill-opacity=".16"/>'
+                 % (X(r["long_k"]), y - 6, max(0.0, X(top) - X(r["long_k"])), _G_GOOD))
+        e.append('<rect x="%.1f" y="%.1f" width="%.1f" height="12" fill="%s" fill-opacity=".22"/>'
+                 % (X(top), y - 6, max(0.0, x1 - X(top)), _G_WARN))
+    e.append('<line x1="%d" x2="%d" y1="%.1f" y2="%.1f" stroke="%s" stroke-width="1"/>' % (x0, x1, y, y, _G_MUTED))
+    e.append('<line x1="%.1f" x2="%.1f" y1="%.1f" y2="%.1f" stroke="%s" stroke-width="2.4"/>'
+             % (X(r["long_k"]), X(r["long_k"]), y - 11, y + 11, _G_LONG))
+    e.append('<text x="%.1f" y="%.1f" text-anchor="middle" font-size="%s" fill="%s">long %g</text>'
+             % (X(r["long_k"]), y + 24, fs, _G_MUTED, r["long_k"]))
+    if r["floor_k"] is not None:
+        e.append('<line x1="%.1f" x2="%.1f" y1="%.1f" y2="%.1f" stroke="%s" stroke-width="1.2" stroke-dasharray="3 2"/>'
+                 % (X(r["floor_k"]), X(r["floor_k"]), y - 9, y + 9, _G_MUTED))
+        if not compact:
+            e.append('<text x="%.1f" y="%.1f" text-anchor="%s" font-size="%s" fill="%s">next short above %s</text>'
+                     % (X(r["floor_k"]), y + 40, "end" if r["short_k"] is not None else "middle", fs, _G_MUTED,
+                        "$%.2f" % r["floor_k"]))
+    if r["short_k"] is not None:
+        e.append('<line x1="%.1f" x2="%.1f" y1="%.1f" y2="%.1f" stroke="%s" stroke-width="2.4"/>'
+                 % (X(r["short_k"]), X(r["short_k"]), y - 11, y + 11, _G_WARN))
+        e.append('<text x="%.1f" y="%.1f" text-anchor="middle" font-size="%s" fill="%s">short %g</text>'
+                 % (X(r["short_k"]), y + 24, fs, _G_MUTED, r["short_k"]))
+    xs = X(r["spot"])
+    e.append('<circle cx="%.1f" cy="%.1f" r="%s" fill="%s"/>' % (xs, y, 5 if compact else 7, _G_DOT))
+    e.append('<text x="%.1f" y="%.1f" text-anchor="middle" font-size="%s" font-weight="700" fill="%s">$%.2f</text>'
+             % (xs, y - 13, fs + (0 if compact else 1), _G_INK, r["spot"]))
+    return e, X
+
+
+def pmcc_ruler_svg(spot, long_k, short_k=None, floor_k=None, asof=None):
+    """Today's one-line ruler for a PMCC row (s151). None when the stock has no reading."""
+    r = pmcc_ruler(spot, long_k, short_k, floor_k)
+    if not r:
+        return None
+    e, _ = _ruler_els(r, 12, 330, 20, compact=True)
+    col = _G_BAD if r["tested"] else (_G_WARN if (r["cushion_pct"] is not None and r["cushion_pct"] < 5) else _G_MUTED)
+    e.append('<text x="346" y="24" font-size="12" fill="%s">%s%s</text>'
+             % (col, r["text"], (" · %s" % str(asof)[11:16]) if asof else ""))
+    return ('<svg viewBox="0 0 640 52" role="img" aria-label="%s" style="display:block;width:100%%;max-width:640px;'
+            'height:auto">%s</svg>' % (r["text"], "".join(e)))
+
+
+def pmcc_glance(spot, long_k, short=None, short_mark=None, floor_k=None, whole=None, limit=None,
+                today=None, earnings=None, rent_decay=None, half=None, day21=21):
+    """The four strips' numbers, plain data (s151). short: the open short leg (strike, open_price,
+    open_date, expiration) or None. half: the resting 50% buy-back price. Pure."""
+    g = {"ruler": pmcc_ruler(spot, long_k, short["strike"] if short else None, floor_k),
+         "whole": _f(whole), "limit": _f(limit), "short": None, "rent": rent_decay}
+    if short is not None:
+        op, sm = _f(short.get("open_price")), _f(short_mark)
+        kept = ((op - sm) / op * 100.0) if (op and sm is not None) else None
+        g["short"] = {"open": op, "mark": sm, "kept": None if kept is None else round(kept, 1), "half": half,
+                      "start": str(short.get("open_date") or "")[:10], "end": str(short.get("expiration") or "")[:10],
+                      "today": str(today or "")[:10], "earnings": str(earnings or "")[:10] or None}
+        try:
+            g["short"]["day21"] = (date.fromisoformat(g["short"]["end"]) - timedelta(days=day21)).isoformat()
+        except ValueError:
+            g["short"]["day21"] = None
+    return g
+
+
+def _anchor(x, x0, x1, room=70):
+    """text-anchor that keeps a label inside the picture near either edge"""
+    return "start" if x < x0 + room else ("end" if x > x1 - room else "middle")
+
+
+def pmcc_glance_svg(g, width=760):
+    """The PMCC at a glance as one inline SVG (s151). None when the stock has no reading."""
+    if not g or not g.get("ruler"):
+        return None
+    W = width
+    x0, x1 = 20, W - 20
+    e = []
+    lab = lambda y, s: e.append('<text x="%d" y="%d" font-size="12.5" fill="%s">%s</text>' % (x0, y, _G_MUTED, s))
+    # 1 -- the stock against the strikes
+    lab(16, "Where the stock is")
+    r = g["ruler"]
+    els, _ = _ruler_els(r, x0 + 10, x1 - 10, 52)
+    e += els
+    col = _G_BAD if r["tested"] else (_G_WARN if (r["cushion_pct"] is not None and r["cushion_pct"] < 5) else _G_GOOD)
+    e.append('<text x="%d" y="%d" font-size="12.5" font-weight="600" fill="%s">%s</text>' % (x0, 112, col, r["text"]))
+    # 2 -- the money against the loss limit
+    y = 148
+    lab(y, "Money against the loss limit")
+    wh, lim = g.get("whole"), g.get("limit")
+    if wh is not None and lim:
+        lo, hi = -lim, max(lim * 0.4, wh * 1.25 if wh > 0 else 0.0, 200.0)
+        X = lambda v: x0 + (x1 - x0) * (min(max(v, lo), hi) - lo) / (hi - lo)
+        yb = y + 24
+        e.append('<rect x="%.1f" y="%d" width="%.1f" height="12" fill="%s" fill-opacity=".14"/>' % (X(lo), yb - 6, X(0) - X(lo), _G_BAD))
+        e.append('<rect x="%.1f" y="%d" width="%.1f" height="12" fill="%s" fill-opacity=".14"/>' % (X(0), yb - 6, X(hi) - X(0), _G_GOOD))
+        e.append('<line x1="%.1f" x2="%.1f" y1="%d" y2="%d" stroke="%s" stroke-width="1.2"/>' % (X(0), X(0), yb - 11, yb + 11, _G_MUTED))
+        e.append('<line x1="%.1f" x2="%.1f" y1="%d" y2="%d" stroke="%s" stroke-width="2.4"/>' % (X(lo), X(lo), yb - 11, yb + 11, _G_BAD))
+        e.append('<circle cx="%.1f" cy="%d" r="7" fill="%s"/>' % (X(wh), yb, _G_DOT))
+        e.append('<text x="%.1f" y="%d" font-size="11.5" fill="%s">loss limit %s</text>' % (X(lo), yb + 26, _G_MUTED, _d(-lim)))
+        e.append('<text x="%.1f" y="%d" text-anchor="middle" font-size="11.5" fill="%s">even</text>' % (X(0), yb + 26, _G_MUTED))
+        past = wh <= lo
+        e.append('<text x="%.1f" y="%d" text-anchor="%s" font-size="12.5" font-weight="700" fill="%s">%s%s</text>'
+                 % (X(wh), yb - 13, "start" if X(wh) < x0 + 60 else ("end" if X(wh) > x1 - 60 else "middle"),
+                    _G_BAD if (past or wh < 0) else _G_INK, _d(wh), " · past the loss limit" if past else ""))
+    else:
+        e.append('<text x="%d" y="%d" font-size="12" fill="%s">not read</text>' % (x0, y + 24, _G_MUTED))
+    s = g.get("short")
+    # 3 -- the short's premium kept
+    y = 228
+    if s is None:
+        lab(y, "The short")
+        e.append('<text x="%d" y="%d" font-size="12.5" fill="%s">No short open — the next short\'s strike must be above %s (the width test)</text>'
+                 % (x0, y + 24, _G_WARN, ("$%.2f" % r["floor_k"]) if r["floor_k"] is not None else "the floor"))
+        y_end = y + 50
+    else:
+        lab(y, "Short premium kept")
+        yb = y + 22
+        X = lambda v: x0 + (x1 - x0) * max(0.0, min(100.0, v)) / 100.0
+        e.append('<rect x="%d" y="%d" width="%d" height="12" rx="4" fill="%s" fill-opacity=".25"/>' % (x0, yb - 6, x1 - x0, _G_MUTED))
+        if s["kept"] is not None and s["kept"] > 0:
+            e.append('<rect x="%d" y="%d" width="%.1f" height="12" rx="4" fill="%s"/>' % (x0, yb - 6, X(s["kept"]) - x0, _G_GOOD))
+        e.append('<line x1="%.1f" x2="%.1f" y1="%d" y2="%d" stroke="%s" stroke-width="2.4"/>' % (X(50), X(50), yb - 11, yb + 11, _G_GOOD))
+        if s["kept"] is None:
+            t = "the short has no mark"
+        elif s["kept"] >= 0:
+            t = "%.0f%% kept · short $%.2f of $%.2f" % (s["kept"], s["mark"], s["open"])
+        else:
+            t = "the short is at $%.2f — above the $%.2f you sold it for" % (s["mark"], s["open"])
+        e.append('<text x="%d" y="%d" font-size="12" fill="%s">%s</text>' % (x0, yb + 26, _G_INK if (s["kept"] or 0) >= 0 else _G_WARN, t))
+        if s["half"] is not None:
+            e.append('<text x="%.1f" y="%d" text-anchor="middle" font-size="11.5" fill="%s">50%% · buy back $%.2f</text>'
+                     % (X(50), yb - 14, _G_MUTED, s["half"]))
+        # 4 -- the short's calendar
+        y = 312
+        lab(y, "The short's calendar")
+        yb = y + 32
+        try:
+            d0, d1 = date.fromisoformat(s["start"]), date.fromisoformat(s["end"])
+            span = max(1, (d1 - d0).days)
+            XD = lambda iso: x0 + (x1 - x0) * max(0, min(span, (date.fromisoformat(iso) - d0).days)) / span
+            e.append('<line x1="%d" x2="%d" y1="%d" y2="%d" stroke="%s" stroke-width="1"/>' % (x0, x1, yb, yb, _G_MUTED))
+            if s["today"]:
+                xt = XD(s["today"])
+                e.append('<rect x="%d" y="%d" width="%.1f" height="10" fill="%s" fill-opacity=".35"/>' % (x0, yb - 5, xt - x0, _G_DOT))
+            if s["day21"]:
+                x21 = XD(s["day21"])
+                gone = bool(s["today"]) and s["today"] >= s["day21"]
+                e.append('<line x1="%.1f" x2="%.1f" y1="%d" y2="%d" stroke="%s" stroke-width="2.4"/>' % (x21, x21, yb - 11, yb + 11, _G_WARN))
+                e.append('<text x="%.1f" y="%d" text-anchor="middle" font-size="11.5" fill="%s">%s · 21 days%s</text>'
+                         % (x21, yb + 24, _G_WARN if gone else _G_MUTED, _md(s["day21"]), " — reached" if gone else ""))
+            en = s.get("earnings")
+            if en and s["start"] <= en <= s["end"]:
+                xe = XD(en)
+                e.append('<line x1="%.1f" x2="%.1f" y1="%d" y2="%d" stroke="%s" stroke-width="2" stroke-dasharray="3 2"/>' % (xe, xe, yb - 11, yb + 11, _G_BAD))
+                e.append('<text x="%.1f" y="%d" text-anchor="%s" font-size="11.5" fill="%s">%s earnings</text>'
+                         % (xe, yb - 15, _anchor(xe, x0, x1), _G_BAD, _md(en)))
+            e.append('<line x1="%d" x2="%d" y1="%d" y2="%d" stroke="%s" stroke-width="2.4"/>' % (x1, x1, yb - 11, yb + 11, _G_MUTED))
+            e.append('<text x="%d" y="%d" text-anchor="end" font-size="11.5" fill="%s">%s expiry</text>' % (x1, yb + 24, _G_MUTED, _md(s["end"])))
+            e.append('<text x="%d" y="%d" font-size="11.5" fill="%s">%s sold</text>' % (x0, yb + 24, _G_MUTED, _md(s["start"])))
+            if s["today"]:
+                e.append('<circle cx="%.1f" cy="%d" r="6" fill="%s"/>' % (xt, yb, _G_DOT))
+                e.append('<text x="%.1f" y="%d" text-anchor="%s" font-size="11.5" fill="%s">today · %d days left</text>'
+                         % (xt, yb + 40, _anchor(xt, x0, x1), _G_INK, (d1 - date.fromisoformat(s["today"])).days))
+        except ValueError:
+            e.append('<text x="%d" y="%d" font-size="12" fill="%s">dates not read</text>' % (x0, yb, _G_MUTED))
+        y_end = yb + 62
+    rd = g.get("rent")
+    if rd and rd.get("text"):
+        e.append('<text x="%d" y="%d" font-size="12" fill="%s">Rent vs decay: %s</text>' % (x0, y_end, _G_MUTED, rd["text"]))
+        y_end += 10
+    return ('<svg viewBox="0 0 %d %d" role="img" aria-label="The PMCC at a glance: the stock against the strikes, '
+            'the money against the loss limit, the short\'s premium kept and its calendar" '
+            'style="display:block;width:100%%;max-width:%dpx;height:auto;overflow:visible">%s</svg>'
+            % (W, y_end + 6, W, "".join(e)))
+
+
 def diag_view(pos, legs, rows, flags, quotes=None, entry_spot=None, earnings_next=None,
               today=None, panels=None, thetas=None, primary_theta=None, ivs=None):
     """Everything the four-question diagonal card shows, as plain data.
@@ -2313,6 +2527,23 @@ def diag_view(pos, legs, rows, flags, quotes=None, entry_spot=None, earnings_nex
                 chips.append({"text": "Earnings %s" % _md(en), "warn": True})
         chips.append({"text": "Long expires %s · %s days" % (_md(lg.get("expiration")), _dd(today, lg.get("expiration")))})
     v["dates"] = chips
+
+    # --- s151: the PMCC at a glance (display only; the numbers above) -------------
+    v["glance_svg"] = None
+    if is_pmcc and not closed:
+        try:
+            from helm import advice as _A2
+            from helm.fillopens import width_floor as _wf
+            _fl, _lk = _wf([dict(l, direction=str(l.get("direction") or "").upper(),
+                                 status=str(l.get("status") or "").upper()) for l in opt])
+            _half = (_A2._half_up(live_short["open_price"] * (1 - _A2.PROFIT_TAKE))
+                     if (live_short is not None and live_short.get("open_price")) else None)
+            v["glance"] = pmcc_glance(sp, lg.get("strike"), live_short, smark,
+                                      (_lk + _fl) if _fl is not None else None, whole, limit, today,
+                                      earnings_next, rd, _half, _A2.TIME_EXIT_DTE)
+            v["glance_svg"] = pmcc_glance_svg(v["glance"])
+        except Exception as exc:        # noqa: BLE001 -- a picture never costs the card
+            v["glance_svg"], v["glance_err"] = None, "%s: %s" % (type(exc).__name__, exc)
 
     # --- your moves (facts, not advice) -----------------------------------------
     moves = []
