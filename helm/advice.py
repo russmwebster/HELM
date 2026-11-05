@@ -859,7 +859,7 @@ def _flag_out(f, kind):
             "act": f["act"], "numbers": f["numbers"]}
 
 
-def build(db=None, today=None, snapshot=None, source="helm advise --json"):
+def build(db=None, today=None, snapshot=None, source="helm advise --json", slot_at=None):
     """The advice.json document. Read-only. Raises on any failure (the caller keeps
     the last good file)."""
     from helm import bookview as V
@@ -926,7 +926,7 @@ def build(db=None, today=None, snapshot=None, source="helm advise --json"):
         "readings": {"as_of": list(v["as_of"]) if v["as_of"] else None, "notes": L["stale"]},
     }
     return {"schema_version": SCHEMA_VERSION, "generated_at": _now_iso(), "source": source,
-            "slot": slot_of((snapshot or {}).get("started")) if snapshot else None,
+            "slot": slot_of(slot_at or (snapshot or {}).get("started")) if snapshot else None,
             "snapshot": snapshot, "book": "REAL", "today": today.isoformat(),
             "entries": {e["id"] if e["kind"] == "position" else (e["id"] or "shares:" + e["ticker"]): e for e in order},
             "book_flags": book_flags, "limits": limits,
@@ -962,16 +962,19 @@ def _last_good(d):
         return {"generated_at": None, "slot": None}
 
 
-def write_files(db=None, today=None, snapshot=None, source="helm advise --json", skipped=None, error=None):
+def write_files(db=None, today=None, snapshot=None, source="helm advise --json", skipped=None, error=None,
+                slot_at=None):
     """Write advice.json (only when good) and advice-status.json (always).
-    Returns the status document. Never raises -- a failure is the status."""
+    Returns the status document. Never raises -- a failure is the status.
+    slot_at (s152): when the run is a retry, the scheduled run's start -- the slot is read
+    from it, so a retry is labelled with its slot. No change to either file's layout."""
     ok_w, why_not = writes_allowed()
     if not ok_w:
         return {"status": "not written", "reason": why_not}
     d = out_dir()
     run_at = _now_iso()
     st = {"schema_version": SCHEMA_VERSION, "run_at": run_at, "source": source,
-          "slot": slot_of((snapshot or {}).get("started") or datetime.now().isoformat()),
+          "slot": slot_of(slot_at or (snapshot or {}).get("started") or datetime.now().isoformat()),
           "snapshot": snapshot}
     # s149 (Russ 2026-11-03): a snapshot that read none of its positions is a failed slot --
     # 11-03 15:15 read 0 of 7 during a gateway outage and was reported "ok". A partial read
@@ -987,7 +990,7 @@ def write_files(db=None, today=None, snapshot=None, source="helm advise --json",
                   reason="the snapshot read none of the %d open positions -- advice.json is the last good one" % att)
     else:
         try:
-            doc = build(db=db, today=today, snapshot=snapshot, source=source)
+            doc = build(db=db, today=today, snapshot=snapshot, source=source, slot_at=slot_at)
             _atomic_write(d / ADVICE_FILE, doc)
             st.update(status="ok", ok=True,
                       reason=("the snapshot read %d of %d positions" % (jrn, att))

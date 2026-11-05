@@ -858,6 +858,8 @@ def apply(p, db_path=None, ira_hash=None):
         elif it.kind == "OPEN":
             from helm import fillopens as FO
             pid, lids, _lab = FO.book(it, now[:10], FILL_TIME)
+            if "ENTRY READINGS PENDING" in (_lab or ""):     # s151
+                it.text += "  -- booked; entry readings pending (IB Gateway gave none), filled at the next snapshot"
             it.position_id = pid
             it.legs = [(lids[0], None, None)] if len(lids) == 1 else [(x, None, None) for x in lids]
         elif it.kind == "FEE_FILL":

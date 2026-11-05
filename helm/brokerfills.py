@@ -381,7 +381,7 @@ def read_positions(path):
             downloaded = datetime.strptime("%s-%s-%s" % hit.groups(), "%b-%d-%Y").date().isoformat()
         except ValueError:
             downloaded = None
-    shares = {}
+    shares, last = {}, {}
     for row in csv.DictReader(io.StringIO(raw.lstrip("\ufeff").lstrip("\r\n"))):
         if (row.get("Account name") or "").strip() != IRA_NAME:
             continue
@@ -392,7 +392,10 @@ def read_positions(path):
         if q is None:
             continue
         shares[sym] = shares.get(sym, 0) + int(round(q))
-    return {"path": path, "downloaded": downloaded, "shares": shares}
+        lp = _num(row.get("Last price") or row.get("Last Price"))      # s151: the stock's price at download
+        if lp:
+            last[sym] = lp
+    return {"path": path, "downloaded": downloaded, "shares": shares, "last": last}
 
 
 def merge_key(f):

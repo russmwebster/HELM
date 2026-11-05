@@ -151,6 +151,9 @@ def open_position_with_snapshot(
     opened_at: Optional[str] = None,
     open_date: Optional[str] = None,
     notes: Optional[str] = None,          # s141: replaces the "Pending execution" line
+    # s151: the Fidelity import with no stock price anywhere books the trade without its entry
+    # snapshot (spot_price is NOT NULL); helm.entryfill writes it from the first snapshot reading.
+    snapshot: bool = True,
 ) -> tuple[str, str, str]:
     """
     Create position, leg, and entry snapshot in one atomic operation.
@@ -220,42 +223,44 @@ def open_position_with_snapshot(
             conn=conn,
         )
 
-        # Capture entry snapshot
-        account_conn = get_conn()
-        acct = account_conn.execute(
-            "SELECT portfolio_value FROM accounts WHERE id = ?", (account_id,)
-        ).fetchone()
-        portfolio_value = acct["portfolio_value"] if acct else None
-        account_conn.close()
+        snap_id = None
+        if snapshot:
+            # Capture entry snapshot
+            account_conn = get_conn()
+            acct = account_conn.execute(
+                "SELECT portfolio_value FROM accounts WHERE id = ?", (account_id,)
+            ).fetchone()
+            portfolio_value = acct["portfolio_value"] if acct else None
+            account_conn.close()
 
-        snap_id = capture_entry_snapshot(
-            position_id=pos.id,
-            leg_id=leg.id,
-            ticker=ticker,
-            spot_price=contract.get("spot"),
-            delta=contract.get("delta"),
-            theta=contract.get("theta"),
-            gamma=contract.get("gamma"),
-            vega=contract.get("vega"),
-            iv_current=contract.get("iv"),
-            dte=contract.get("dte"),
-            premium_collected=abs(net_premium),
-            atr_14=scan_data.get("atr_14") if scan_data else None,
-            rsi_14=scan_data.get("rsi_14") if scan_data else None,
-            ema_20=scan_data.get("ema_20") if scan_data else None,
-            sma_50=scan_data.get("sma_50") if scan_data else None,
-            bias_score=scan_data.get("bias_score") if scan_data else None,
-            bias_factors=scan_data.get("bias_factors") if scan_data else None,
-            price_vs_52wk_pct=scan_data.get("price_vs_52wk_pct") if scan_data else None,
-            week_52_high=scan_data.get("week_52_high") if scan_data else None,
-            week_52_low=scan_data.get("week_52_low") if scan_data else None,
-            portfolio_value=portfolio_value,
-            open_interest=contract.get("oi"),
-            bid_ask_spread=contract.get("spread"),
-        bid=contract.get("bid"), ask=contract.get("ask"),
-            bid_ask_spread_pct=contract.get("spread_pct"),
-            conn=conn,
-        )
+            snap_id = capture_entry_snapshot(
+                position_id=pos.id,
+                leg_id=leg.id,
+                ticker=ticker,
+                spot_price=contract.get("spot"),
+                delta=contract.get("delta"),
+                theta=contract.get("theta"),
+                gamma=contract.get("gamma"),
+                vega=contract.get("vega"),
+                iv_current=contract.get("iv"),
+                dte=contract.get("dte"),
+                premium_collected=abs(net_premium),
+                atr_14=scan_data.get("atr_14") if scan_data else None,
+                rsi_14=scan_data.get("rsi_14") if scan_data else None,
+                ema_20=scan_data.get("ema_20") if scan_data else None,
+                sma_50=scan_data.get("sma_50") if scan_data else None,
+                bias_score=scan_data.get("bias_score") if scan_data else None,
+                bias_factors=scan_data.get("bias_factors") if scan_data else None,
+                price_vs_52wk_pct=scan_data.get("price_vs_52wk_pct") if scan_data else None,
+                week_52_high=scan_data.get("week_52_high") if scan_data else None,
+                week_52_low=scan_data.get("week_52_low") if scan_data else None,
+                portfolio_value=portfolio_value,
+                open_interest=contract.get("oi"),
+                bid_ask_spread=contract.get("spread"),
+            bid=contract.get("bid"), ask=contract.get("ask"),
+                bid_ask_spread_pct=contract.get("spread_pct"),
+                conn=conn,
+            )
 
     # Close the decision->position link on the originating scan signal, if one
     # exists (latest unlinked russ_intent='OPEN' for this ticker). Best-effort:
@@ -310,6 +315,7 @@ def open_multileg_with_snapshot(
     opened_at: Optional[str] = None,
     open_date: Optional[str] = None,      # s141: the fill's day (Fidelity import)
     notes: Optional[str] = None,
+    snapshot: bool = True,                # s151: as open_position_with_snapshot
 ) -> tuple:
     """
     Open a multi-leg position: one Position, N legs, ONE entry snapshot
@@ -409,35 +415,37 @@ def open_multileg_with_snapshot(
             ((lg, lid) for (lg, lid) in leg_pairs if lg["direction"] == "SHORT"),
             leg_pairs[0],
         )
-        snap_id = capture_entry_snapshot(
-            position_id=pos.id,
-            leg_id=p_leg_id,
-            ticker=ticker,
-            spot_price=(p_lg["spot"] if p_lg.get("spot") is not None else spot),
-            delta=p_lg.get("delta"),
-            theta=p_lg.get("theta"),
-            gamma=p_lg.get("gamma"),
-            vega=p_lg.get("vega"),
-            iv_current=p_lg.get("iv"),
-            dte=p_lg.get("dte"),
-            premium_collected=abs(net_premium),
-            atr_14=scan_data.get("atr_14") if scan_data else None,
-            rsi_14=scan_data.get("rsi_14") if scan_data else None,
-            ema_20=scan_data.get("ema_20") if scan_data else None,
-            sma_50=scan_data.get("sma_50") if scan_data else None,
-            bias_score=scan_data.get("bias_score") if scan_data else None,
-            bias_factors=scan_data.get("bias_factors") if scan_data else None,
-            price_vs_52wk_pct=scan_data.get("price_vs_52wk_pct") if scan_data else None,
-            week_52_high=scan_data.get("week_52_high") if scan_data else None,
-            week_52_low=scan_data.get("week_52_low") if scan_data else None,
-            portfolio_value=portfolio_value,
-            open_interest=p_lg.get("oi"),
-            bid_ask_spread=p_lg.get("spread"),
-            bid=p_lg.get("bid"), ask=p_lg.get("ask"),
-            bid_ask_spread_pct=p_lg.get("spread_pct"),
-            conn=conn,
-        )
-        snap_ids = [snap_id]
+        snap_id = None
+        if snapshot:
+            snap_id = capture_entry_snapshot(
+                position_id=pos.id,
+                leg_id=p_leg_id,
+                ticker=ticker,
+                spot_price=(p_lg["spot"] if p_lg.get("spot") is not None else spot),
+                delta=p_lg.get("delta"),
+                theta=p_lg.get("theta"),
+                gamma=p_lg.get("gamma"),
+                vega=p_lg.get("vega"),
+                iv_current=p_lg.get("iv"),
+                dte=p_lg.get("dte"),
+                premium_collected=abs(net_premium),
+                atr_14=scan_data.get("atr_14") if scan_data else None,
+                rsi_14=scan_data.get("rsi_14") if scan_data else None,
+                ema_20=scan_data.get("ema_20") if scan_data else None,
+                sma_50=scan_data.get("sma_50") if scan_data else None,
+                bias_score=scan_data.get("bias_score") if scan_data else None,
+                bias_factors=scan_data.get("bias_factors") if scan_data else None,
+                price_vs_52wk_pct=scan_data.get("price_vs_52wk_pct") if scan_data else None,
+                week_52_high=scan_data.get("week_52_high") if scan_data else None,
+                week_52_low=scan_data.get("week_52_low") if scan_data else None,
+                portfolio_value=portfolio_value,
+                open_interest=p_lg.get("oi"),
+                bid_ask_spread=p_lg.get("spread"),
+                bid=p_lg.get("bid"), ask=p_lg.get("ask"),
+                bid_ask_spread_pct=p_lg.get("spread_pct"),
+                conn=conn,
+            )
+        snap_ids = [snap_id] if snap_id else []
 
         LifecycleEvent.record(
             position_id=pos.id,

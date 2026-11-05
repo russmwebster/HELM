@@ -99,6 +99,70 @@ def _mins(hhmm):
         return None
 
 
+# s152 (Russ, 2026-11-05): the Book of Books' retry wrapper re-runs a failed snapshot slot every
+# 5 minutes for 35 minutes. A retry's run note ENDS with check_cmd.RETRY_NOTE --
+# "retry: try N, first started YYYY-MM-DDTHH:MM:SS" -- change both together. A retried slot is
+# timed from its scheduled run's start (so a retry at +25 is not "mistimed", while a scheduled
+# run that itself fired late is still caught) and judged by its LAST try: the earlier tries of
+# that slot are superseded, reported, and not counted as lost readings.
+import re as _re
+RETRY_RE = _re.compile(r"(?:\s*\|\s*)?retry: try (\d+), first started "
+                       r"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)\s*$")
+RETRY_MAX_AGE_MIN = 60      # as check_cmd: a first start further back than this is ignored
+
+
+def _split_retry(notes, started_at=None):
+    """(attempt, first_start, notes without the marker), or (None, None, notes)."""
+    if not notes:
+        return None, None, notes
+    m = RETRY_RE.search(str(notes))
+    if not m:
+        return None, None, notes
+    first = m.group(2)
+    if started_at:
+        try:
+            age = (datetime.fromisoformat(str(started_at)[:19])
+                   - datetime.fromisoformat(first)).total_seconds()
+        except ValueError:
+            return None, None, notes
+        if age < -60 or age > RETRY_MAX_AGE_MIN * 60:
+            return None, None, notes
+    rest = str(notes)[:m.start()].strip() or None
+    return int(m.group(1)), first, rest
+
+
+def _prep_runs(rows):
+    """Run rows as dicts with the retry marker read out of `notes` (retry_attempt,
+    first_start), and the snapshot tries a later retry superseded. Returns (kept, superseded):
+    a snapshot run is superseded by a retry of the same slot that started after it, when it
+    started no earlier than a minute before that retry's first start."""
+    out = []
+    for r in rows:
+        d = dict(r)
+        a, f, rest = _split_retry(d.get("notes"), d.get("started_at"))
+        d["notes"] = rest
+        d["retry_attempt"] = a
+        d["first_start"] = f
+        out.append(d)
+    gone = set()
+    for i, r in enumerate(out):
+        if not r["first_start"] or "snapshot" not in (r.get("agent") or "").lower():
+            continue
+        lo = (datetime.fromisoformat(r["first_start"]) - timedelta(minutes=1)).isoformat()
+        for j, o in enumerate(out):
+            if j == i or (o.get("agent") or "") != (r.get("agent") or ""):
+                continue
+            if lo <= str(o.get("started_at") or "") < str(r.get("started_at") or ""):
+                gone.add(j)
+                o["superseded_by"] = r.get("started_at")
+    return [r for k, r in enumerate(out) if k not in gone], [r for k, r in enumerate(out) if k in gone]
+
+
+def _timing(r):
+    """The moment a run is timed from: a retry's scheduled first start, else its own start."""
+    return (r.get("first_start") if hasattr(r, "get") else None) or r["started_at"] or ""
+
+
 def _within(actual, nominal, tol=SLOT_TOLERANCE_MIN):
     a, n = _mins(actual), _mins(nominal)
     return a is not None and n is not None and abs(a - n) <= tol
@@ -158,7 +222,9 @@ class Audit:
                 continue
             lost = att - jn
             lost_total += lost
-            hhmm = (r["started_at"] or "")[11:16]
+            hhmm = _timing(r)[11:16]            # s152: a retried slot is named by its scheduled start
+            if r.get("retry_attempt"):
+                hhmm += " (try %d at %s)" % (r["retry_attempt"], (r["started_at"] or "")[11:16])
             if att and lost > DEGRADED_MAX_SLOT_LOSS * att:
                 return SEV_LOST, (f"the {hhmm} slot lost {lost} of {att} readings "
                                   f"(more than {int(DEGRADED_MAX_SLOT_LOSS * 100)}%)")
@@ -307,10 +373,15 @@ class Audit:
             "from agent_runs where date(started_at) = ? order by started_at",
             (self.date,),
         )   # notes: W171's retry marker and W172's lost-position names read it
+        # s152: every run stays evidence that the machine was up; a snapshot try a later
+        # retry of its slot superseded is set aside (reported by check_slots, not counted).
+        _all = list(self.runs)
+        self.runs, self.superseded_runs = _prep_runs(_all)
+        self.runs_all = _all
         # An agent that RAN in an hour proves the machine was up in that hour,
         # whatever the sampler says. This outranks the sampler as evidence.
         self.run_hours = {
-            (r["started_at"] or "")[11:13] for r in self.runs if r["started_at"]
+            (r["started_at"] or "")[11:13] for r in self.runs_all if r["started_at"]
         }
 
     def machine_liveness(self):
@@ -397,10 +468,22 @@ class Audit:
             post = [r for r in got if str(r["notes"] or "").startswith("after snapshot ")]
             sched = [r for r in got if r not in post]
             for nominal in times:
-                near = [r for r in sched if _within((r["started_at"] or "")[11:16], nominal)]
+                near = [r for r in sched if _within(_timing(r)[11:16], nominal)]
                 name = f"slot: {label} {nominal}"
                 if near:
-                    self.add(PASS, name, f"ran at {(near[0]['started_at'] or '')[11:16]}")
+                    _r0 = near[0]
+                    if _r0.get("retry_attempt"):
+                        _old = [o for o in getattr(self, "superseded_runs", [])
+                                if o.get("superseded_by") == _r0["started_at"]]
+                        self.add(PASS, name,
+                                 f"ran at {(_r0['started_at'] or '')[11:16]} -- try {_r0['retry_attempt']}, "
+                                 f"the scheduled run started {_r0['first_start'][11:16]}; "
+                                 f"{_r0['journaled']} of {_r0['attempted']} read",
+                                 "earlier tries set aside: " + (", ".join(
+                                     f"{(o['started_at'] or '')[11:16]} {o['journaled']}/{o['attempted']}"
+                                     for o in _old) or "none recorded"))
+                    else:
+                        self.add(PASS, name, f"ran at {(_r0['started_at'] or '')[11:16]}")
                     continue
                 if not self._slot_due(nominal):
                     self.add(SKIP, name,
@@ -445,7 +528,7 @@ class Audit:
             stray = [
                 r for r in got
                 if r not in retries and r not in post
-                and not any(_within((r["started_at"] or "")[11:16], t) for t in times)
+                and not any(_within(_timing(r)[11:16], t) for t in times)
             ]
             if stray:
                 self.add(
@@ -1104,6 +1187,7 @@ class Audit:
             "order by started_at",
             (self.date,),
         )
+        rows, _superseded = _prep_runs(rows)     # s152: a retried slot is judged by its last try
 
         agents = {}
         for label, match, nominals, role, source in self.AGENT_SPEC:
@@ -1132,8 +1216,12 @@ class Audit:
                 continue
 
             mine = [r for r in rows if match in (r["agent"] or "")]
+            entry["superseded_tries"] = [                    # s152: set aside, not counted
+                {"started_at": o["started_at"], "attempted": o["attempted"],
+                 "journaled": o["journaled"], "superseded_by": o.get("superseded_by")}
+                for o in _superseded if match in (o["agent"] or "")]
             for r in mine:
-                slot, drift = self._slot_for(r["started_at"], nominals)
+                slot, drift = self._slot_for(_timing(r), nominals)
                 # W198: a post-snapshot paper-exit pass belongs to no slot.
                 _post = str(r["notes"] or "").startswith("after snapshot ")
                 if _post:
@@ -1141,6 +1229,8 @@ class Audit:
                 names, kind = self._parse_notes(r["notes"])
                 entry["runs"].append({
                     "post_snapshot": _post,
+                    "retry_attempt": r.get("retry_attempt"),      # s152
+                    "first_start": r.get("first_start"),
                     "started_at": r["started_at"],
                     "slot": slot,
                     "drift_min": drift,

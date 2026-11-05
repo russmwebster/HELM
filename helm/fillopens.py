@@ -316,22 +316,91 @@ def _quotes(tk, legs):
 
 
 def _stored(tk, leg, as_of):
-    """Readings HELM already stored for this contract on the fill day: the put
-    list's row for it (put_candidates), or None. Used only to fill readings
-    IBKR could not give at import, and labelled."""
+    """Readings HELM already stored for this contract on the fill day: the put list's,
+    the covered-call list's or (s151) the PMCC list's row for it, or None. Used only to
+    fill readings IBKR could not give at import, and labelled ("src")."""
     from helm.db import get_conn
     c = get_conn()
+    key = (tk, leg["expiration"], leg["strike"], as_of)
+    qs = []
+    if leg["opt_type"] == "PUT":
+        qs.append(("the put list", "SELECT pc.*, pr.run_at FROM put_candidates pc JOIN put_runs pr ON pr.id = pc.run_id "
+                   "WHERE pc.ticker=? AND pc.expiry=? AND ABS(pc.strike-?)<1e-6 AND substr(pr.run_at,1,10)=? "
+                   "ORDER BY pr.run_at DESC LIMIT 1", None))
+    else:
+        qs.append(("the covered-call list", "SELECT cc.*, cr.run_at FROM call_candidates cc JOIN call_runs cr ON cr.id = cc.run_id "
+                   "WHERE cc.ticker=? AND cc.expiry=? AND ABS(cc.strike-?)<1e-6 AND substr(cr.run_at,1,10)=? "
+                   "AND COALESCE(cc.hypothetical,0)=0 ORDER BY cr.run_at DESC LIMIT 1", None))
+        for side in ("short", "long"):
+            qs.append(("the PMCC list", ("SELECT pc.*, pr.run_at FROM pmcc_candidates pc JOIN pmcc_runs pr ON pr.id = pc.run_id "
+                       "WHERE pc.ticker=? AND pc.{s}_expiry=? AND ABS(pc.{s}_strike-?)<1e-6 AND substr(pr.run_at,1,10)=? "
+                       "ORDER BY pr.run_at DESC LIMIT 1").format(s=side), side))
     try:
-        r = c.execute(
-            "SELECT pc.*, pr.run_at FROM put_candidates pc JOIN put_runs pr ON pr.id = pc.run_id "
-            "WHERE pc.ticker=? AND pc.expiry=? AND ABS(pc.strike-?)<1e-6 AND substr(pr.run_at,1,10)=? "
-            "ORDER BY pr.run_at DESC LIMIT 1", (tk, leg["expiration"], leg["strike"], as_of)).fetchone() \
-            if leg["opt_type"] == "PUT" else None
-        return dict(r) if r else None
-    except Exception:
+        for src, q, side in qs:
+            try:
+                r = c.execute(q, key).fetchone()
+            except Exception:
+                r = None
+            if not r:
+                continue
+            r = dict(r)
+            if side:
+                r = dict({k: r.get(side + "_" + k) for k in ("delta", "gamma", "theta", "vega", "iv", "bid", "ask", "mid")},
+                         spot=r.get("spot"), run_at=r.get("run_at"))
+            r["src"] = src
+            return r
         return None
     finally:
         c.close()
+
+
+def _list_spot(tk, as_of):
+    """s151: the stock price on any HELM proposal list's fill-day row for tk (puts, covered
+    calls, PMCCs -- any contract), latest run first, or (None, None)."""
+    from helm.db import get_conn
+    c = get_conn()
+    best = None
+    try:
+        for src, q in (("the put list", "SELECT pc.spot, pr.run_at FROM put_candidates pc JOIN put_runs pr ON pr.id=pc.run_id "
+                                        "WHERE pc.ticker=? AND pc.spot IS NOT NULL AND substr(pr.run_at,1,10)=? "
+                                        "ORDER BY pr.run_at DESC LIMIT 1"),
+                       ("the covered-call list", "SELECT cc.spot, cr.run_at FROM call_candidates cc JOIN call_runs cr ON cr.id=cc.run_id "
+                                                 "WHERE cc.ticker=? AND cc.spot IS NOT NULL AND substr(cr.run_at,1,10)=? "
+                                                 "ORDER BY cr.run_at DESC LIMIT 1"),
+                       ("the PMCC list", "SELECT pc.spot, pr.run_at FROM pmcc_candidates pc JOIN pmcc_runs pr ON pr.id=pc.run_id "
+                                         "WHERE pc.ticker=? AND pc.spot IS NOT NULL AND substr(pr.run_at,1,10)=? "
+                                         "ORDER BY pr.run_at DESC LIMIT 1")):
+            try:
+                r = c.execute(q, (tk, as_of)).fetchone()
+            except Exception:
+                r = None
+            if r and (best is None or str(r[1]) > str(best[1])):
+                best = (r[0], r[1], src)
+    finally:
+        c.close()
+    if not best:
+        return None, None
+    return best[0], "%s run at %s on the fill day" % (best[2], str(best[1])[11:16])
+
+
+def _positions_spot(tk, as_of):
+    """s151: the stock's "Last price" in a Fidelity Portfolio_Positions download made on the
+    fill day or the day after (newest first), or (None, None). Only share lines carry the
+    stock's own price, so it answers only for a stock the IRA holds."""
+    import glob
+    import os
+    from datetime import timedelta
+    from helm.brokerfills import read_positions
+    d = os.path.expanduser(os.environ.get("HELM_DOWNLOADS", "~/Downloads"))
+    ok = {as_of, (_d(as_of) + timedelta(days=1)).isoformat()}
+    for f in sorted(glob.glob(os.path.join(d, "Portfolio_Positions*.csv")), key=os.path.getmtime, reverse=True):
+        try:
+            p = read_positions(f)
+        except Exception:
+            continue
+        if p.get("downloaded") in ok and (p.get("last") or {}).get(tk):
+            return p["last"][tk], "Fidelity's Positions download of %s (Last price)" % p["downloaded"]
+    return None, None
 
 
 def _stored_spot(tk, as_of):
@@ -387,16 +456,30 @@ def book(it, now_label, fill_time):
                 qs[i] = rd
                 if spot is None and st.get("spot"):
                     spot = st["spot"]
-                lab += "; readings for the %g %s from the put list run at %s on the fill day" % (
-                    l["strike"], l["opt_type"].lower(), str(st["run_at"])[11:16])
+                    lab += "; stock price from %s run at %s on the fill day" % (st["src"], str(st["run_at"])[11:16])
+                lab += "; readings for the %g %s from %s run at %s on the fill day" % (
+                    l["strike"], l["opt_type"].lower(), st["src"], str(st["run_at"])[11:16])
             else:
                 lab += "; no readings for the %g %s (readings missing)" % (l["strike"], l["opt_type"].lower())
+    # s151 (Russ, 2026-11-04): the booking never waits on IB Gateway. The stock price comes from
+    # the first source that has one, labelled; with none, the trade is booked and the snapshot
+    # after it fills the gap (helm.entryfill).
     if spot is None:
-        spot, src = _stored_spot(tk, as_of)
-        if spot is None:
-            raise RuntimeError("%s: no stock price for the entry snapshot (IBKR gave none and HELM stored none "
-                               "since the fill) -- stopped here; run again when IB Gateway is up" % tk)
-        lab += "; stock price from " + src
+        for fn in (_list_spot, _stored_spot, _positions_spot):
+            spot, src = fn(tk, as_of)
+            if spot is not None:
+                lab += "; stock price from " + src
+                break
+        else:
+            lab += "; stock price not read at import"
+    missing = []
+    if spot is None:
+        missing.append("stock price")
+    for i, l in enumerate(o["legs"]):
+        rd = qs.get(i) or {}
+        gone = [k for k in ("delta", "gamma", "theta", "vega", "iv") if rd.get(k) is None]
+        if gone:
+            missing.append("%g %s %s" % (l["strike"], l["opt_type"].lower(), "/".join(gone)))
     if o["flags"]:
         lab += "; FLAGS: " + "; ".join(o["flags"])
     if o.get("grade"):
@@ -423,7 +506,7 @@ def book(it, now_label, fill_time):
         l = o["legs"][0]
         pid, lid, _ = open_position_with_snapshot(
             tk, o["strategy"], cdict(0, l), l["price"], q, book="REAL", origin_screen="FIDELITY_IMPORT",
-            notes=lab, opened_at=when, open_date=as_of)
+            notes=lab, opened_at=when, open_date=as_of, snapshot=spot is not None)
         lids = [lid]
     elif o["strategy"] == "PMCC":
         legs = [cdict(i, l) for i, l in enumerate(o["legs"])]
@@ -436,7 +519,8 @@ def book(it, now_label, fill_time):
         pf["max_loss"] = round(L["fill_price"] * 100 * q - (S[0]["fill_price"] * 100 * q if S else 0), 2)
         pid, lids, _ = open_multileg_with_snapshot(
             ticker=tk, strategy="PMCC", legs=legs, contracts=q, spot=spot, book="REAL", position_fields=pf,
-            pricing_source="fidelity-fill", opened_at=when, open_date=as_of, notes=lab)
+            pricing_source="fidelity-fill", opened_at=when, open_date=as_of, notes=lab,
+            snapshot=spot is not None)
         _release_ib()
         # s147 (Russ 11-01/11-02): every PMCC records its trend at entry -- the 200-day and the
         # 50-day's slope measured to the fill date from IBKR daily bars. Never stops the booking.
@@ -463,6 +547,14 @@ def book(it, now_label, fill_time):
     else:
         raise RuntimeError("unknown open kind %s" % o["strategy"])
     _release_ib()
+    if missing:                 # s151: marked for helm.entryfill -- the next snapshot fills the gaps
+        from helm.db import transaction
+        from helm.entryfill import marker
+        mk = marker(lids, missing)
+        with transaction() as c:
+            c.execute("UPDATE positions SET notes = COALESCE(notes,'') || CASE WHEN COALESCE(notes,'')='' "
+                      "THEN '' ELSE ' | ' END || ? WHERE id=?", (mk, pid))
+        lab += "; " + mk
     if o.get("parent"):
         from helm.db import transaction
         with transaction() as c:

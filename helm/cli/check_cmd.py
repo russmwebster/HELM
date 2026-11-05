@@ -527,6 +527,42 @@ VERDICT_FAILURES = []
 # run_snapshot (helm.advice.write_files). Filled by cmd_snapshot, read once.
 SNAPSHOT_INFO = {}
 
+# s152 (Russ, 2026-11-05): the Book of Books runs the installed com.helm.snapshot.daily
+# through its retry wrapper (~/Projects/book_of_books/plumbing/retry-runs/run-with-retry.sh):
+# a slot whose advice-status.json says failed is retried every 5 minutes for 35 minutes.
+# The wrapper sets RETRY_NAME=helm-snapshot, RETRY_ATTEMPT (1 = the scheduled run) and
+# RETRY_FIRST_START (when the scheduled run started). A manual `helm snapshot` has none.
+# audit_cmd reads RETRY_NOTE back (audit_cmd.RETRY_RE) -- change both together.
+RETRY_NOTE = "retry: try %d, first started %s"
+RETRY_MAX_AGE_MIN = 60      # a first start older than this is not this slot's -- ignored
+
+
+def retry_env(started=None, env=None):
+    """(attempt, first_start 'YYYY-MM-DDTHH:MM:SS') when this process is a run of the Book's
+    retry wrapper for the HELM snapshot, else None. Inconsistent values (not an int, a first
+    start that does not parse, is after this run's start or more than RETRY_MAX_AGE_MIN before
+    it) are ignored: the run is then timed by its own start, as before."""
+    import os
+    env = os.environ if env is None else env
+    if env.get("RETRY_NAME") != "helm-snapshot":
+        return None
+    try:
+        attempt = int(env.get("RETRY_ATTEMPT", ""))
+        first = datetime.fromisoformat(str(env.get("RETRY_FIRST_START", "")).strip()[:19])
+    except (TypeError, ValueError):
+        return None
+    if attempt < 1:
+        return None
+    if started is not None:
+        try:
+            st = datetime.fromisoformat(str(started)[:19])
+        except ValueError:
+            return None
+        age = (st - first).total_seconds()
+        if age < -60 or age > RETRY_MAX_AGE_MIN * 60:
+            return None
+    return attempt, first.strftime("%Y-%m-%dT%H:%M:%S")
+
 
 def core_verdict(pos, legs, opt_legs, primary, opt_data, leg_marks):
     """Decision-core verdict for a check-side position, or None if the core
@@ -3039,6 +3075,12 @@ def cmd_snapshot(args):
             # severity needs every lost id to say which BOOK lost it.
             _bits.append("not-journaled (%d): %s" % (
                 len(_dropped), "; ".join(_dropped)))
+        # s152 (Russ, 2026-11-05): a retry by the Book of Books' wrapper says so, LAST in the
+        # note, so the 16:15 audit can time it from the scheduled run and judge the slot by its
+        # last try. Only tries 2, 3 ...; the scheduled run and a manual run write what they did.
+        _rt = retry_env(_started)
+        if _rt and _rt[0] >= 2:
+            _bits.append(RETRY_NOTE % _rt)
         _ar.record_run(
             conn, _ar.AGENT_SNAPSHOT, _started, _finished,
             attempted, journaled, len(_failed),
@@ -3136,7 +3178,20 @@ def run_snapshot():
         _err = "snapshot failed: %s: %s" % (type(_e).__name__, _e)
         raise
     finally:
+        _entryfill_after_snapshot()
         _advice_after_snapshot(_err)
+
+
+def _entryfill_after_snapshot():
+    """s151 (Russ, 2026-11-04): fill the entry readings the Fidelity import could not get
+    (helm.entryfill) from each such position's first snapshot reading. Only gaps; never costs
+    the snapshot."""
+    try:
+        from helm import entryfill as _ef
+        for _pid, _msg in _ef.catch_up():
+            print("entry readings: %s -- %s" % (_pid, _msg))
+    except Exception as _e:     # noqa: BLE001
+        print("entry readings post-pass FAILED: %s: %s" % (type(_e).__name__, _e))
 
 
 def _advice_after_snapshot(err=None):
@@ -3148,7 +3203,11 @@ def _advice_after_snapshot(err=None):
         from helm import advice as _adv
         _info = dict(SNAPSHOT_INFO)
         _skip = _info.pop("stood_down", None)
-        _st = _adv.write_files(snapshot=_info or None, source="helm snapshot", skipped=_skip, error=err)
+        # s152: a retry is labelled with the slot its scheduled run started in.
+        _rt = retry_env(_info.get("started") or datetime.now().isoformat())
+        _slot_at = _rt[1] if (_rt and _rt[0] >= 2) else None
+        _st = _adv.write_files(snapshot=_info or None, source="helm snapshot", skipped=_skip, error=err,
+                               slot_at=_slot_at)
         print("advice.json: %s%s" % (_st.get("status"), (" -- %s" % _st["reason"]) if _st.get("reason") else ""))
     except Exception as _e:
         print("advice.json post-pass FAILED: %s: %s" % (type(_e).__name__, _e))
