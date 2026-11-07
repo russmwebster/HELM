@@ -42,6 +42,7 @@ LAST_REPORT_OK_DAYS = 60         # a quarterly reporter that printed <= 60 days 
 GATEWAY_STOP_AFTER = 3           # s149: this many names in a row unreadable -> the run stops
 QUARTER_DAYS = 91                # is not due again inside 10 (next ~ last + 91)
 TOP_N = 5
+FIT_N = 5                        # s153 (Russ 2026-11-06): also show the best 5 that fit the limits
 PROFIT_TAKE = 0.50
 
 TABLES_SQL = """
@@ -447,6 +448,29 @@ def decision_text(c):
     return "would be declined: " + lab
 
 
+def fitting(cands, n=FIT_N):
+    """s153 (Russ 2026-11-06): the highest-ranked names BELOW the top 5 that the limits size at
+    one contract or more, up to n, in rank order -- shown only when some of the top 5 are declined
+    (otherwise the top 5 already is the list). Display only: ranking, rules and sizing unchanged.
+    `cands` is a run's candidates in rank order (as `latest` and `run` return them)."""
+    top = cands[:TOP_N]
+    if all(c.get("size_n") for c in top):
+        return []
+    return [c for c in cands[TOP_N:] if c.get("size_n")][:n]
+
+
+def declined_summary(cands):
+    """s153: how many ranked names the limits declined, by limit -- e.g.
+    "26 declined by the limits: 24 sector over 30%, 2 name over 20%". "" when none."""
+    from collections import Counter
+    cnt = Counter(decision_text(c).replace("would be declined: ", "")
+                  for c in cands if not c.get("size_n"))
+    if not cnt:
+        return ""
+    return "%d declined by the limits: %s" % (
+        sum(cnt.values()), ", ".join("%d %s" % (k, lab) for lab, k in cnt.most_common()))
+
+
 # ---------------------------------------------------------------- self-test
 def _selftest():
     import sqlite3, tempfile, os
@@ -458,6 +482,18 @@ def _selftest():
             fails.append(msg)
 
     T = date(2026, 10, 28)
+    # s153: fitting() / declined_summary()
+    _c = lambda r, n, b=None: {"rank": r, "size_n": n, "size_binding": b}
+    _all = [_c(1, 0, "sleeve_sector"), _c(2, 2), _c(3, 0, "sleeve_name"), _c(4, 0, "sleeve_sector"),
+            _c(5, 1), _c(6, 0, "sleeve_sector"), _c(7, 3), _c(8, 1), _c(9, 0, "sleeve_total"),
+            _c(10, 1), _c(11, 1), _c(12, 1), _c(13, 4)]
+    ok([c["rank"] for c in fitting(_all)] == [7, 8, 10, 11, 12], "fitting: the 5 fitting names below the top 5, in rank order")
+    ok(fitting([_c(i, 1) for i in range(1, 9)]) == [], "fitting: none shown when the whole top 5 fits")
+    ok([c["rank"] for c in fitting(_all[:8])] == [7, 8], "fitting: fewer than 5 available -> all of them")
+    ok(fitting([_c(1, 0, "sleeve_sector")]) == [], "fitting: nothing below the top 5 -> empty")
+    ok(declined_summary(_all) == "5 declined by the limits: 3 sector over 30%, 1 name over 20%, 1 sleeve full",
+       "declined_summary counts every declined name by limit")
+    ok(declined_summary([_c(1, 1)]) == "", "declined_summary empty when nothing is declined")
     # earnings
     ok(earnings_check(True, None, None, T)[0], "a fund passes with no earnings date")
     ok(not earnings_check(False, "2026-11-07", None, T)[0], "earnings in 10 days vetoes (10 counts)")

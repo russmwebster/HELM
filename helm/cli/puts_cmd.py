@@ -56,16 +56,15 @@ def _show(run, show_all=False, why=False):
     if run.get("note"):
         console.print("[dim]%s[/dim]" % run["note"])
     cands = run["candidates"] if show_all else run["candidates"][:TOP_N]
-    if not cands:
-        console.print("\n  No put passes every rule today.")
-    else:
+
+    def _table(rows):
         t = Table(box=box.SIMPLE_HEAD, pad_edge=False)
         for h, j in (("#", "right"), ("Name", "left"), ("Grade", "left"), ("Put", "left"),
                      ("Days", "right"), ("Delta", "right"), ("Premium", "right"), ("A year", "right"),
                      ("Secures", "right"), ("50% buy-back", "right"), ("IVR", "right"),
                      ("Earnings", "left"), ("Size", "left")):
             t.add_column(h, justify=j, no_wrap=True)
-        for c in cands:
+        for c in rows:
             t.add_row(str(c["rank"]), c["ticker"], c["grade"] or "",
                       "%s %g" % (c["expiry"], c["strike"]), str(c["dte"]),
                       "%.2f" % c["delta"] if c["delta"] is not None else "",
@@ -74,9 +73,28 @@ def _show(run, show_all=False, why=False):
                       "%.0f" % c["iv_rank"] if c["iv_rank"] is not None else "",
                       earnings_short(c["earnings"]), decision_text(c).replace("would be declined", "declined"))
         console.print(t)
+
+    if not cands:
+        console.print("\n  No put passes every rule today.")
+    else:
+        _table(cands)
         if any(not c.get("size_n") for c in cands):
             note = next(c["size_note"] for c in cands if not c.get("size_n"))
             console.print("[dim]Declined = would be declined today, because %s. Shown so the list builds a record.[/dim]" % (note.split("; ", 1)[-1] if note else "no room"))
+        if not show_all:                         # s153 (Russ 2026-11-06): the best that fit, below the top 5
+            from helm.puttool import fitting, declined_summary
+            fit = fitting(run["candidates"])
+            if any(not c.get("size_n") for c in cands):
+                console.print()
+                if fit:
+                    console.print("[bold]Best that fit your limits[/bold]  [dim](the highest-ranked names below the top 5 "
+                                  "that size at one contract or more; # is the rank on the full list)[/dim]")
+                    _table(fit)
+                else:
+                    console.print("[bold]Best that fit your limits[/bold]  none -- no name below the top 5 fits the limits.")
+                summ = declined_summary(run["candidates"])
+                if summ:
+                    console.print("[dim]%s   (--all for the whole list)[/dim]" % summ)
     rej = run.get("rejects") or {}
     if rej:
         def bucket(r):

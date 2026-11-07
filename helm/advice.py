@@ -709,6 +709,38 @@ def health(brief, db=None):
     return {"sentence": sentence, "todo": todo, "jobs": jobs, "other": other}
 
 
+def last_audit_day(root):
+    """s153: the day of the newest end-of-day report HELM wrote (logs/audit_eod_YYYY-MM-DD.txt,
+    the 16:15 run), or None. On a weekend or before 16:15 that is the last finished session."""
+    import glob, re
+    days = []
+    for p in glob.glob(os.path.join(root, "logs", "audit_eod_*.txt")):
+        m = re.search(r"audit_eod_(\d{4}-\d\d-\d\d)\.txt$", p)
+        if m:
+            days.append(m.group(1))
+    return max(days) if days else None
+
+
+def health_flag(brief, db=None):
+    """s153 (Russ, 2026-11-07): Today's one-line warning from the last end-of-day check, or None when
+    it found nothing for Russ to do. Read from `health()` -- the Health page's own "things for you" --
+    so Today's line and the page can't disagree; routine WARNs (the Health page's "other") don't count."""
+    if not brief:
+        return None
+    if brief.get("error"):
+        return {"text": "The last end-of-day check couldn't be read (%s)." % brief["error"], "day": None, "n": 0}
+    h = health(brief, db)
+    todo = h["todo"]
+    if not todo:
+        return None
+    day = brief.get("date")
+    more = len(todo) - 1
+    text = "%s's check found %s: %s%s" % (
+        _day_label(day) if day else "The last", "a problem" if not more else "%d problems" % len(todo),
+        todo[0], "" if not more else " (+%d more)" % more)
+    return {"text": text, "day": day, "n": len(todo)}
+
+
 def _report():
     from rich.console import Console
     con = Console()
@@ -1197,6 +1229,33 @@ def _selftest():
        "delta over half the sleeve: flagged with the excess, the largest and the stale readings: %s" % (f and f[0]["reason"]))
     ok(book_limit_flags(view={"limits": fv(0, 0)["limits"], "positions": []}) == [],
        "an empty book is not called idle")
+    # s153: health_flag -- Today's line from the last end-of-day check
+    _r = lambda n, st, det="": {"name": n, "status": st, "detail": det}
+    _hdb = os.path.join(tempfile.mkdtemp(), "h.db")          # health() reads coverage: a minimal book
+    _hc = sqlite3.connect(_hdb)
+    _hc.execute("CREATE TABLE positions (id TEXT, ticker TEXT, book TEXT, opened_at TEXT, created_at TEXT, closed_at TEXT)")
+    _hc.execute("CREATE TABLE checks (position_id TEXT, checked_at TEXT)")
+    _hc.commit(); _hc.close()
+    db = _hdb
+    _clean = {"date": "2026-11-05", "results": [_r("agent roster", "WARN", "x"), _r("market context", "WARN", "y")]}
+    ok(health_flag(_clean, db) is None, "health_flag: routine WARNs only -> no line on Today")
+    _bad = {"date": "2026-11-04", "results": [_r("agent roster", "WARN"), _r("broker reachable", "FAIL", "IB Gateway unreachable")]}
+    hf = health_flag(_bad, db)
+    ok(hf and hf["text"].startswith("Wed 11-04's check found a problem: The broker connection was down: IB Gateway unreachable")
+       and hf["day"] == "2026-11-04" and hf["n"] == 1, "health_flag: one problem named with its day: %s" % (hf and hf["text"]))
+    _two = {"date": "2026-11-04", "results": [_r("broker reachable", "FAIL", "down"), _r("machine awake", "FAIL", "asleep 14-16")]}
+    hf = health_flag(_two, db)
+    ok(hf and "found 2 problems" in hf["text"] and hf["text"].endswith("(+1 more)") and hf["n"] == 2,
+       "health_flag: two problems -> the first named, '+1 more': %s" % (hf and hf["text"]))
+    hf = health_flag({"error": "the audit produced no output"}, db)
+    ok(hf and "couldn't be read" in hf["text"] and hf["day"] is None, "health_flag: an unreadable check is said, not hidden")
+    ok(health_flag(None, db) is None and health_flag({}, db) is None, "health_flag: no brief -> no line")
+    _ld = tempfile.mkdtemp(); os.makedirs(os.path.join(_ld, "logs"))
+    for _d in ("2026-11-04", "2026-11-06", "2026-11-05"):
+        open(os.path.join(_ld, "logs", "audit_eod_%s.txt" % _d), "w").close()
+    open(os.path.join(_ld, "logs", "audit_eod.log"), "w").close()
+    ok(last_audit_day(_ld) == "2026-11-06", "last_audit_day: the newest report's day")
+    ok(last_audit_day(tempfile.mkdtemp()) is None, "last_audit_day: no reports -> None")
     print("advice selftest:", "PASS (%d checks)" % len(ran) if not fails else "%d FAIL" % len(fails))
     return 1 if fails else 0
 
