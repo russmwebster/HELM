@@ -27,6 +27,36 @@ def _usd(x, sign=False):
     return ("-" if x < 0 else ("+" if sign else "")) + "$" + s
 
 
+def _rc_cmd(t):
+    return "cd ~/Projects/helm && helm recovery %s" % t
+
+
+def recovery_view(conn, position_id, ticker, today):
+    """s154: the card's numbers from the latest recorded `helm recovery` result (helm.recovery.latest_for):
+    the 3-month and one-year odds and the year's rent, both cases. None when no run has recorded the put."""
+    from helm import recovery as RC
+    lt = RC.latest_for(conn, position_id)
+    if lt is None:
+        return {"none": True, "cmd": _rc_cmd(ticker)}
+    day = lt["run_at"][:10]
+    base = {"run_day": day, "stale": day != today.isoformat(), "cmd": _rc_cmd(ticker)}
+    if lt["error"] or not lt["result"]:
+        return dict(base, error=lt["error"] or "no result recorded")
+    r = lt["result"]
+    H = r["horizons"]
+    i90, iy = H.index(90), H.index(365)
+
+    def case(c):
+        x = r[c]
+        return {"touch90": x["touch"][i90], "touchY": x["touch"][iy], "whole90": x["whole"][i90],
+                "wholeY": x["whole"][iy], "called": x["called"], "gate_day": x["gate_day"],
+                "rentY": x["rent"][iy], "rentY_usd": x["rent"][iy] * r["shares"]}
+    f = r["fit"]
+    return dict(base, spot=r["spot"], basis=r["basis"], shares=r["shares"], start=r["start"],
+                now=case("now"), calm=case("calm"), vol_now=f["start_vol"], vol_lr=f["long_run_vol"],
+                half=f["half_life_days"], earn_note=r["earn_note"], short_history=f["short_history"])
+
+
 def put_numbers(strike, n, premium, bid, ask, mid, spot, delta, dte):
     """Plain arithmetic for one short put (per-share inputs; n contracts). Pure; the self-test drives it."""
     out = {"strike": strike, "n": n, "collateral": strike * 100 * n,
@@ -99,6 +129,12 @@ def decide(position_id, account_id=None, db=None, today=None):
         out["assigned"] = {"cost": num["collateral"], "shares": num["shares"], "eff_basis": num["eff_basis"],
                            "value": num["shares_value"], "paper": num["paper_if_assigned"],
                            "below_basis_pct": num["below_basis_pct"]}
+
+        # 3b. s154 (Russ, 2026-11-08): the odds if assigned -- the latest `helm recovery` run, read only
+        try:
+            out["assigned"]["recovery"] = recovery_view(conn, position_id, t, today)
+        except Exception as e:                     # noqa: BLE001
+            out["assigned"]["recovery"] = {"error": "%s: %s" % (type(e).__name__, e), "cmd": _rc_cmd(t)}
 
         # 4. Keep vs switch -- the best put that fits from the latest `helm puts` run
         try:

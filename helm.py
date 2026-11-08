@@ -43,6 +43,7 @@ COMMANDS = {
     'puts':      ('helm.cli.puts_cmd',     'run', 'New cash-secured puts under the settled rules -- ranked, sized, recorded (s138)'),
     'pmcc':      ('helm.cli.pmcc_cmd',     'run', 'New PMCCs under the settled rules -- ranked by rent cover, sized, recorded (s147)'),
     'calls':     ('helm.cli.calls_cmd',    'run', 'Covered calls on HELM-held shares (or --if-assigned) under the settled rules (s138)'),
+    'recovery':  ('helm.cli.recovery_cmd', 'run', 'If a put is assigned: odds of getting back to basis, covered-call rent -- a model, recorded (s154)'),
     'advise':    ('helm.advice',           'run', 'One plain recommendation per real position, with its reason (s135)'),
     'resell':    ('helm.cli.resell_cmd',    'run', 'Sell the next short against a diagonal\'s long (W180 step 6)'),
     'pending':   ('helm.cli.pending_cmd',   'run', 'Exit flags awaiting a decision — act, or log why you are holding'),
@@ -58,7 +59,7 @@ COMMANDS = {
 # them -- but are listed only by `helm legacy`, and go on LEGACY_UNTIL unless Russ
 # says otherwise.
 MAIN = (
-    ("Trading", ("advise", "puts", "calls", "pmcc", "roll", "open", "quality", "book", "sleeve")),
+    ("Trading", ("advise", "puts", "calls", "pmcc", "roll", "recovery", "open", "quality", "book", "sleeve")),
     ("Booking", ("fills",)),
     ("Data and checks", ("check", "snapshot", "ivr", "watchlist", "reconcile", "audit")),
     ("Running HELM", ("ibkr", "gwwatch", "restart")),
