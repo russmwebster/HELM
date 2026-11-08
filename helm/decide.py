@@ -96,6 +96,7 @@ def put_numbers(strike, n, premium, bid, ask, mid, spot, delta, dte):
     out["delta"] = d
     out["rate_per_delta"] = (out["rate"] / d) if (out["rate"] is not None and d) else None
     out["close_ask_usd"] = ask * 100 * n if ask is not None else None
+    out["close_mid_usd"] = mid * 100 * n if mid is not None else None   # s155: the board's one close figure (mid)
     out["spread_usd"] = (ask - mid) * 100 * n if (ask is not None and mid is not None) else None
     out["shares"] = 100 * n
     out["shares_value"] = spot * 100 * n if spot is not None else None
@@ -130,6 +131,7 @@ def decide(position_id, account_id=None, db=None, today=None):
                           lc["current_bid"] if lc else None, lc["current_ask"] if lc else None,
                           lc["current_price"] if lc else None, spot, lc["delta"] if lc else None, dte)
         out = {"ticker": t, "position_id": position_id, "num": num, "dte": dte, "spot": spot,
+               "iv": (lc["iv_current"] if lc else None),     # s155: the facts row's IV (the leg's latest reading)
                "asof": (lc["checked_at"][:16].replace("T", " ") if lc else None), "expiry": str(leg["expiration"])[:10]}
 
         # 1. HELM's advice -- the same engine call Today makes
@@ -140,6 +142,7 @@ def decide(position_id, account_id=None, db=None, today=None):
             out["advice"] = ({"headline": rec["headline"], "reason": rec.get("reason") or "",
                               "act": rec.get("act") or "", "lean": rec.get("lean") or ""} if rec
                              else {"error": "no advice line for this position"})
+            out["rules"] = list(rec.get("rules") or []) if rec else []   # s155: the same rows, as data
         except Exception as e:                     # noqa: BLE001
             out["advice"] = {"error": "%s: %s" % (type(e).__name__, e)}
 
@@ -221,7 +224,13 @@ def decide(position_id, account_id=None, db=None, today=None):
         except Exception as e:                     # noqa: BLE001
             roll = {"error": "%s: %s" % (type(e).__name__, e)}
         out["choices"] = {"close_ask": num["close_ask_usd"], "spread_usd": num["spread_usd"], "roll": roll,
-                          "take_cost": num["collateral"]}
+                          "take_cost": num["collateral"], "close_mid": num["close_mid_usd"]}
+        # s155: the book's delta limit as a row beside the advice's rules (helm.advice.limit_row -- one comparison)
+        bk = out.get("book") or {}
+        if bk.get("book_bw_delta") is not None and bk.get("delta_limit"):
+            from helm import advice as _A
+            out.setdefault("rules", []).append(_A.limit_row("book_delta", "Book delta limit (half the sleeve)",
+                                                            abs(bk["book_bw_delta"]), bk["delta_limit"]))
         return out
     finally:
         conn.close()

@@ -44,6 +44,7 @@ EARNINGS_SOON_DAYS = 7      # Russ, s135: inside 7 days the mark is highlighted 
 SHORT_EXPIRY_SOON_DAYS = 7  # a run-off diagonal's short expiring this week
 STALE_DAYS = 4              # a reading older than this (calendar days) is not advised from
 PASSING = ("A", "B", "C", "FUND")
+NEAR_FRAC = 0.90            # s155 (Russ, 2026-11-08): "near a limit" = 90% of it, shown amber on the board
 
 # verb -> (needs_you, priority; lower = more urgent)
 VERBS = {
@@ -194,12 +195,72 @@ def pmcc_rule_rows(whole, long_cost, long_strike, long_dte, spot, short=None, sh
     return out
 
 
-def _rec(p, verb, headline, reason, numbers=None, act=None, lean=None, marks=None, as_of=None):
+# s155 (Russ, 2026-11-08): the board shows rules as data, not sentences (standing rules, "Display rules for the
+# board"). Each row: {key, rule, state, reading, line}. state: "fired" | "near" | "next" (not fired; `line` is the
+# price or date to act on) | "pass" | "info" (applies alongside a fired rule, no colour). Built from the SAME
+# values and comparisons as the verb chosen in _single_short; the self-test checks the first fired row against
+# the verb. advice.json does not carry these rows (build() picks its keys) -- the Book's file is unchanged.
+SHORT_RULE_VERB = {"tested": "TESTED", "take_profit": "TAKE_PROFIT", "time_21": "TIME_21"}
+
+
+def short_rule_rows(is_cc, spot, k, delta, dte, kept, credit, expiry, grade=None, earnings=None):
+    """The rule rows for one short put or covered call. Pure. expiry: ISO date; earnings: an ISO date inside
+    the trade, or None. The tested comparison is _single_short's own (spot past the strike, or delta >= 0.50
+    inside 21 days)."""
+    rows = []
+
+    def add(key, rule, state, reading, line=None):
+        rows.append({"key": key, "rule": rule, "state": state, "reading": reading, "line": line})
+
+    by_price = (spot >= k) if is_cc else (spot <= k)
+    by_delta = delta is not None and abs(delta) >= TESTED_DELTA and dte is not None and dte <= TIME_EXIT_DTE
+    side = "above" if spot >= k else "below"
+    if by_price:
+        add("tested", "Tested", "fired", "spot %s %s strike %s" % (_p(spot), side, _num(k)))
+    elif by_delta:
+        add("tested", "Tested", "fired", "delta %.2f, %d days" % (abs(delta), dte))
+    else:
+        add("tested", "Tested", "pass", "spot %s, %.1f%% %s strike %s" % (_p(spot), abs(spot - k) / spot * 100.0,
+                                                                       side, _num(k)))
+    bb = _half_up(credit * (1 - PROFIT_TAKE)) if credit else None
+    # a short now dearer than it was sold has kept nothing: say the prices, not a negative percentage
+    kept_s = ("—" if kept is None else "%.0f%% kept" % (kept * 100) if kept >= 0
+              else "short %s, sold %s" % (_p(credit * (1 - kept)), _p(credit)))
+    add("take_profit", "50% profit-take", "fired" if (kept is not None and kept >= PROFIT_TAKE) else "next",
+        kept_s, None if bb is None else "buy back %s" % _p(bb))
+    if dte is not None and dte <= TIME_EXIT_DTE:
+        add("time_21", "21-day close-or-roll", "fired", "%d days" % dte)
+    else:
+        line = None
+        if expiry:
+            from datetime import timedelta
+            line = (date.fromisoformat(str(expiry)[:10]) - timedelta(days=TIME_EXIT_DTE)).isoformat()[5:]
+        add("time_21", "21-day close-or-roll", "next", "%s days" % ("—" if dte is None else dte), line)
+    if not is_cc and rows[0]["state"] == "fired":
+        add("assign_default", "Assignment default", "info",
+            "grade %s" % (grade or "none"), "yes" if grade in PASSING else "no")
+    if is_cc:
+        add("cc_earnings", "No earnings inside a covered call", "fired" if earnings else "pass",
+            ("report %s" % str(earnings)[5:10]) if earnings else "none inside")
+    return rows
+
+
+def limit_row(key, rule, used, cap):
+    """One limit as a row: over / near (>= NEAR_FRAC of it) / pass. Pure."""
+    state = "fired" if used > cap + 1e-6 else ("near" if cap and used >= NEAR_FRAC * cap else "pass")
+    return {"key": key, "rule": rule, "state": state, "reading": "%s / %s" % (_m(used), _m(cap)), "line": None}
+
+
+def _num(x):
+    return "%g" % x
+
+
+def _rec(p, verb, headline, reason, numbers=None, act=None, lean=None, marks=None, as_of=None, rules=None):
     needs, prio, label = VERBS[verb]
     return {"position_id": p["id"], "ticker": p["ticker"], "strategy": p["strategy"],
             "verb": verb, "label": label, "needs_you": needs, "priority": prio,
             "headline": headline, "reason": reason, "numbers": numbers or {},
-            "act": act, "lean": lean, "marks": marks or [], "as_of": as_of}
+            "act": act, "lean": lean, "marks": marks or [], "as_of": as_of, "rules": rules or []}
 
 
 def _stale_headline(conn, p, what):
@@ -263,6 +324,9 @@ def _single_short(conn, p, legs, today):
         tested = spot >= k or (delta is not None and abs(delta) >= TESTED_DELTA and dte <= TIME_EXIT_DTE)
     else:
         tested = spot <= k or (delta is not None and abs(delta) >= TESTED_DELTA and dte <= TIME_EXIT_DTE)
+    rules = short_rule_rows(is_cc, spot, k, delta, dte, kept, credit, exp_s,
+                            grade=None if is_cc else _grade(conn, p["ticker"]),
+                            earnings=e_day.isoformat() if (is_cc and e_inside) else None)
     if tested:
         through = abs(spot - k)
         if is_cc:
@@ -272,7 +336,7 @@ def _single_short(conn, p, legs, today):
                             "" if delta is None else " (delta %.2f)" % abs(delta)),
                         nums, act="buy back now at about %s; or let the shares go at %g" % (_p(mark), k)
                         + _roll_hint(p["ticker"]),
-                        lean=None, marks=marks, as_of=as_of)
+                        lean=None, marks=marks, as_of=as_of, rules=rules)
         g = _grade(conn, p["ticker"])
         basis = k - credit
         lean = ("HELM leans: take the shares -- %s grades %s, so assignment is the default "
@@ -286,19 +350,19 @@ def _single_short(conn, p, legs, today):
                         "" if delta is None else " (delta %.2f)" % abs(delta)),
                     nums, act="buy back now at about %s (%s); assignment would cost %s" % (
                         _p(mark), _m(pnl, sign=True), _m(k * 100 * n)) + _roll_hint(p["ticker"]),
-                    lean=lean, marks=marks, as_of=as_of)
+                    lean=lean, marks=marks, as_of=as_of, rules=rules)
     if kept is not None and kept >= PROFIT_TAKE:
         return _rec(p, "TAKE_PROFIT", "%s -- take the profit" % what,
                     "%.0f%% of the credit is taken (%s); the rule is 50%%." % (kept * 100, _m(pnl, sign=True)),
                     nums, act="your resting order at %s should fill; if it isn't placed, buy back at %s"
-                    % (_p(buy_half), _p(buy_half)), marks=marks, as_of=as_of)
+                    % (_p(buy_half), _p(buy_half)), marks=marks, as_of=as_of, rules=rules)
     if dte is not None and dte <= TIME_EXIT_DTE:
         return _rec(p, "TIME_21", "%s -- close or roll: %d days left" % (what, dte),
                     "The rule closes at 21 days; %s." % status, nums,
                     act="buy back at about %s (%s)" % (_p(mark), _m(pnl, sign=True)) + _roll_hint(p["ticker"]),
-                    marks=marks, as_of=as_of)
+                    marks=marks, as_of=as_of, rules=rules)
     return _rec(p, "HOLD", "%s -- hold" % what, status + ("; " + ", ".join(marks) if marks else "") + ".",
-                nums, act="resting buy-back at %s" % _p(buy_half), marks=marks, as_of=as_of)
+                nums, act="resting buy-back at %s" % _p(buy_half), marks=marks, as_of=as_of, rules=rules)
 
 
 # ---------------------------------------------------------------- long + short
@@ -592,7 +656,17 @@ def advise(db=None, today=None, account_id=None, book_limits=True):
                 out.append(_rec(p, "DECIDE", "%s %s -- a retired structure" % (p["ticker"], p["strategy"]),
                                 "HELM no longer advises on %s; it finishes under the rules it was opened under."
                                 % p["strategy"]))
-        out.extend(rule_flags(conn, S.book(account_id, db), today))
+        b = S.book(account_id, db)
+        for r in out:                       # s155: this position's name and sector against their limits
+            if r.get("position_id") and r["verb"] != "STALE":
+                nk = S.name_key(r["ticker"])
+                sec = b["sector_of_name"].get(nk) or b["sector_of_name"].get(r["ticker"])
+                r["rules"] = r["rules"] + [limit_row("name_limit", "%s name limit (20%%)" % nk,
+                                                     b["by_name"].get(nk, 0.0), b["name_cap"])]
+                if sec:
+                    r["rules"].append(limit_row("sector_limit", "%s sector limit (30%%)" % sec,
+                                                b["by_sector"].get(sec, 0.0), b["sector_cap"]))
+        out.extend(rule_flags(conn, b, today))
         if book_limits:
             try:
                 out.extend(book_limit_flags(account_id, db, today))
@@ -1227,6 +1301,29 @@ def _selftest():
     ok(all(R[t]["reason"] for t in R), "every recommendation carries a reason")
     pr = sorted(R.values(), key=lambda r: (r["priority"], r["ticker"]))
     ok(pr[0]["verb"] == "STALE" and pr[-1]["verb"] == "HOLD", "sorted most urgent first")
+    # s155: the rule rows -- the same comparisons as the verb
+    def rows(t):
+        return {x["key"]: x for x in R[t]["rules"]}
+    for t in ("HLD", "TP", "T21", "TB", "TD", "ER"):
+        fired = [x["key"] for x in R[t]["rules"] if x["state"] == "fired" and x["key"] in SHORT_RULE_VERB]
+        ok((SHORT_RULE_VERB[fired[0]] if fired else "HOLD") == v(t),
+           "s155 rows agree with the verb for %s: %s vs %s" % (t, fired, v(t)))
+    ok(rows("TB")["tested"]["reading"] == "spot $98.00 below strike 100", "tested reading: %s" % rows("TB")["tested"])
+    ok(rows("HLD")["tested"]["state"] == "pass" and rows("HLD")["take_profit"]["state"] == "next"
+       and rows("HLD")["take_profit"]["line"] == "buy back $1.00" and rows("HLD")["time_21"]["line"] == "10-30"
+       and rows("HLD")["time_21"]["reading"] == "27 days",
+       "next lines: the buy-back and the 21-day date: %s %s" % (rows("HLD")["take_profit"], rows("HLD")["time_21"]))
+    ok(rows("TB")["assign_default"]["line"] == "yes" and rows("TD")["assign_default"]["line"] == "no"
+       and "assign_default" not in rows("HLD"), "assignment default shown only beside a fired tested rule")
+    ok(rows("BIG")["name_limit"]["state"] == "fired" and rows("HLD")["sector_limit"]["state"] == "fired",
+       "limit rows: BIG over its name, Tech over its sector")
+    ok(rows("CC")["cc_earnings"]["state"] == "fired", "covered call: earnings inside fires")
+    ok(R["OLD"]["rules"] == [] and R["NEW"]["rules"] == [], "a stale position has no rule rows")
+    ok(rows("TB")["take_profit"]["reading"] == "short $3.50, sold $2.00", "a short dearer than sold: prices, not a percentage: %s"
+       % rows("TB")["take_profit"]["reading"])
+    ok(limit_row("x", "x", 90, 100)["state"] == "near" and limit_row("x", "x", 89.99, 100)["state"] == "pass"
+       and limit_row("x", "x", 100.01, 100)["state"] == "fired" and limit_row("x", "x", 100, 100)["state"] == "near",
+       "near = 90% of a limit; over only past it")
     # coverage: a backdated booking and an early close are not misses; a real gap is
     db2 = os.path.join(d, "c.db")
     c = sqlite3.connect(db2)
