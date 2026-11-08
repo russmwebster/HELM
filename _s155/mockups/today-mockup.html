@@ -1,0 +1,91 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Today — mockup</title>
+<style>
+:root{--bg:#0f1317;--panel:#161c22;--ink:#e6ebef;--muted:#8d99a5;--accent:#4a90e2;--amber:#e0a43a;--red:#e05555;--line:#2a333c}
+body{background:var(--bg);color:var(--ink);font:15px/1.45 -apple-system,system-ui,sans-serif;margin:0;padding:24px 16px}
+.wrap{max-width:1100px;margin:0 auto}
+.note{color:var(--muted);font-size:.8rem;margin-bottom:16px;border:1px dashed var(--line);padding:6px 10px;border-radius:6px}
+.head{display:flex;gap:14px;align-items:baseline;flex-wrap:wrap}
+h1{font-size:1.6rem;margin:0}
+.clock{margin-left:auto;color:var(--muted);font-size:.9rem}
+.strip{display:flex;flex-wrap:wrap;gap:6px 28px;margin:12px 0 4px;padding:10px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+.strip span b{display:block;color:var(--muted);font-weight:500;font-size:.75rem;text-transform:uppercase;letter-spacing:.05em}
+.strip span{font-size:1rem}
+h2{font-size:.78rem;letter-spacing:.07em;text-transform:uppercase;color:#a8b3bd;margin:24px 0 6px;font-weight:700;display:flex;gap:12px;align-items:baseline}
+h2 .meta{text-transform:none;letter-spacing:0;font-weight:400;color:var(--muted);font-size:.82rem}
+table{border-collapse:collapse;width:100%;font-size:.9rem}
+th,td{padding:6px 9px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}
+th:first-child,td:first-child,td.t,th.t{text-align:left}
+th{color:#a8b3bd;font-weight:600;font-size:.78rem}
+a{color:var(--accent);text-decoration:none}
+.red{color:var(--red)}.amber{color:var(--amber)}.dim{color:var(--muted)}
+.tw{overflow-x:auto}
+.btn{display:inline-block;border:1px solid var(--accent);color:var(--accent);border-radius:6px;padding:3px 10px;font-size:.82rem}
+.sub td{color:var(--muted)}
+.foot{margin-top:26px;display:flex;gap:18px;flex-wrap:wrap;font-size:.9rem}
+.q{display:inline-block;width:15px;height:15px;border:1px solid var(--muted);border-radius:50%;font-size:.68rem;line-height:14px;text-align:center;color:var(--muted);margin-left:4px}
+</style></head><body><div class="wrap">
+<div class="note">Mockup: Today with the board's numbers from Fri 11-06 15:15. GOOGL's share price and result are approximate. Nothing in HELM has changed.</div>
+
+<div class="head"><h1>Today</h1><span class="clock">Reading: Fri 11-06 15:15 · data check: <span class="amber">XLE missed 12:30, 15:15</span> <a href="#">details</a></span></div>
+
+<div class="strip">
+  <span><b>Sleeve</b>$295,710</span>
+  <span><b>In use</b>$262,335</span>
+  <span><b>Room</b>$33,375</span>
+  <span><b>Theta / day</b>+$180</span>
+  <span><b>Typical S&amp;P day<a class="q" href="#">?</a></b>±$2,400</span>
+  <span><b>Book delta / limit</b><span class="red">$201,594 / $147,855</span></span>
+  <span><a href="#">risk curve →</a></span>
+</div>
+
+<h2>Book rules</h2>
+<table>
+  <tr><th>Rule</th><th class="t">Result</th><th class="t">Reading</th><th class="t">Largest</th></tr>
+  <tr><td>Book delta limit</td><td class="t red">over</td><td class="t">$201,594 / $147,855</td><td class="t">DELL $37,946 · GOOGL sh $35,561 · VRT $32,800</td></tr>
+  <tr><td>Technology sector limit</td><td class="t amber">near</td><td class="t">$80,790 / $88,713</td><td class="t">CSCO · DELL · NVDA</td></tr>
+  <tr><td class="dim" colspan="4">Other book rules: pass</td></tr>
+</table>
+
+<h2>Decisions <span class="meta">rule fired on the position</span></h2>
+<div class="tw"><table>
+  <tr><th class="t">Position</th><th class="t">Rule</th><th class="t">Reading</th><th>Days</th><th>P&amp;L</th><th>Close (mid)</th><th class="t">Roll</th><th>If assigned</th><th class="t">Assignment default</th></tr>
+  <tr><td><a href="#">CSCO 105 P 11-20 ×3</a></td><td class="t red">tested · 21-day</td><td class="t">spot $94.39</td><td>14</td><td class="red">−$2,895</td><td>−$3,579</td><td class="t">none · earnings 11-12</td><td>$31,500</td><td class="t">yes · B</td></tr>
+  <tr><td><a href="#">DELL 430 P 12-04 ×1</a></td><td class="t red">tested</td><td class="t">spot $331.75</td><td>28</td><td class="red">−$8,320</td><td>−$10,455</td><td class="t">none · no net credit</td><td>$43,000</td><td class="t">yes · B</td></tr>
+  <tr><td><a href="#">NVDA PMCC 160 C 12-17-27</a></td><td class="t amber">no short</td><td class="t">floor $220.87</td><td>406</td><td class="red">−$812</td><td>—</td><td class="t">—</td><td>—</td><td class="t">next short · none passes</td></tr>
+</table></div>
+
+<h2>Holding <span class="meta">no rule fired</span></h2>
+<div class="tw"><table>
+  <tr><th class="t">Position</th><th>Days</th><th>P&amp;L</th><th>Of max profit</th><th>Cushion</th><th class="t">Earnings</th><th class="t">Next date</th></tr>
+  <tr><td><a href="#">CVX PMCC 230 C 12-18</a></td><td>42</td><td class="red">−$233</td><td>—</td><td>7.6%</td><td class="t">—</td><td class="t">21 days: 11-27</td></tr>
+  <tr><td><a href="#">FCX 57.5 P 12-18 ×5</a></td><td>42</td><td class="red">−$285</td><td>—</td><td>—</td><td class="t">—</td><td class="t">21 days: 11-27</td></tr>
+  <tr><td><a href="#">GE 300 P 12-18 ×1</a></td><td>42</td><td>+$60</td><td>8%</td><td>—</td><td class="t">—</td><td class="t">21 days: 11-27</td></tr>
+  <tr><td><a href="#">NKE PMCC 42.5 C 12-18</a></td><td>42</td><td>+$13</td><td>—</td><td>10.2%</td><td class="t">12-17</td><td class="t">21 days: 11-27</td></tr>
+  <tr><td><a href="#">VLO 330 P 12-18 ×1</a></td><td>42</td><td class="red">−$380</td><td>—</td><td>—</td><td class="t">—</td><td class="t">21 days: 11-27</td></tr>
+  <tr><td><a href="#">VRT 165 P 12-18 ×3</a></td><td>42</td><td>+$93</td><td>3%</td><td>—</td><td class="t">—</td><td class="t">21 days: 11-27</td></tr>
+  <tr><td><a href="#">GOOGL shares ×100</a></td><td>—</td><td class="red">≈ −$4,160</td><td>—</td><td>—</td><td class="t">—</td><td class="t">covered call · blocked · basis $326.62</td></tr>
+</table></div>
+
+<h2>New puts <span class="meta">list 11-06 12:14 · 102 → 67 → 38 passed · 21 declined by limits</span> <a class="btn" href="#">Run the put list</a></h2>
+<div class="tw"><table>
+  <tr><th>#</th><th class="t">Name</th><th class="t">Grade</th><th class="t">Put</th><th>Days</th><th>Delta</th><th>Premium</th><th>%/yr</th><th>Collateral</th><th>50% buy-back</th><th class="t">Earnings</th><th class="t">Limits</th></tr>
+  <tr><td>1</td><td class="t">DELL</td><td class="t">B</td><td class="t">290 P 12-18</td><td>42</td><td>0.27</td><td>$21.05</td><td>63%</td><td>$29,000</td><td>$10.53</td><td class="t">11-27</td><td class="t red">sector over</td></tr>
+  <tr><td>2</td><td class="t">MU</td><td class="t">C</td><td class="t">630 P 12-18</td><td>42</td><td>0.30</td><td>$39.83</td><td>55%</td><td>$63,000</td><td>$19.92</td><td class="t">—</td><td class="t red">sector over</td></tr>
+  <tr><td>3</td><td class="t">ARM</td><td class="t">B</td><td class="t">155 P 12-18</td><td>42</td><td>0.29</td><td>$9.62</td><td>54%</td><td>$15,500</td><td>$4.81</td><td class="t">—</td><td class="t red">sector over</td></tr>
+  <tr><td>4</td><td class="t">AMD</td><td class="t">C</td><td class="t">400 P 12-11</td><td>35</td><td>0.28</td><td>$19.48</td><td>51%</td><td>$40,000</td><td>$9.74</td><td class="t">—</td><td class="t red">sector over</td></tr>
+  <tr><td>5</td><td class="t">VRT</td><td class="t">A</td><td class="t">165 P 12-18</td><td>42</td><td>0.29</td><td>$9.20</td><td>48%</td><td>$16,500</td><td>$4.60</td><td class="t">—</td><td class="t red">name over</td></tr>
+  <tr class="sub"><td colspan="12" style="text-align:left;padding-top:10px">Best that fit</td></tr>
+  <tr><td>13</td><td class="t">FCX</td><td class="t">B</td><td class="t">55 P 12-18</td><td>42</td><td>0.26</td><td>$1.79</td><td>28%</td><td>$5,500</td><td>$0.90</td><td class="t">—</td><td class="t">fits ×5</td></tr>
+  <tr><td>15</td><td class="t">TGT</td><td class="t">C</td><td class="t">145 P 12-18</td><td>42</td><td>0.26</td><td>$4.03</td><td>24%</td><td>$14,500</td><td>$2.02</td><td class="t">11-18</td><td class="t">fits ×4</td></tr>
+  <tr><td>16</td><td class="t">DVN</td><td class="t">B</td><td class="t">40 P 12-18</td><td>42</td><td>0.29</td><td>$1.06</td><td>23%</td><td>$4,000</td><td>$0.53</td><td class="t">—</td><td class="t">fits ×12</td></tr>
+  <tr><td>17</td><td class="t">VALE</td><td class="t">B</td><td class="t">11 P 12-18</td><td>42</td><td>0.29</td><td>$0.29</td><td>23%</td><td>$1,100</td><td>$0.15</td><td class="t">—</td><td class="t">fits ×20</td></tr>
+  <tr><td>21</td><td class="t">GE</td><td class="t">A</td><td class="t">300 P 12-18</td><td>42</td><td>0.27</td><td>$7.45</td><td>22%</td><td>$30,000</td><td>$3.73</td><td class="t">—</td><td class="t">fits ×1</td></tr>
+</table></div>
+
+<div class="foot">
+  <a class="btn" href="#">Update book from Fidelity</a>
+  <a href="#">Details →</a>  <a href="#">Reference ?</a>
+</div>
+</div></body></html>

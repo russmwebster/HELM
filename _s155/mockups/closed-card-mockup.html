@@ -1,0 +1,73 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Closed card — mockup</title>
+<style>
+:root{--bg:#0f1317;--panel:#161c22;--ink:#e6ebef;--muted:#8d99a5;--accent:#4a90e2;--amber:#e0a43a;--red:#e05555;--line:#2a333c}
+body{background:var(--bg);color:var(--ink);font:15px/1.45 -apple-system,system-ui,sans-serif;margin:0;padding:24px 16px}
+.wrap{max-width:920px;margin:0 auto}
+.note{color:var(--muted);font-size:.8rem;margin-bottom:16px;border:1px dashed var(--line);padding:6px 10px;border-radius:6px}
+.nav{font-size:.9rem;color:var(--muted);display:flex;gap:14px;margin-bottom:10px}
+.nav a{color:var(--accent);text-decoration:none}
+.head{display:flex;gap:14px;align-items:baseline;flex-wrap:wrap}
+h1{font-size:1.6rem;margin:0}
+.tag{border:1px solid var(--muted);border-radius:4px;padding:1px 6px;font-size:.75rem;color:var(--muted)}
+.pnl{font-size:1.15rem;font-weight:600}
+.clock{margin-left:auto;color:var(--muted);font-size:.9rem}
+.facts{display:flex;flex-wrap:wrap;gap:6px 24px;margin:12px 0 6px;padding:10px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line);font-size:.95rem}
+.facts span b{color:var(--muted);font-weight:500;margin-right:6px}
+h2{font-size:.78rem;letter-spacing:.07em;text-transform:uppercase;color:#a8b3bd;margin:22px 0 6px;font-weight:700}
+h2 .meta{text-transform:none;letter-spacing:0;font-weight:400;color:var(--muted);font-size:.82rem;margin-left:8px}
+table{border-collapse:collapse;width:100%;font-size:.93rem}
+th,td{padding:6px 10px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}
+th:first-child,td:first-child,td.t,th.t{text-align:left}
+th{color:#a8b3bd;font-weight:600;font-size:.8rem}
+td.l{color:var(--muted)}
+.red{color:var(--red)}.dim{color:var(--muted)}
+.tw{overflow-x:auto}
+svg text{fill:var(--muted);font-size:11px}
+</style></head><body><div class="wrap">
+<div class="note">Mockup: XLE's closed put with its real numbers. Nothing in HELM has changed.</div>
+
+<div class="nav"><a href="#">← Today</a><span>closed</span></div>
+<div class="head">
+  <h1>XLE</h1><span class="tag">CSP</span><span class="tag">REAL</span><span class="tag">CLOSED</span>
+  <span class="pnl red">−$3,264</span><span class="dim">gross</span>
+  <span class="clock">Closed Fri 11-06 · discretionary</span>
+</div>
+
+<div class="facts">
+  <span><b>Contract</b>−8 × Dec 4 $67 P</span>
+  <span><b>Held</b>7 days (10-30 → 11-06)</span>
+  <span><b>Collateral</b>$53,600</span>
+  <span><b>On collateral</b><span class="red">−6.1%</span></span>
+  <span><b>Grade</b>FUND · Energy</span>
+</div>
+
+<h2>Entry and exit</h2>
+<table>
+  <tr><th></th><th>Entry 10-30</th><th>Exit 11-06</th></tr>
+  <tr><td class="l">Option price</td><td>$1.22 sold</td><td>$5.30 bought</td></tr>
+  <tr><td class="l">Cash</td><td>+$976</td><td class="red">−$4,240</td></tr>
+  <tr><td class="l">XLE</td><td>$70.02</td><td>$62.03</td></tr>
+  <tr><td class="l">Days left</td><td>35</td><td>28</td></tr>
+  <tr><td class="l">IV</td><td>29.3</td><td>28.1</td></tr>
+</table>
+
+<h2>Rules at the close</h2>
+<table>
+  <tr><th class="t">Rule</th><th class="t">Result</th><th class="t">Reading</th></tr>
+  <tr><td>Tested</td><td class="t">yes</td><td class="t">spot $62.03 below strike $67</td></tr>
+  <tr><td>Energy sector limit</td><td class="t">over before the close</td><td class="t">back under after it</td></tr>
+  <tr><td class="dim" colspan="3">Other rules: pass</td></tr>
+</table>
+
+<h2>Cost to buy back <span class="meta">last check each day</span></h2>
+<svg viewBox="0 0 620 170" style="width:100%;max-width:620px">
+  <line x1="50" y1="128" x2="590" y2="128" stroke="#2a333c" stroke-dasharray="4 4"/>
+  <text x="520" y="122">sold for $976</text>
+  <polyline fill="none" stroke="#4a90e2" stroke-width="2" points="80,98 205,76 330,64 455,48 580,20"/>
+  <circle cx="580" cy="20" r="4" fill="#e05555"/><text x="520" y="14">$4,240</text>
+  <text x="70" y="160">11-02</text><text x="195" y="160">11-03</text><text x="320" y="160">11-04</text><text x="445" y="160">11-05</text><text x="565" y="160">11-06</text>
+</svg>
+<div class="dim" style="font-size:.8rem">Mockup line: only the 11-06 point ($4,240), the $1,672 low and the sale are real; the middle points are placed by eye.</div>
+</div></body></html>

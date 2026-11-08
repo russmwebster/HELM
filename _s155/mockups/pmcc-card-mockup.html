@@ -1,0 +1,118 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PMCC card — mockup</title>
+<style>
+:root{--bg:#0f1317;--panel:#161c22;--ink:#e6ebef;--muted:#8d99a5;--accent:#4a90e2;--amber:#e0a43a;--red:#e05555;--line:#2a333c}
+body{background:var(--bg);color:var(--ink);font:15px/1.45 -apple-system,system-ui,sans-serif;margin:0;padding:24px 16px}
+.wrap{max-width:920px;margin:0 auto}
+.note{color:var(--muted);font-size:.8rem;margin-bottom:16px;border:1px dashed var(--line);padding:6px 10px;border-radius:6px}
+.nav{font-size:.9rem;color:var(--muted);display:flex;gap:14px;margin-bottom:10px}
+.nav a{color:var(--accent);text-decoration:none}
+.head{display:flex;gap:14px;align-items:baseline;flex-wrap:wrap}
+h1{font-size:1.6rem;margin:0}
+.tag{border:1px solid var(--muted);border-radius:4px;padding:1px 6px;font-size:.75rem;color:var(--muted)}
+.pnl{font-size:1.15rem;font-weight:600}
+.clock{margin-left:auto;color:var(--muted);font-size:.9rem}
+.facts{display:flex;flex-wrap:wrap;gap:6px 24px;margin:12px 0 6px;padding:10px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line);font-size:.95rem}
+.facts span b{color:var(--muted);font-weight:500;margin-right:6px}
+h2{font-size:.78rem;letter-spacing:.07em;text-transform:uppercase;color:#a8b3bd;margin:22px 0 6px;font-weight:700}
+h2 .meta{text-transform:none;letter-spacing:0;font-weight:400;color:var(--muted);font-size:.82rem;margin-left:8px}
+table{border-collapse:collapse;width:100%;font-size:.93rem}
+th,td{padding:6px 10px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}
+th:first-child,td:first-child,td.t,th.t{text-align:left}
+th{color:#a8b3bd;font-weight:600;font-size:.8rem}
+td.l{color:var(--muted)}
+.red{color:var(--red)}.amber{color:var(--amber)}.dim{color:var(--muted)}
+.tw{overflow-x:auto}
+svg text{fill:var(--muted);font-size:11px}
+.two{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:24px}
+.sep{margin:40px 0 10px;border-top:2px dashed var(--line);padding-top:14px;color:var(--muted);font-size:.85rem}
+@media(max-width:720px){.two{grid-template-columns:1fr}}
+</style></head><body><div class="wrap">
+<div class="note">Mockup: CVX's PMCC card with its real numbers from the Fri 11-06 15:15 reading. Below it is the part that changes when no short is open (NVDA). Nothing in HELM has changed.</div>
+
+<div class="nav"><a href="#">← Today</a><a href="#">previous</a><a href="#">next</a><span>2 of 9</span></div>
+<div class="head">
+  <h1>CVX</h1><span class="tag">PMCC</span><span class="tag">REAL</span>
+  <span class="pnl red">−$233</span>
+  <span class="clock">Reading: Fri 11-06 15:15</span>
+</div>
+
+<div class="facts">
+  <span><b>Spot</b>$213.71</span>
+  <span><b>To the short strike</b>+7.6%</span>
+  <span><b>Even on the whole trade at</b>$221.75</span>
+  <span><b>Earnings</b>not known</span>
+</div>
+
+<svg viewBox="0 0 620 70" style="width:100%;max-width:620px;margin-top:4px">
+  <line x1="40" y1="34" x2="600" y2="34" stroke="#2a333c" stroke-width="6" stroke-linecap="round"/>
+  <line x1="80" y1="22" x2="80" y2="46" stroke="#8d99a5" stroke-width="2"/><text x="66" y="62">long 170</text>
+  <line x1="520.8" y1="22" x2="520.8" y2="46" stroke="#8d99a5" stroke-dasharray="3 3"/><text x="478" y="14">next short &gt; 225.10</text>
+  <line x1="560" y1="22" x2="560" y2="46" stroke="#e6ebef" stroke-width="2"/><text x="540" y="62">short 230</text>
+  <circle cx="389.7" cy="34" r="6" fill="#4a90e2"/><text x="370" y="62">$213.71</text>
+</svg>
+
+<h2>Legs</h2>
+<table>
+  <tr><th class="t">Leg</th><th class="t">Contract</th><th>Days</th><th>Paid / sold</th><th>Now (mid)</th></tr>
+  <tr><td>Long</td><td class="t">+1 Jan 21 '28 $170 C</td><td>441</td><td>$55.10</td><td>$52.08</td></tr>
+  <tr><td>Short</td><td class="t">−1 Dec 18 '26 $230 C</td><td>42</td><td>$3.35</td><td>$2.66</td></tr>
+</table>
+
+<h2>Rules <span class="meta">none fired · 6 pass</span></h2>
+<table>
+  <tr><th class="t">Next line</th><th>Now</th><th>Line</th></tr>
+  <tr><td>Short 50% profit-take</td><td>21% kept</td><td>buy back $1.68</td></tr>
+  <tr><td>Short 21 days left</td><td>42 days</td><td>11-27</td></tr>
+  <tr><td>Loss limit (whole trade)</td><td>−$233</td><td>−$2,755</td></tr>
+  <tr><td>Long review at 90 days</td><td>441 days</td><td>2027-10-23</td></tr>
+  <tr><td>Next short: width floor</td><td>—</td><td>strike &gt; $225.10</td></tr>
+</table>
+
+<h2>Choices <span class="meta">at the mid; at the bid/ask below</span></h2>
+<table>
+  <tr><th></th><th>Hold</th><th>Buy back short</th><th>Close all</th></tr>
+  <tr><td class="l">Cash today (mid)</td><td>$0</td><td>−$266</td><td>+$4,942</td></tr>
+  <tr><td class="l">Cash today (bid/ask)</td><td>$0</td><td>−$284</td><td>+$4,811</td></tr>
+  <tr><td class="l">Locked in on the short</td><td>—</td><td>+$69</td><td>+$69</td></tr>
+  <tr><td class="l">Whole trade if done (mid)</td><td>—</td><td>—</td><td class="red">−$233</td></tr>
+</table>
+
+<div class="two">
+<div>
+<h2>Money</h2>
+<table>
+  <tr><td class="l">Long paid</td><td class="red">−$5,510</td></tr>
+  <tr><td class="l">Shorts, net</td><td>+$335</td></tr>
+  <tr><td class="l">Close value (mid)</td><td>+$4,942</td></tr>
+  <tr><td><b>Whole trade</b></td><td class="red"><b>−$233</b></td></tr>
+</table>
+</div>
+<div>
+<h2>Rent vs decay <span class="meta">per week</span></h2>
+<table>
+  <tr><td class="l">Short earns</td><td>+$56</td></tr>
+  <tr><td class="l">Long loses to time</td><td class="red">−$21</td></tr>
+  <tr><td><b>Net</b></td><td><b>+$35</b></td></tr>
+  <tr><td class="l">Rent cover</td><td>2.7×</td></tr>
+</table>
+</div>
+</div>
+
+<div class="sep">When no short is open, the rules and choices change. NVDA, same reading:</div>
+
+<div class="head"><h1 style="font-size:1.3rem">NVDA</h1><span class="tag">PMCC</span><span class="tag">REAL</span><span class="pnl red">−$812</span></div>
+<h2>Rules <span class="meta">1 fired</span></h2>
+<table>
+  <tr><th class="t">Rule</th><th class="t">Result</th><th class="t">Reading</th></tr>
+  <tr><td>Short open</td><td class="t">none</td><td class="t">closed 11-05 at $1.37</td></tr>
+  <tr><td>Next short: width floor</td><td class="t">none passes</td><td class="t">strike &gt; $220.87 · calls run 11-06 15:50</td></tr>
+</table>
+<h2>Choices</h2>
+<table>
+  <tr><th></th><th>Sell next short</th><th>Hold the long</th><th>Close the long</th></tr>
+  <tr><td class="l">Cash today (mid)</td><td>none passes</td><td>$0</td><td>+$5,275</td></tr>
+  <tr><td class="l">Whole trade if done</td><td>—</td><td>—</td><td class="red">−$812</td></tr>
+</table>
+</div></body></html>

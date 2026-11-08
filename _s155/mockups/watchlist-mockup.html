@@ -1,0 +1,59 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Watchlist — mockup</title>
+<style>
+:root{--bg:#0f1317;--panel:#161c22;--ink:#e6ebef;--muted:#8d99a5;--accent:#4a90e2;--amber:#e0a43a;--red:#e05555;--line:#2a333c}
+body{background:var(--bg);color:var(--ink);font:15px/1.45 -apple-system,system-ui,sans-serif;margin:0;padding:24px 16px}
+.wrap{max-width:1100px;margin:0 auto}
+.note{color:var(--muted);font-size:.8rem;margin-bottom:16px;border:1px dashed var(--line);padding:6px 10px;border-radius:6px}
+.head{display:flex;gap:14px;align-items:baseline;flex-wrap:wrap}
+h1{font-size:1.6rem;margin:0}
+.clock{margin-left:auto;color:var(--muted);font-size:.9rem}
+.strip{display:flex;flex-wrap:wrap;gap:6px 28px;margin:12px 0 14px;padding:10px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+.strip span b{display:block;color:var(--muted);font-weight:500;font-size:.75rem;text-transform:uppercase;letter-spacing:.05em}
+.filters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;font-size:.85rem}
+.filters span{border:1px solid var(--line);border-radius:14px;padding:2px 10px;color:var(--muted)}
+.filters span.on{border-color:var(--accent);color:var(--accent)}
+table{border-collapse:collapse;width:100%;font-size:.9rem}
+th,td{padding:5px 9px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap}
+th{color:#a8b3bd;font-weight:600;font-size:.78rem;cursor:pointer}
+td.r,th.r{text-align:right}
+.dim{color:var(--muted)}.amber{color:var(--amber)}.red{color:var(--red)}
+.tw{overflow-x:auto}
+a{color:var(--accent);text-decoration:none}
+</style></head><body><div class="wrap">
+<div class="note">Mockup: Watchlist, with a sample of 16 of the 135 rows from the live page. The "graded" dates and "last report" column are illustrative where the live page doesn't show them. Nothing in HELM has changed.</div>
+
+<div class="head"><h1>Watchlist</h1><span class="clock">As of Sun 11-08</span></div>
+
+<div class="strip">
+  <span><b>Names</b>135</span>
+  <span><b>Offered</b>102</span>
+  <span><b>Graded A–C</b>78</span>
+  <span><b>Funds</b>24</span>
+  <span><b>Held</b>10</span>
+  <span><b>Next report not known</b><span class="amber">24</span></span>
+</div>
+
+<div class="filters"><span class="on">All</span><span>Offered</span><span>Not offered</span><span>Held</span><span>Report within 10 days</span><span>Technology</span><span>Healthcare</span><span>…</span></div>
+
+<div class="tw"><table>
+  <tr><th>Ticker ▲</th><th>Company</th><th>Sector</th><th>Grade</th><th>Graded</th><th>Offered</th><th>Last report</th><th>Next report</th><th>Held</th></tr>
+  <tr><td>AA</td><td>Alcoa</td><td>Basic Materials</td><td>D</td><td>10-24</td><td class="dim">no</td><td>10-15</td><td class="amber">not known</td><td></td></tr>
+  <tr><td>AAPL</td><td>Apple</td><td>Technology</td><td>B</td><td>10-24</td><td>yes</td><td>11-02</td><td class="amber">not known</td><td></td></tr>
+  <tr><td>AMAT</td><td>Applied Materials</td><td>Technology</td><td>A</td><td>10-24</td><td>yes</td><td>08-13</td><td>11-12</td><td></td></tr>
+  <tr><td>CSCO</td><td>Cisco</td><td>Technology</td><td>B</td><td>10-24</td><td>yes</td><td>08-12</td><td>11-12</td><td><a href="#">CSP</a></td></tr>
+  <tr><td>CVX</td><td>Chevron</td><td>Energy</td><td>C</td><td>10-24</td><td>yes</td><td>10-30</td><td class="amber">not known</td><td><a href="#">PMCC</a></td></tr>
+  <tr><td>DAL</td><td class="amber">no name</td><td>Industrials</td><td>B</td><td>10-24</td><td>yes</td><td>10-09</td><td class="amber">not known</td><td></td></tr>
+  <tr><td>DELL</td><td>Dell Technologies</td><td>Technology</td><td>B</td><td>10-24</td><td>yes</td><td>08-28</td><td>11-27</td><td><a href="#">CSP</a></td></tr>
+  <tr><td>FCX</td><td>Freeport-McMoRan</td><td>Basic Materials</td><td>B</td><td>10-24</td><td>yes</td><td>10-27</td><td class="amber">not known</td><td><a href="#">CSP</a></td></tr>
+  <tr><td>GE</td><td>GE Aerospace</td><td>Industrials</td><td>A</td><td>10-24</td><td>yes</td><td>10-20</td><td class="amber">not known</td><td><a href="#">CSP</a></td></tr>
+  <tr><td>GOOGL</td><td>Alphabet</td><td>Communication Services</td><td>B</td><td>10-24</td><td>yes</td><td>10-28</td><td class="amber">not known</td><td><a href="#">shares</a></td></tr>
+  <tr><td>JNJ</td><td>Johnson &amp; Johnson</td><td>Healthcare</td><td>B</td><td>10-24</td><td>yes</td><td>10-13</td><td>01-20</td><td></td></tr>
+  <tr><td>MU</td><td>Micron</td><td>Technology</td><td>C</td><td>10-24</td><td>yes</td><td>09-23</td><td>12-23</td><td></td></tr>
+  <tr><td>NVDA</td><td>NVIDIA</td><td>Technology</td><td>B</td><td>10-24</td><td>yes</td><td>08-26</td><td>11-17</td><td><a href="#">PMCC</a></td></tr>
+  <tr><td>PEP</td><td>PepsiCo</td><td>Consumer Defensive</td><td>B</td><td>10-24</td><td>yes</td><td>10-08</td><td class="amber">not known</td><td></td></tr>
+  <tr><td>SPY</td><td>SPDR S&amp;P 500 ETF</td><td>US equity index</td><td>FUND</td><td>—</td><td>yes</td><td>—</td><td>—</td><td></td></tr>
+  <tr><td>XLV</td><td>Health Care Select SPDR</td><td>Healthcare</td><td>FUND</td><td>—</td><td>yes</td><td>—</td><td>—</td><td></td></tr>
+</table></div>
+</div></body></html>

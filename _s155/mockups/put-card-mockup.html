@@ -1,0 +1,94 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Put card — mockup</title>
+<style>
+:root{--bg:#0f1317;--panel:#161c22;--ink:#e6ebef;--muted:#8d99a5;--accent:#4a90e2;--amber:#e0a43a;--red:#e05555;--line:#2a333c}
+body{background:var(--bg);color:var(--ink);font:15px/1.45 -apple-system,system-ui,sans-serif;margin:0;padding:24px 16px}
+.wrap{max-width:920px;margin:0 auto}
+.note{color:var(--muted);font-size:.8rem;margin-bottom:16px;border:1px dashed var(--line);padding:6px 10px;border-radius:6px}
+.nav{font-size:.9rem;color:var(--muted);display:flex;gap:14px;margin-bottom:10px}
+.nav a{color:var(--accent);text-decoration:none}
+.head{display:flex;gap:14px;align-items:baseline;flex-wrap:wrap}
+h1{font-size:1.6rem;margin:0}
+.tag{border:1px solid var(--muted);border-radius:4px;padding:1px 6px;font-size:.75rem;color:var(--muted)}
+.pnl{font-size:1.15rem;font-weight:600}
+.clock{margin-left:auto;color:var(--muted);font-size:.9rem}
+.facts{display:flex;flex-wrap:wrap;gap:6px 24px;margin:12px 0 18px;padding:10px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line);font-size:.95rem}
+.facts span b{color:var(--muted);font-weight:500;margin-right:6px}
+h2{font-size:.78rem;letter-spacing:.07em;text-transform:uppercase;color:#a8b3bd;margin:22px 0 6px;font-weight:700}
+table{border-collapse:collapse;width:100%;font-size:.93rem}
+th,td{padding:6px 10px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}
+th:first-child,td:first-child{text-align:left}
+th{color:#a8b3bd;font-weight:600;font-size:.8rem}
+th.grp{text-align:center;border-bottom:1px solid #3a4550}
+td.l{color:var(--muted)}
+.red{color:var(--red)}.amber{color:var(--amber)}.dim{color:var(--muted)}
+.q{display:inline-block;width:16px;height:16px;border:1px solid var(--muted);border-radius:50%;font-size:.7rem;line-height:15px;text-align:center;color:var(--muted);margin-left:6px;text-decoration:none;vertical-align:1px}
+.cmd{margin-top:22px;font-size:.85rem;color:var(--muted)}
+code{font:.85rem ui-monospace,Menlo,monospace;color:#b8c2cc}
+.tw{overflow-x:auto}
+</style></head><body><div class="wrap">
+<div class="note">Mockup: CSCO's real numbers from the Fri 11-06 15:15 reading and the 11-08 recovery run. Nothing in HELM has changed.</div>
+
+<div class="nav"><a href="#">← Today</a><a href="#">previous</a><a href="#">next</a><span>1 of 9</span></div>
+<div class="head">
+  <h1>CSCO</h1><span class="tag">CSP</span><span class="tag">REAL</span>
+  <span class="pnl red">−$2,895</span>
+  <span class="clock">Reading: Fri 11-06 15:15</span>
+</div>
+
+<div class="facts">
+  <span><b>Contract</b>−3 × Nov 20 $105 P</span>
+  <span><b>Spot</b>$94.39</span>
+  <span><b>Days left</b>14</span>
+  <span><b>Break-even</b>$102.72</span>
+  <span><b>Delta</b>0.78</span>
+  <span><b>IV</b>63.6</span>
+  <span><b>Earnings</b>11-12</span>
+</div>
+
+<h2>Rules</h2>
+<table>
+  <tr><th>Rule</th><th>Result</th><th>Reading</th></tr>
+  <tr><td>21-day close-or-roll</td><td class="red">fired</td><td>14 days</td></tr>
+  <tr><td>Tested</td><td class="red">yes</td><td>spot $94.39 below strike $105</td></tr>
+  <tr><td>Book delta limit</td><td class="red">over</td><td>$201,594 / $147,855</td></tr>
+  <tr><td>Technology sector limit</td><td class="amber">near</td><td>$80,790 / $88,713</td></tr>
+  <tr><td>Assignment default</td><td>yes</td><td>grade B</td></tr>
+  <tr><td>Covered calls if assigned</td><td>blocked</td><td>basis $102.72, spot 8.1% below</td></tr>
+  <tr><td>Roll</td><td>none</td><td>earnings 11-12, inside 10 days</td></tr>
+  <tr><td class="dim" colspan="3">Other rules: pass</td></tr>
+</table>
+
+<h2>Choices</h2>
+<table>
+  <tr><th></th><th>Close now</th><th>Roll</th><th>Keep</th></tr>
+  <tr><td class="l">Cash today (mid)</td><td>−$3,579</td><td>—</td><td>$0</td></tr>
+  <tr><td class="l">Cash today (ask)</td><td>−$3,705</td><td>—</td><td>$0</td></tr>
+  <tr><td class="l">Collateral freed</td><td>$31,500</td><td>—</td><td>—</td></tr>
+  <tr><td class="l">Still to earn (time value)</td><td>—</td><td>—</td><td>$396</td></tr>
+  <tr><td class="l">Chance assigned 11-20 <span class="dim">model</span><a class="q" href="#">?</a></td><td>—</td><td>—</td><td>85%</td></tr>
+  <tr><td class="l">If assigned: pay / worth now</td><td>—</td><td>—</td><td>$31,500 / $28,317</td></tr>
+</table>
+
+<h2>If assigned <span class="dim" style="text-transform:none;letter-spacing:0">model</span><a class="q" href="#">?</a></h2>
+<table>
+  <tr><th></th><th>3 months</th><th>A year</th></tr>
+  <tr><td class="l">Back to $102.72, price alone</td><td>45%</td><td>62%</td></tr>
+  <tr><td class="l">Back to $102.72, with covered calls</td><td>44%</td><td>62%</td></tr>
+  <tr><td class="l">Covered-call rent</td><td>—</td><td>$723</td></tr>
+</table>
+
+<h2>Keep vs switch to FCX 12-18 $55 P <span class="dim" style="text-transform:none;letter-spacing:0">model</span><a class="q" href="#">?</a></h2>
+<div class="dim" style="font-size:.85rem;margin-bottom:4px">FCX: list rank 13 · 28%/yr · delta 0.26 · Basic Materials · held · both from $27,793 today</div>
+<div class="tw"><table>
+  <tr><th></th><th class="grp" colspan="2">3 months</th><th class="grp" colspan="2">A year</th></tr>
+  <tr><th></th><th>Keep</th><th>Switch</th><th>Keep</th><th>Switch</th></tr>
+  <tr><td class="l">Average result</td><td>+$195</td><td>+$157</td><td>−$13</td><td>+$617</td></tr>
+  <tr><td class="l">Middle result</td><td>+$387</td><td>+$1,089</td><td>+$285</td><td>+$887</td></tr>
+  <tr><td class="l">Chance of a loss</td><td>47%</td><td>37%</td><td>49%</td><td>47%</td></tr>
+  <tr><td class="l">Worst 1 in 10</td><td>−$5,585</td><td>−$4,655</td><td>−$9,160</td><td>−$10,753</td></tr>
+</table></div>
+
+<div class="cmd">Roll prices from 11-02 · <code>cd ~/Projects/helm &amp;&amp; helm roll CSCO</code></div>
+</div></body></html>

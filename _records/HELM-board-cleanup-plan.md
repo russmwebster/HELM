@@ -13,7 +13,7 @@ rebuilt to them, one step at a time, each tested and committed on its own.*
 - Data health stays off the menu (one line on Today); its page is reached only from that line. "Data health →" leaves Today's footer.
 - Off-menu legacy pages (Positions, Scan, Outcomes, Dashboard, Open) are not redesigned — they go to the 12-01 legacy review.
 
-## Mockups (s155, in the session's outputs; numbers from Fri 11-06 15:15)
+## Mockups (s155, `~/Projects/helm/_s155/mockups/`; numbers from Fri 11-06 15:15)
 Put card (CSCO) · Today · Details · Watchlist · PMCC card (CVX, and NVDA with no short) · closed card (XLE).
 
 ## Build order

@@ -1,0 +1,134 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Details — mockup</title>
+<style>
+:root{--bg:#0f1317;--panel:#161c22;--ink:#e6ebef;--muted:#8d99a5;--accent:#4a90e2;--amber:#e0a43a;--red:#e05555;--line:#2a333c;--bar:#3a4a5a}
+body{background:var(--bg);color:var(--ink);font:15px/1.45 -apple-system,system-ui,sans-serif;margin:0;padding:24px 16px}
+.wrap{max-width:1100px;margin:0 auto}
+.note{color:var(--muted);font-size:.8rem;margin-bottom:16px;border:1px dashed var(--line);padding:6px 10px;border-radius:6px}
+.head{display:flex;gap:14px;align-items:baseline;flex-wrap:wrap}
+h1{font-size:1.6rem;margin:0}
+.clock{margin-left:auto;color:var(--muted);font-size:.9rem}
+.strip{display:flex;flex-wrap:wrap;gap:6px 28px;margin:12px 0 4px;padding:10px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+.strip span b{display:block;color:var(--muted);font-weight:500;font-size:.75rem;text-transform:uppercase;letter-spacing:.05em}
+h2{font-size:.78rem;letter-spacing:.07em;text-transform:uppercase;color:#a8b3bd;margin:26px 0 6px;font-weight:700}
+h2 .meta{text-transform:none;letter-spacing:0;font-weight:400;color:var(--muted);font-size:.82rem;margin-left:8px}
+table{border-collapse:collapse;width:100%;font-size:.9rem}
+th,td{padding:5px 9px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}
+th:first-child,td:first-child,td.t,th.t{text-align:left}
+th{color:#a8b3bd;font-weight:600;font-size:.78rem}
+.red{color:var(--red)}.amber{color:var(--amber)}.dim{color:var(--muted)}
+.tw{overflow-x:auto}
+.two{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:24px}
+.barc{width:140px}
+.bar{height:8px;background:var(--panel);border-radius:4px;position:relative}
+.bar i{position:absolute;left:0;top:0;bottom:0;background:var(--bar);border-radius:4px}
+.bar i.amber{background:var(--amber)}
+.q{display:inline-block;width:15px;height:15px;border:1px solid var(--muted);border-radius:50%;font-size:.68rem;line-height:14px;text-align:center;color:var(--muted);margin-left:6px;text-transform:none;letter-spacing:0}
+svg text{fill:var(--muted);font-size:11px}
+@media(max-width:760px){.two{grid-template-columns:1fr}}
+</style></head><body><div class="wrap">
+<div class="note">Mockup: Details with the board's numbers as of Fri 11-06. Nothing in HELM has changed.</div>
+
+<div class="head"><h1>Details</h1><span class="clock">Reading: Fri 11-06 15:15 · <span class="amber">some readings 11-05</span></span></div>
+
+<div class="strip">
+  <span><b>Sleeve</b>$295,710</span>
+  <span><b>Realized since 10-24</b><span class="red">−$4,290</span></span>
+  <span><b>Fees since 10-24</b>$42</span>
+  <span><b>In use</b>$262,335</span>
+  <span><b>Room</b>$33,375</span>
+</div>
+
+<h2>Limits</h2>
+<div class="two">
+  <div class="tw"><table>
+    <tr><th class="t">Name</th><th>In use</th><th>Of $59,142</th><th class="barc"></th></tr>
+    <tr><td>VRT</td><td>$49,500</td><td>84%</td><td class="barc"><div class="bar"><i style="width:84%"></i></div></td></tr>
+    <tr><td>DELL</td><td>$43,000</td><td>73%</td><td class="barc"><div class="bar"><i style="width:73%"></i></div></td></tr>
+    <tr><td>GOOG + GOOGL</td><td>$33,500</td><td>57%</td><td class="barc"><div class="bar"><i style="width:57%"></i></div></td></tr>
+    <tr><td>VLO</td><td>$33,000</td><td>56%</td><td class="barc"><div class="bar"><i style="width:56%"></i></div></td></tr>
+    <tr><td>CSCO</td><td>$31,500</td><td>53%</td><td class="barc"><div class="bar"><i style="width:53%"></i></div></td></tr>
+    <tr><td>GE</td><td>$30,000</td><td>51%</td><td class="barc"><div class="bar"><i style="width:51%"></i></div></td></tr>
+    <tr><td>FCX</td><td>$28,750</td><td>49%</td><td class="barc"><div class="bar"><i style="width:49%"></i></div></td></tr>
+    <tr><td>NVDA</td><td>$6,290</td><td>11%</td><td class="barc"><div class="bar"><i style="width:11%"></i></div></td></tr>
+    <tr><td>CVX</td><td>$5,510</td><td>9%</td><td class="barc"><div class="bar"><i style="width:9%"></i></div></td></tr>
+    <tr><td>NKE</td><td>$1,285</td><td>2%</td><td class="barc"><div class="bar"><i style="width:2%"></i></div></td></tr>
+  </table></div>
+  <div class="tw"><table>
+    <tr><th class="t">Sector</th><th>In use</th><th>Of $88,713</th><th class="barc"></th></tr>
+    <tr><td>Technology</td><td class="amber">$80,790</td><td class="amber">91%</td><td class="barc"><div class="bar"><i class="amber" style="width:91%"></i></div></td></tr>
+    <tr><td>Industrials</td><td>$79,500</td><td>89.6%</td><td class="barc"><div class="bar"><i style="width:89.6%"></i></div></td></tr>
+    <tr><td>Energy</td><td>$38,510</td><td>43%</td><td class="barc"><div class="bar"><i style="width:43%"></i></div></td></tr>
+    <tr><td>Communication Services</td><td>$33,500</td><td>38%</td><td class="barc"><div class="bar"><i style="width:38%"></i></div></td></tr>
+    <tr><td>Basic Materials</td><td>$28,750</td><td>32%</td><td class="barc"><div class="bar"><i style="width:32%"></i></div></td></tr>
+    <tr><td>Consumer Cyclical</td><td>$1,285</td><td>1%</td><td class="barc"><div class="bar"><i style="width:1%"></i></div></td></tr>  </table></div>
+</div>
+
+<h2>Greeks</h2>
+<div class="strip" style="margin-top:0">
+  <span><b>Book delta (S&amp;P $) / limit</b><span class="red">$201,594 / $147,855</span></span>
+  <span><b>Theta / day · range</b>$180 · $148–$355</span>
+  <span><b>Vega / vol point</b>−$111</span>
+</div>
+<div class="tw"><table>
+  <tr><th class="t">Name</th><th class="t">Grade</th><th class="t">Strategy</th><th>Delta (sh)</th><th>Delta (S&amp;P $)</th><th>Theta</th><th>Vega</th><th>S&amp;P −5%</th></tr>
+  <tr><td>CSCO</td><td class="t">B</td><td class="t">CSP</td><td>+235</td><td>+$22,423</td><td>+$33</td><td>−$15</td><td>−$1,208</td></tr>
+  <tr><td>CVX</td><td class="t">C</td><td class="t">PMCC</td><td>+59</td><td>+$6,178</td><td>+$5</td><td>+$38</td><td>−$324</td></tr>
+  <tr><td>DELL</td><td class="t">B</td><td class="t">CSP</td><td>+82</td><td>+$37,946</td><td>+$34</td><td>−$23</td><td>−$1,986</td></tr>
+  <tr><td>FCX</td><td class="t">B</td><td class="t">CSP</td><td>+182</td><td>+$14,768</td><td>+$20</td><td>−$40</td><td>−$894</td></tr>
+  <tr><td>GE</td><td class="t">A</td><td class="t">CSP</td><td>+26</td><td>+$11,366</td><td>+$16</td><td>−$36</td><td>−$748</td></tr>
+  <tr><td>GOOGL</td><td class="t">B</td><td class="t">Shares</td><td>+100</td><td>+$35,561</td><td>$0</td><td>$0</td><td>−$1,778</td></tr>
+  <tr><td>NKE</td><td class="t">B</td><td class="t">PMCC</td><td>+57</td><td>+$2,484</td><td>+$1</td><td>+$5</td><td>−$135</td></tr>
+  <tr><td>NVDA</td><td class="t">B</td><td class="t">PMCC</td><td>+75</td><td>+$31,379</td><td>−$5</td><td>+$63</td><td>−$1,491</td></tr>
+  <tr><td>VLO</td><td class="t">C</td><td class="t">CSP</td><td>+35</td><td>+$6,690</td><td>+$25</td><td>−$43</td><td>−$363</td></tr>
+  <tr><td>VRT</td><td class="t">A</td><td class="t">CSP</td><td>+86</td><td>+$32,800</td><td>+$51</td><td>−$60</td><td>−$2,054</td></tr>
+</table></div>
+
+<h2>Market moves <span class="meta">model, delta + gamma</span><a class="q" href="#">?</a></h2>
+<div class="two">
+  <svg viewBox="0 0 620 230" style="width:100%;max-width:620px">
+    <rect x="277.6" y="10" width="64.8" height="195" fill="#4a90e2" opacity=".12"/>
+    <line x1="40" y1="94.6" x2="580" y2="94.6" stroke="#2a333c"/>
+    <line x1="310" y1="10" x2="310" y2="205" stroke="#2a333c"/>
+    <polyline fill="none" stroke="#4a90e2" stroke-width="2" points="40,198.9 175,142.8 256,113 283,103.6 310,94.6 337,85.9 364,77.6 445,54.3 580,21.9"/>
+    <text x="40" y="222">−10%</text><text x="168" y="222">−5%</text><text x="304" y="222">0</text><text x="436" y="222">+5%</text><text x="560" y="222">+10%</text>
+    <text x="44" y="192">−$23,761</text><text x="520" y="36">+$16,558</text>
+    <text x="282" y="22">typical day</text>
+  </svg>
+  <div class="tw"><table>
+    <tr><th class="t">S&amp;P move</th><th>Book</th></tr>
+    <tr><td>−10%</td><td class="red">−$23,761</td></tr>
+    <tr><td>−5%</td><td class="red">−$10,980</td></tr>
+    <tr><td>−2%</td><td>−$4,176</td></tr>
+    <tr><td>Typical day (±1.2%)</td><td>−$2,471 / +$2,367</td></tr>
+    <tr><td>+2%</td><td>+$3,888</td></tr>
+    <tr><td>+5%</td><td>+$9,179</td></tr>
+    <tr><td>+10%</td><td>+$16,558</td></tr>
+    <tr><td>Implied vol +10 points</td><td>−$1,110</td></tr>
+  </table></div>
+</div>
+
+<h2>Expiries</h2>
+<div class="tw"><table>
+  <tr><th class="t">Date</th><th>Frees</th><th class="t">What expires</th></tr>
+  <tr><td>2026-11-20</td><td>$31,500</td><td class="t">CSCO 105 P ×3</td></tr>
+  <tr><td>2026-12-04</td><td>$43,000</td><td class="t">DELL 430 P ×1</td></tr>
+  <tr><td>2026-12-18</td><td>$141,250</td><td class="t">FCX 57.5 P ×5 · VLO 330 P ×1 · VRT 165 P ×3 · GE 300 P ×1 · NKE 42.5 C ×1 · CVX 230 C ×1</td></tr>
+  <tr><td>2027-12-17</td><td>$6,290</td><td class="t">NVDA 160 C ×1 (long)</td></tr>
+  <tr><td>2028-01-21</td><td>$6,795</td><td class="t">NKE 27.5 C ×1 · CVX 170 C ×1 (longs)</td></tr>
+</table></div>
+
+<h2>Resting 50% buy-backs <span class="meta">limit · good 'til canceled · placed in Fidelity</span></h2>
+<div class="tw"><table>
+  <tr><th class="t">Name</th><th class="t">Leg</th><th class="t">Expiry</th><th>Contracts</th><th>Sold at</th><th>Buy back at</th></tr>
+  <tr><td>CSCO</td><td class="t">105 P</td><td class="t">11-20</td><td>3</td><td>2.28</td><td>1.14</td></tr>
+  <tr><td>CVX</td><td class="t">230 C</td><td class="t">12-18</td><td>1</td><td>3.35</td><td>1.68</td></tr>
+  <tr><td>DELL</td><td class="t">430 P</td><td class="t">12-04</td><td>1</td><td>21.35</td><td>10.68</td></tr>
+  <tr><td>FCX</td><td class="t">57.5 P</td><td class="t">12-18</td><td>5</td><td>2.18</td><td>1.09</td></tr>
+  <tr><td>GE</td><td class="t">300 P</td><td class="t">12-18</td><td>1</td><td>7.68</td><td>3.84</td></tr>
+  <tr><td>NKE</td><td class="t">42.5 C</td><td class="t">12-18</td><td>1</td><td>0.88</td><td>0.44</td></tr>
+  <tr><td>VLO</td><td class="t">330 P</td><td class="t">12-18</td><td>1</td><td>11.80</td><td>5.90</td></tr>
+  <tr><td>VRT</td><td class="t">165 P</td><td class="t">12-18</td><td>3</td><td>9.51</td><td>4.76</td></tr>
+</table></div>
+</div></body></html>
