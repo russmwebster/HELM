@@ -10,7 +10,7 @@ import hashlib, html as H, json, os, re, shutil, sqlite3, subprocess, sys, time,
 from datetime import date, timedelta
 HOME = os.path.expanduser("~"); ROOT = HOME + "/mnt/helm"; PGROOT = HOME + "/mnt/helm-pg"; W = "/tmp/s154c"
 ENG_BAK = {"helm/decide.py": ".bak-20261108-s154b", "helm.py": ".bak-20261108-s154"}
-ENG_NEW = ["helm/recovery.py", "helm/cli/recovery_cmd.py"]
+ENG_NEW = ["helm/recovery.py", "helm/cli/recovery_cmd.py", "helm/opportunity.py"]
 PG_BAK = {"templates/thesis.html": ".bak-20261108-s154c"}
 ENG_IGN = ("data", "archive", "_s1[0-3]*", "_s14*", "_s150", "_s151", "_s152", "_s153", "_to_delete", "*.bak-*", "__pycache__", ".git", "docs", "_records")
 PG_IGN = ("*.bak-*", "__pycache__", ".git", "_to_delete")
@@ -52,7 +52,10 @@ def cli(eng, db, args, fake="down"):
                PYTHONPATH="/tmp/fakeib:/tmp/pylib", HELM_ADVICE_DIR=W + "/advice-out", TMPDIR="/tmp")
     p = subprocess.run([sys.executable, "-B", "helm.py"] + args, cwd=eng, env=env, capture_output=True, text=True, timeout=170)
     return p.returncode, p.stdout + p.stderr
-DB = fresh(W + "/copy.db"); before = dump(DB)
+DB = fresh(W + "/copy.db")
+_c = sqlite3.connect(DB)          # start from "never run": the live database may already hold runs
+_c.execute("DROP TABLE IF EXISTS recovery_results"); _c.execute("DROP TABLE IF EXISTS recovery_runs"); _c.commit(); _c.close()
+before = dump(DB)
 cx = sqlite3.connect(DB); cx.row_factory = sqlite3.Row
 acct = cx.execute("select id from accounts").fetchone()[0]
 PUTS = [(r["id"], r["ticker"]) for r in cx.execute("select p.id, p.ticker from positions p join legs l on l.position_id=p.id "
@@ -90,8 +93,10 @@ o0, _ = render(OLD_ENG, OLD_PG, DB, cards + others); n0, l0 = render(NEW_ENG, NE
 ok(all(n0[p][0] == 200 for p in cards + others) and "Traceback" not in l0, "new board: every card and Today render before any run")
 ok(all("Odds if assigned: not run yet — cd ~/Projects/helm && helm recovery %s" % t in txt(n0["/thesis/" + i][1]) for i, t in PUTS),
    "before a run, each put card says 'not run yet' with its own command")
+ok(all("Keep vs switch, modelled: not run yet — cd ~/Projects/helm && helm recovery %s" % t in txt(n0["/thesis/" + i][1]) for i, t in PUTS),
+   "before a run, keep vs switch says 'not run yet' too")
 ws = lambda b: re.sub(r">\s+<", "><", re.sub(r"\s+", " ", b))
-strip = lambda b: ws(re.sub(r'<div class="dz-p dim">Odds if assigned: not run yet.*?</div>', "", norm(b), flags=re.S))
+strip = lambda b: ws(re.sub(r'<div class="dz-p dim">(?:Odds if assigned|Keep vs switch, modelled): not run yet.*?</div>', "", norm(b), flags=re.S))
 ok(all(strip(n0[p][1]) == ws(norm(o0[p][1])) for p in cards), "put cards otherwise identical to the old code (whitespace aside)")
 if not all(strip(n0[p][1]) == ws(norm(o0[p][1])) for p in cards):
     import difflib
@@ -113,19 +118,37 @@ good = {i: json.loads(r["result"]) for i, r in rows.items() if r["result"]}
 print("    results:", {t: ("ok" if i in good else rows[i]["error"][:60]) for i, t in PUTS})
 cs = [i for i, t in PUTS if t == "CSCO"][0]
 ok(cs in good and "implied vol" in good[cs]["fit"]["start_note"], "CSCO without IBKR: closes end 09-25, so the start vol comes from implied vol, labelled")
-for i, r in good.items():
-    if r["basis"] <= 0 or r["now"]["touch"] != sorted(r["now"]["touch"]): ok(False, "result shape for %s" % r["ticker"])
+print("    assignment:", {r["ticker"]: (round(r["p_assign"]), r["assigned_price"] and round(r["assigned_price"], 2), r["strike"]) for r in good.values()})
+ok(all(0 <= r["p_assign"] <= 100 and (r["assigned_price"] is None or r["assigned_price"] < r["strike"]) for r in good.values()),
+   "every put: chance of assignment 0-100%, the typical assigned price below the strike")
+ok(all(r["now"] is None or r["now"]["touch"] == sorted(r["now"]["touch"]) for r in good.values()), "odds never fall with a longer horizon")
+print("    keep vs switch:", {r["ticker"]: ("ok -> " + r["opportunity"]["switch"]["ticker"]) if r.get("opportunity") else r.get("opportunity_error", "")[:50] for r in good.values()})
+ok(all(r.get("opportunity") or r.get("opportunity_error") for r in good.values()), "every put's result carries keep vs switch, or its reason")
+OPP = {i: r for i, r in good.items() if r.get("opportunity")}
+ok(len(OPP) >= 1, "keep vs switch ran for %d of %d puts" % (len(OPP), len(good)))
+for i, r in OPP.items():
+    o = r["opportunity"]
+    ok(o["switch"]["ticker"] != r["ticker"] and abs(o["base"] - (o["collateral"] - (o["ask"] + 0.0067) * 100 * o["contracts"])) < 1e-6,
+       "%s: switch to another name (%s); today's value = collateral less the ask and fee" % (r["ticker"], o["switch"]["ticker"]))
+    break
 # --- 3. a run with CSCO's bars: merged, GARCH start vol; the card shows the newest run's numbers
 rc, o = cli(NEW_ENG, DB, ["recovery", "CSCO", "--paths", "800", "--force"], "csco")
 ok(rc == 0 and "IBKR daily bars to 2026-11-06" in o, "with IBKR bars: CSCO's closes run to 11-06")
 r2 = json.loads(cx.execute("select result from recovery_results where position_id=? order by run_id desc limit 1", (cs,)).fetchone()[0])
-ok("GARCH" in r2["fit"]["start_note"] and abs(r2["fit"]["start_vol"] - 0.49) < 0.01, "fresh closes: start vol is GARCH's vol now (%.3f)" % r2["fit"]["start_vol"])
+ok(r2["fit"]["start_note"].startswith("implied vol 2026-11-06") and abs(r2["fit"]["start_vol"] - r2["fit"]["iv_ex_earnings"] / r2["fit"]["ratio"]) < 1e-9,
+   "current implied vol: the start vol is implied (report out) / the ratio (%.3f)" % r2["fit"]["start_vol"])
+ok(abs(r2["fit"]["ratio"] - 1.0504) < 0.001, "with IBKR's closes CSCO's implied/realized ratio is its own 82-day 1.05")
 n1, l1 = render(NEW_ENG, NEW_PG, DB, cards + others)
 ok(all(n1[p][0] == 200 for p in cards + others) and "Traceback" not in l1, "every card renders after the runs")
 def expect(r, day_note):
+    head = ("Odds if assigned (a model, %s): chance of assignment on %s %.0f%%" % (day_note, r["start"][5:], r["p_assign"])
+            + (", typically at about $%.2f" % r["assigned_price"] if r["assigned_price"] else "")
+            + (" (report %s on the way)" % ", ".join(r["pre_earn"]) if r["pre_earn"] else "") + ".")
+    if r["now"] is None:
+        return (head, "Assignment is too unlikely for the model to say more.")
     hz = r["horizons"]; i, y = hz.index(90), hz.index(365); a, c = r["now"], r["calm"]
-    return ("Odds if assigned at $%.2f on %s (a model, %s): back to $%.2f on price alone — 3 months %.0f%% · a year %.0f%% (calm: %.0f%% · %.0f%%)."
-            % (r["spot"], r["start"][5:], day_note, r["basis"], a["touch"][i], a["touch"][y], c["touch"][i], c["touch"][y]),
+    return (head, "If assigned: back to $%.2f on price alone — 3 months %.0f%% · a year %.0f%% (calm: %.0f%% · %.0f%%)."
+            % (r["basis"], a["touch"][i], a["touch"][y], c["touch"][i], c["touch"][y]),
             "With covered calls, made whole — 3 months %.0f%% · a year %.0f%% (calm: %.0f%% · %.0f%%)." % (a["whole"][i], a["whole"][y], c["whole"][i], c["whole"][y]),
             "rent in a year about $%.2f a share (${:,.0f})".format(a["rent"][y] * r["shares"]) % a["rent"][y])
 t = txt(n1["/thesis/" + cs][1]); e = expect(r2, "run today")
@@ -136,6 +159,24 @@ for i, tk in PUTS:
         ok(all(x in txt(n1["/thesis/" + i][1]) for x in expect(good[i], "run today")), "%s's card shows its run's numbers" % tk)
     elif i not in good:
         ok("Odds if assigned couldn't be worked out" in txt(n1["/thesis/" + i][1]), "%s's card shows its run's error" % tk)
+sdl = lambda x: ("−$" if x < 0 else "+$") + "{:,.0f}".format(abs(x))
+def expect_opp(o):
+    out = []
+    for hz, name in ((90, "3 months"), (365, "a year")):
+        k, w, g = o["keep_%d" % hz], o["switch_%d" % hz], o["gap_%d" % hz]
+        out.append("%s: keep %s typical, %.0f%% below today, 1 in 10 worse than %s · switch %s, %.0f%%, %s · on average switching %s."
+                   % (name, sdl(k["median"]), k["below"], sdl(k["bad"]), sdl(w["median"]), w["below"], sdl(w["bad"]), sdl(g["mean"])))
+    return out
+cx2 = sqlite3.connect(DB)
+latest = {pid: json.loads(res) for pid, res in cx2.execute("select x.position_id, x.result from recovery_results x where x.run_id = "
+          "(select max(run_id) from recovery_results y where y.position_id = x.position_id) and x.result is not null")}
+for i, tk in PUTS:
+    if i in latest and latest[i].get("opportunity"):
+        e2 = expect_opp(latest[i]["opportunity"]); t1 = txt(n1["/thesis/" + i][1])
+        ok(all(x in t1 for x in e2) and "switching means a put on %s" % latest[i]["opportunity"]["switch"]["ticker"] in t1,
+           "%s's card shows keep vs switch word for word" % tk)
+        if not all(x in t1 for x in e2): print("    card:", t1[t1.find("Modelled"):][:600], "\n    want:", e2)
+cx2.close()
 ok(all(norm(n1[p][1]) == norm(o0[p][1]) for p in others), "PMCC cards and Today still identical to the old code")
 ok(all(re.sub(r'<div class="dz-p[^"]*">(?:<b>)?Odds if assigned.*?(?=</div>\s*</div>\s*<div><div class="dz-q">Keep vs switch)', "", norm(n1[p][1]), flags=re.S).count("Odds if") == 0 for p in cards),
    "on put cards the new lines are the only addition")
@@ -144,10 +185,16 @@ cx.execute("update recovery_runs set run_at=?", ((date.today() - timedelta(days=
 n2, _ = render(NEW_ENG, NEW_PG, DB, ["/thesis/" + cs])
 t2 = txt(n2["/thesis/" + cs][1]); d3 = (date.today() - timedelta(days=3)).isoformat()[5:]
 ok("(a model, run %s)" % d3 in t2 and "cd ~/Projects/helm && helm recovery CSCO" in t2, "a run from an earlier day says its day and the rerun command")
+# --- 4b. a run that compared a different name than today's best fit says so
+row = cx.execute("select run_id, result from recovery_results where position_id=? order by run_id desc limit 1", (cs,)).fetchone()
+rj = json.loads(row[1]); real_t = rj["opportunity"]["switch"]["ticker"]; rj["opportunity"]["switch"]["ticker"] = "ZZZ"
+cx.execute("update recovery_results set result=? where run_id=? and position_id=?", (json.dumps(rj), row[0], cs)); cx.commit()
+n3, _ = render(NEW_ENG, NEW_PG, DB, ["/thesis/" + cs]); t3 = txt(n3["/thesis/" + cs][1])
+ok("The model compared ZZZ; the latest put list's best fit is %s." % real_t in t3, "a run that compared another name says so, with the rerun command")
 # --- 5. --last shows the latest without a new run
 nruns = cx.execute("select count(*) from recovery_runs").fetchone()[0]
 rc, o = cli(NEW_ENG, DB, ["recovery", "--last"])
-ok(rc == 0 and "CSCO put -- if assigned" in o and cx.execute("select count(*) from recovery_runs").fetchone()[0] == nruns, "--last shows the record, adds no run")
+ok(rc == 0 and "CSCO put -- $" in o and "chance of assignment" in o and cx.execute("select count(*) from recovery_runs").fetchone()[0] == nruns, "--last shows the record, adds no run")
 cx.close()
 print("\n%d checks, %s" % (n[0], "ALL PASS" if not fails else "%d FAIL" % len(fails)))
 sys.exit(1 if fails else 0)

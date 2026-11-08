@@ -45,7 +45,10 @@ SEED = 154
 FEE = 0.0067                 # $0.67 a contract a leg (the downloads' median, rolltool), per share
 HALF_SPREAD = 0.025          # sell at mid - 2.5%, buy at mid + 2.5%
 RATIO_DEFAULT, RATIO_MIN, RATIO_MAX, RATIO_MIN_N = 1.05, 1.0, 1.3, 30
-FRESH_DAYS = 4               # closes this close to the latest reading -> GARCH's vol now is the start vol
+FRESH_DAYS = 4               # a reading (implied vol, or the closes) this close to the latest check counts as current
+HL_CAP = 126                 # s154: a shock's half-life is capped at ~6 months (a near-endless fit is a regime change)
+MIN_ASSIGNED = 300           # paths ending below the strike needed before the recovery is modelled
+MAX_BATCHES = 8
 STEP_DAYS = 91               # an estimated report date follows the last known one by a quarter
 
 
@@ -222,12 +225,25 @@ def fit(conn, ticker, root, ib_rows=None, reading_day=None):
     P = np.array([px[d] for d in days])
     R = np.diff(np.log(P))
     rd = days[1:]
-    listed = sorted(str(r[0])[:10] for r in conn.execute(
-        "SELECT earn_date FROM earnings_history WHERE ticker=?", (ticker,)) if r[0])
+    listed = {str(r[0])[:10] for r in conn.execute(
+        "SELECT earn_date FROM earnings_history WHERE ticker=?", (ticker,)) if r[0]}
+    try:                                     # s154: the watchlist's date counts too (VRT had no stored dates)
+        w = conn.execute("SELECT next_earnings FROM watchlist WHERE ticker=?", (ticker,)).fetchone()
+        if w and w[0]:
+            listed.add(str(w[0])[:10])
+    except sqlite3.Error:
+        pass
+    listed = sorted(listed)
     ear, inferred = reaction_days(rd, R, listed)
     mask = np.ones(len(R), bool)
     mask[ear] = False
     g = garch_fit(R[mask])
+    capped = g["half_life_days"] > HL_CAP
+    if capped:                               # keep alpha's share of the persistence
+        p_new = 0.5 ** (1.0 / HL_CAP)
+        g["alpha"] *= p_new / g["persistence"]
+        g["beta"] = p_new - g["alpha"]
+        g["persistence"], g["half_life_days"] = p_new, float(HL_CAP)
     moves = [float(R[j]) for j in ear]
     # implied vs the realized that followed (21 trading days, report days out)
     iv = conn.execute("SELECT date, iv_current FROM iv_history WHERE ticker=? AND iv_current IS NOT NULL "
@@ -257,20 +273,24 @@ def fit(conn, ticker, root, ib_rows=None, reading_day=None):
         iv_ex = math.sqrt(max(iv_now ** 2 * T - ev, 1e-6) / T)
     vol_now = math.sqrt(g["var_now"] * 252)
     lr = math.sqrt(g["long_run_var"] * 252)
-    fresh = reading_day is None or (date.fromisoformat(reading_day) - date.fromisoformat(days[-1])).days <= FRESH_DAYS
-    if fresh or iv_ex is None:
+    ref = date.fromisoformat(reading_day) if reading_day else date.fromisoformat(days[-1])
+    fresh = (ref - date.fromisoformat(days[-1])).days <= FRESH_DAYS
+    iv_fresh = iv_day is not None and abs((ref - date.fromisoformat(iv_day)).days) <= FRESH_DAYS
+    # s154: the market's forecast first -- implied vol (report taken out) / the implied-realized ratio
+    if iv_ex is not None and (iv_fresh or not fresh):
+        start_vol, start_note = iv_ex / ratio, "implied vol %s, report taken out, / %.2f" % (iv_day, ratio)
+        if not iv_fresh:
+            start_note += " -- implied vol older than the latest reading"
+    else:
         start_vol, start_note = vol_now, "the stock's own recent moves (GARCH)"
         if not fresh:
             start_note += " -- closes end %s, older than the latest reading" % days[-1]
-    else:
-        start_vol, start_note = iv_ex / ratio, "implied vol %s, report taken out, / %.2f (closes end %s)" % (
-            iv_day, ratio, days[-1])
     return {"ticker": ticker, "closes": src, "first": days[0], "last": days[-1], "last_close": float(P[-1]),
             "n_returns": int(len(R)), "short_history": len(R) < 500,
             "earnings_days": len(ear), "earnings_inferred": len(inferred), "moves": moves,
             "earn_move_median": float(np.median(np.abs(moves))) if moves else None,
             "alpha": g["alpha"], "beta": g["beta"], "persistence": g["persistence"],
-            "half_life_days": g["half_life_days"], "long_run_vol": lr, "vol_now": vol_now,
+            "half_life_days": g["half_life_days"], "half_life_capped": capped, "long_run_vol": lr, "vol_now": vol_now,
             "iv_now": iv_now, "iv_day": iv_day, "iv_ex_earnings": iv_ex, "ratio": ratio, "ratio_note": ratio_note,
             "start_vol": start_vol, "start_note": start_note, "listed": listed}
 
@@ -289,8 +309,42 @@ def _third_fridays(start, n=16):
     return out
 
 
-def simulate(S0, basis, start, prm, vol0, earn=(), calls=True, n=N_PATHS, seed=SEED, rules=None, stats=None):
-    """One case. prm: alpha, beta, persistence, long_run_vol, ratio, moves. Returns the measures."""
+def price_to(S0, vol0, start, end, prm, earn=(), n=N_PATHS, seed=SEED):
+    """Prices and daily variances on `end` (weekday steps from `start`), no options: (S, h) arrays. s154: the
+    run-up to a put's expiry, so the recovery starts only from the paths where it is assigned."""
+    rng = np.random.default_rng(seed)
+    LR = prm["long_run_vol"] ** 2 / 252
+    a, b, pers = prm["alpha"], prm["beta"], prm["persistence"]
+    w = LR * (1 - pers)
+    moves = np.asarray(prm.get("moves") or [], float)
+    S = np.full(n, float(S0))
+    h = np.full(n, vol0 ** 2 / 252)
+    d, prev = start, None
+    jumps = set()
+    for e in earn:
+        if start <= e < end:
+            x = e + timedelta(days=1)
+            while x.weekday() >= 5:
+                x += timedelta(days=1)
+            jumps.add(x)
+    d = start + timedelta(days=1)
+    while d <= end:
+        if d.weekday() < 5:
+            z = rng.standard_normal(n)
+            e = np.sqrt(h) * z
+            r = e - 0.5 * h
+            if d in jumps and len(moves):
+                j = rng.choice(moves, n) * rng.choice([-1.0, 1.0], n)
+                r = r + j - np.log(np.cosh(j))
+            S = S * np.exp(r)
+            h = w + a * e ** 2 + b * h
+        d += timedelta(days=1)
+    return S, h
+
+
+def simulate(S0, basis, start, prm, vol0, earn=(), calls=True, n=N_PATHS, seed=SEED, rules=None, stats=None, h0=None):
+    """One case. prm: alpha, beta, persistence, long_run_vol, ratio, moves. S0 a number or one start a path;
+    h0 (daily variances, one a path) overrides vol0. Returns the measures."""
     rl = rules or _rules()
     rng = np.random.default_rng(seed)
     LR = prm["long_run_vol"] ** 2 / 252
@@ -310,14 +364,14 @@ def simulate(S0, basis, start, prm, vol0, earn=(), calls=True, n=N_PATHS, seed=S
     jump = {min((x for x in days if x > e), default=None) for e in earn} - {None}
     EXP = _third_fridays(start)
     step = strike_step(basis)
-    strikes = np.arange(math.ceil(basis / step - 1e-9) * step, basis * 1.6 + step, step)
+    strikes = np.arange(math.ceil(basis / step - 1e-9) * step, max(basis, float(np.max(S0))) * 2.0 + step, step)  # s154: reaches paths well above the basis
 
     def avg_vol(h, m):
         k = np.arange(1, max(int(m), 1) + 1)
         return np.sqrt(252 * (LR + np.outer(h - LR, pers ** k).mean(axis=1)))
 
-    S = np.full(n, float(S0))
-    h = np.full(n, vol0 ** 2 / 252)
+    S = np.broadcast_to(np.asarray(S0, float), (n,)).copy()
+    h = (np.broadcast_to(np.asarray(h0, float), (n,)).copy() if h0 is not None else np.full(n, vol0 ** 2 / 252))
     rent = np.zeros(n)
     K = np.full(n, np.nan)
     credit = np.zeros(n)
@@ -435,12 +489,36 @@ def assess(conn, position_id, root, ib_rows=None, n=N_PATHS, today=None):
     f = fit(conn, t, root, ib_rows, reading_day=ck["checked_at"][:10])
     earn, earn_note = future_earnings(conn, t, start, start + timedelta(days=365), f["listed"])
     rl = _rules()
-    now = simulate(spot, basis, start, f, f["start_vol"], earn, n=n, rules=rl)
-    calm = simulate(spot, basis, start, f, f["long_run_vol"], earn, n=n, rules=rl)
+    K = float(leg["strike"])
+    # s154: run each path to the expiry first; the recovery starts only where the put is assigned
+    if exp > today:
+        pre_earn, _ = future_earnings(conn, t, today, exp, f["listed"])
+        Ss, hs, total = [], [], 0
+        for i in range(MAX_BATCHES):
+            S1, h1 = price_to(spot, f["start_vol"], today, exp, f, pre_earn, n=n, seed=SEED + 100 + i)
+            total += n
+            Ss.append(S1[S1 < K]); hs.append(h1[S1 < K])
+            if sum(len(x) for x in Ss) >= MIN_ASSIGNED:
+                break
+        Sa, ha = np.concatenate(Ss), np.concatenate(hs)
+        p_assign = float(100.0 * len(Sa) / total)
+    else:
+        Sa, ha, p_assign, pre_earn = np.array([spot]) if spot < K else np.array([]), np.array([f["start_vol"] ** 2 / 252]), (
+            100.0 if spot < K else 0.0), []
+    now = calm = None
+    a_price = float(np.median(Sa)) if len(Sa) else None
+    if len(Sa) >= (1 if exp <= today else MIN_ASSIGNED // 6):
+        pick = np.random.default_rng(SEED).integers(0, len(Sa), n)
+        S0s = Sa[pick]
+        h0s = ha[pick] if len(ha) == len(Sa) else None
+        now = simulate(S0s, basis, start, f, f["start_vol"], earn, n=n, rules=rl, h0=h0s)
+        calm = simulate(S0s, basis, start, f, f["long_run_vol"], earn, n=n, rules=rl)
     shares = int(leg["contracts"]) * 100
     f.pop("listed")
     f.pop("moves")
     return {"position_id": position_id, "ticker": t, "spot": spot, "reading": ck["checked_at"][:16],
+            "strike": K, "p_assign": p_assign, "assigned_price": a_price, "assigned_paths": int(len(Sa)),
+            "pre_earn": [e.isoformat() for e in pre_earn if e < exp],
             "basis": basis, "shares": shares, "start": start.isoformat(), "earn_note": earn_note,
             "gate_now": gate_price(basis, f["start_vol"] * f["ratio"], 45, rl["dmin"]),
             "gate_calm": gate_price(basis, f["long_run_vol"] * f["ratio"], 45, rl["dmin"]),
@@ -544,6 +622,13 @@ def _selftest():
     found = {days[1:][j] for j in ear}
     ok({"2022-02-11", "2023-05-12"} <= found, "stored report dates: the reaction day is the bigger move")
     ok({"2021-02-12", "2021-05-14"} <= found and inf, "earlier report days inferred from the stored pattern")
+    # 5b. the run-up to expiry: a deep in-the-money put is nearly always assigned, a deep out-of-the-money one rarely
+    S1, _ = price_to(80.0, 0.30, date(2026, 11, 9), date(2026, 11, 20), gv, n=4000)
+    ok(float(np.mean(S1 < 100.0)) > 0.97, "11 days out, $80 vs a $100 strike: assigned on nearly every path")
+    S2, _ = price_to(130.0, 0.30, date(2026, 11, 9), date(2026, 11, 20), gv, n=4000)
+    ok(float(np.mean(S2 < 100.0)) < 0.01, "11 days out, $130 vs a $100 strike: assigned almost never")
+    S3, _ = price_to(100.0, 0.30, date(2026, 11, 9), date(2026, 11, 20), dict(gv, moves=[0.5]), [date(2026, 11, 12)], n=4000)
+    ok(abs(float(np.mean(S3)) / 100.0 - 1) < 0.03 and float(np.std(np.log(S3))) > 0.4, "a report before expiry moves the price (and keeps no drift)")
     # 6. record and read back
     db = os.path.join(tempfile.mkdtemp(), "r.db")
     c = sqlite3.connect(db)

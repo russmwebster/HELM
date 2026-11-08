@@ -43,6 +43,8 @@ def recovery_view(conn, position_id, ticker, today):
     if lt["error"] or not lt["result"]:
         return dict(base, error=lt["error"] or "no result recorded")
     r = lt["result"]
+    if "p_assign" not in r:                        # recorded before the run-up to expiry was modelled
+        return dict(base, error="made by an earlier version of the model -- rerun")
     H = r["horizons"]
     i90, iy = H.index(90), H.index(365)
 
@@ -52,9 +54,34 @@ def recovery_view(conn, position_id, ticker, today):
                 "wholeY": x["whole"][iy], "called": x["called"], "gate_day": x["gate_day"],
                 "rentY": x["rent"][iy], "rentY_usd": x["rent"][iy] * r["shares"]}
     f = r["fit"]
-    return dict(base, spot=r["spot"], basis=r["basis"], shares=r["shares"], start=r["start"],
-                now=case("now"), calm=case("calm"), vol_now=f["start_vol"], vol_lr=f["long_run_vol"],
-                half=f["half_life_days"], earn_note=r["earn_note"], short_history=f["short_history"])
+    return dict(base, spot=r["spot"], basis=r["basis"], shares=r["shares"], start=r["start"], strike=r.get("strike"),
+                p_assign=r.get("p_assign"), assigned_price=r.get("assigned_price"), pre_earn=r.get("pre_earn") or [],
+                modelled=r.get("now") is not None,
+                now=case("now") if r.get("now") else None, calm=case("calm") if r.get("calm") else None,
+                vol_now=f["start_vol"], vol_lr=f["long_run_vol"], half=f["half_life_days"],
+                capped=f.get("half_life_capped"), earn_note=r["earn_note"], short_history=f["short_history"])
+
+
+def opportunity_view(conn, position_id, ticker, today, card_target=None):
+    """s154: keep vs switch from the latest recorded `helm recovery` result (helm.opportunity.compare). Flags a
+    run that compared a different name than the card's best put that fits now."""
+    from helm import recovery as RC
+    lt = RC.latest_for(conn, position_id)
+    if lt is None:
+        return {"none": True, "cmd": _rc_cmd(ticker)}
+    day = lt["run_at"][:10]
+    base = {"run_day": day, "stale": day != today.isoformat(), "cmd": _rc_cmd(ticker)}
+    r = lt["result"] or {}
+    if lt["error"] or r.get("opportunity_error") or not r.get("opportunity"):
+        return dict(base, error=lt["error"] or r.get("opportunity_error") or "keep vs switch was not part of that run")
+    o = r["opportunity"]
+    sw = o["switch"]
+    rows = []
+    for hz, name in ((90, "3 months"), (365, "a year")):
+        rows.append({"name": name, "keep": o["keep_%d" % hz], "switch": o["switch_%d" % hz], "gap": o["gap_%d" % hz]})
+    return dict(base, base_value=o["base"], ask=o["ask"], target=sw["ticker"], sector=sw["sector"], grade=sw["grade"],
+                list_run=sw["run_at"], rows=rows, mismatch=bool(card_target) and card_target != sw["ticker"],
+                card_target=card_target, keep_earn=o.get("keep_earn") or [])
 
 
 def put_numbers(strike, n, premium, bid, ask, mid, spot, delta, dte):
@@ -153,6 +180,11 @@ def decide(position_id, account_id=None, db=None, today=None):
                              if best else {"nothing": True, "run_at": run["run_at"][:16] if run else None})
         except Exception as e:                     # noqa: BLE001
             out["switch"] = {"error": "%s: %s" % (type(e).__name__, e)}
+        # 4b. s154 (Russ, 2026-11-08): keep vs switch, modelled -- the latest `helm recovery` run, read only
+        try:
+            out["switch_model"] = opportunity_view(conn, position_id, t, today, (out.get("switch") or {}).get("ticker"))
+        except Exception as e:                     # noqa: BLE001
+            out["switch_model"] = {"error": "%s: %s" % (type(e).__name__, e), "cmd": _rc_cmd(t)}
 
         # 5. In the book -- sector vs 30%; share of the book's beta-weighted delta (helm.bookview)
         try:
