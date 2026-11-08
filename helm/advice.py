@@ -434,6 +434,45 @@ _PLAIN = {"CSP": "put", "COVERED_CALL": "covered call", "DIAGONAL": "diagonal", 
           "DIAGONAL_PUT": "diagonal put"}
 
 
+# s154 (Russ, 2026-11-08): ONE order for every list of open positions the board shows, and for the
+# cards' previous / next -- A-Z by ticker; on one ticker puts, then covered calls, PMCCs, diagonals,
+# shares; then the nearest open expiry; then the id. Display only: nothing it advises depends on it.
+ORDER_STRATEGY = ("CSP", "COVERED_CALL", "PMCC", "DIAGONAL", "DIAGONAL_PUT", "SHARES")
+
+
+def order_key(ticker, strategy=None, expiry=None, ident=None):
+    """The sort key behind position_order(), for rows that carry their own fields (e.g. HELM-held shares)."""
+    s = ORDER_STRATEGY.index(strategy) if strategy in ORDER_STRATEGY else len(ORDER_STRATEGY)
+    return ((ticker or "").upper(), s, str(expiry or "9999-12-31")[:10], str(ident or ""))
+
+
+def position_keys(db=None, account_id=None):
+    """{position id: order_key} for the open REAL positions (expiry = the nearest OPEN leg's). Read-only."""
+    conn = S._conn(db)
+    try:
+        q = ("SELECT p.id, p.ticker, p.strategy, (SELECT MIN(l.expiration) FROM legs l WHERE l.position_id=p.id "
+             "AND l.status='OPEN') AS exp FROM positions p WHERE p.book='REAL' AND p.status='OPEN'"
+             + (" AND p.account_id=?" if account_id else ""))
+        return {r["id"]: order_key(r["ticker"], r["strategy"], r["exp"], r["id"])
+                for r in conn.execute(q, ((account_id,) if account_id else ())).fetchall()}
+    finally:
+        conn.close()
+
+
+def position_order(db=None, account_id=None):
+    """The open REAL positions' ids in the board's one order -- the cards' previous / next."""
+    keys = position_keys(db, account_id)
+    return sorted(keys, key=keys.get)
+
+
+def in_order(items, keys, id_key="position_id"):
+    """items in the one order: an open position by its key (position_keys); any other row (no id -- e.g.
+    HELM-held shares -- or not open) by order_key on its own ticker and strategy, so it falls in A-Z among
+    them. A stable sort -- ties keep their given order."""
+    return sorted(items, key=lambda r: keys[r.get(id_key)] if r.get(id_key) in keys
+                  else order_key(r.get("ticker"), r.get("strategy")))
+
+
 def _what_frees(w):
     w = w.lower()
     if w.startswith("csp"):
@@ -1256,6 +1295,34 @@ def _selftest():
     open(os.path.join(_ld, "logs", "audit_eod.log"), "w").close()
     ok(last_audit_day(_ld) == "2026-11-06", "last_audit_day: the newest report's day")
     ok(last_audit_day(tempfile.mkdtemp()) is None, "last_audit_day: no reports -> None")
+    # s154: the one order
+    _od = os.path.join(tempfile.mkdtemp(), "o.db")
+    _oc = sqlite3.connect(_od)
+    _oc.executescript("""
+      CREATE TABLE positions (id TEXT, account_id TEXT, strategy TEXT, ticker TEXT, status TEXT, book TEXT);
+      CREATE TABLE legs (id TEXT, position_id TEXT, expiration TEXT, status TEXT);
+      INSERT INTO positions VALUES ('V1','A','CSP','VRT','OPEN','REAL'), ('N2','A','PMCC','NVDA','OPEN','REAL'),
+        ('C3','A','CSP','CSCO','OPEN','REAL'), ('C4','A','PMCC','CSCO','OPEN','REAL'),
+        ('C5','A','CSP','CSCO','OPEN','REAL'), ('C6','A','CSP','CSCO','CLOSED','REAL'),
+        ('P7','A','CSP','AAPL','OPEN','PAPER'), ('B8','B','CSP','BA','OPEN','REAL');
+      INSERT INTO legs VALUES ('l1','V1','2026-12-18','OPEN'), ('l2','N2','2027-12-17','OPEN'),
+        ('l3','N2','2026-12-04','OPEN'), ('l4','C3','2026-12-18','OPEN'), ('l5','C4','2028-01-21','OPEN'),
+        ('l6','C5','2026-11-20','OPEN'), ('l7','C5','2026-10-16','CLOSED'), ('l8','C6','2026-11-20','OPEN');
+    """)
+    _oc.commit(); _oc.close()
+    _po = position_order(_od, "A")
+    ok(_po == ["C5", "C3", "C4", "N2", "V1"],
+       "position_order: A-Z, puts before PMCCs, nearer OPEN expiry first, closed/paper/other account out: %s" % _po)
+    ok(position_order(_od) == ["B8", "C5", "C3", "C4", "N2", "V1"], "position_order: no account -> every REAL open")
+    _it = in_order([{"position_id": "V1"}, {"position_id": None, "ticker": "GOOGL", "strategy": "SHARES"},
+                    {"position_id": "C3"}, {"position_id": None, "ticker": "AMD", "strategy": "SHARES"},
+                    {"position_id": None, "ticker": "CSCO", "strategy": "SHARES"}, {"position_id": "C5"}],
+                   position_keys(_od, "A"))
+    ok([(r["position_id"] or r["ticker"] + "sh") for r in _it] == ["AMDsh", "C5", "C3", "CSCOsh", "GOOGLsh", "V1"],
+       "in_order: shares fall in A-Z among the positions, after a ticker's options: %s"
+       % [(r["position_id"] or r["ticker"] + "sh") for r in _it])
+    ok(order_key("csco", "CSP") < order_key("CSCO", "PMCC") < order_key("CSCO", "SHARES") < order_key("DELL", "CSP"),
+       "order_key: ticker first (case-blind), then the strategy order")
     print("advice selftest:", "PASS (%d checks)" % len(ran) if not fails else "%d FAIL" % len(fails))
     return 1 if fails else 0
 
