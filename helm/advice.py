@@ -245,6 +245,59 @@ def short_rule_rows(is_cc, spot, k, delta, dte, kept, credit, expiry, grade=None
     return rows
 
 
+# s156 (Russ, 2026-11-08): the PMCC's rule rows for the board, in short_rule_rows' format ({key, rule, state, reading,
+# line}). The same values and comparisons as _diag_family's PMCC path, in its order, so the first fired row is the
+# verb (PMCC_ROW_VERB; the self-test checks it). pmcc_rule_rows above stays for the closed and run-off cards.
+PMCC_ROW_VERB = {"loss_limit": "LOSS_LIMIT", "itm_expiry": "DECIDE", "take_profit": "TAKE_PROFIT",
+                 "time_21": "TIME_21", "long_review": "REVIEW_LONG", "short_open": "SELL_CALL"}
+
+
+def pmcc_rows(whole, long_cost, long_expiry, long_dte, spot, short=None, short_mark=None, short_dte=None,
+              width=(None, None), last_short=None):
+    """The rule rows for one PMCC. Pure. short: the open short leg (strike, open_price, option_type, expiration)
+    or None; width: fillopens.width_floor's (floor a share, long strike); last_short: the latest closed short leg
+    (close_date, close_price) or None."""
+    from datetime import timedelta
+    rows = []
+
+    def add(key, rule, state, reading, line=None):
+        rows.append({"key": key, "rule": rule, "state": state, "reading": reading, "line": line})
+
+    def minus(exp, days):
+        return (date.fromisoformat(str(exp)[:10]) - timedelta(days=days)).isoformat()
+
+    lim = LOSS_LIMIT_FRAC * long_cost
+    add("loss_limit", "Loss limit (whole trade)", "fired" if whole <= -lim else "next", _m(whole, sign=True), _m(-lim))
+    floor, lk = width
+    floor_s = None if floor is None else "strike > %s" % _p(lk + floor)
+    if short is not None:
+        k = short["strike"]
+        itm = (spot > k) if short.get("option_type") != "PUT" else (spot < k)
+        where = "spot %.1f%% %s strike %s" % (abs(spot - k) / spot * 100.0, "through" if itm else "inside", _num(k))
+        add("itm_expiry", "Short in the money, last %d days" % SHORT_EXPIRY_SOON_DAYS,
+            "fired" if (short_dte is not None and short_dte <= SHORT_EXPIRY_SOON_DAYS and itm) else "pass",
+            "%s days, %s" % ("—" if short_dte is None else short_dte, where))
+        op = short.get("open_price")
+        kept = (op - short_mark) / op if (op and short_mark is not None) else None
+        kept_s = ("—" if kept is None else "%.0f%% kept" % (kept * 100) if kept >= 0
+                  else "short %s, sold %s" % (_p(short_mark), _p(op)))
+        add("take_profit", "Short 50% profit-take", "fired" if (kept is not None and kept >= PROFIT_TAKE) else "next",
+            kept_s, None if not op else "buy back %s" % _p(_half_up(op * (1 - PROFIT_TAKE))))
+        add("time_21", "Short 21 days left", "fired" if (short_dte is not None and short_dte <= TIME_EXIT_DTE) else "next",
+            "%s days" % ("—" if short_dte is None else short_dte), minus(short["expiration"], TIME_EXIT_DTE)[5:])
+    add("long_review", "Long review at %d days" % PMCC_LONG_REVIEW_DTE,
+        "fired" if (long_dte is not None and long_dte <= PMCC_LONG_REVIEW_DTE) else "next",
+        "%s days" % ("—" if long_dte is None else long_dte), minus(long_expiry, PMCC_LONG_REVIEW_DTE))
+    if short is None:
+        add("short_open", "Short open", "fired",
+            "none" + ("" if not last_short else " · closed %s at %s" % (str(last_short["close_date"])[5:10],
+                                                                       _p(last_short["close_price"] or 0))))
+        add("width_floor", "Next short: width floor", "info", floor_s or "—")
+    else:
+        add("width_floor", "Next short: width floor", "next", "—", floor_s)
+    return rows
+
+
 def limit_row(key, rule, used, cap):
     """One limit as a row: over / near (>= NEAR_FRAC of it) / pass. Pure."""
     state = "fired" if used > cap + 1e-6 else ("near" if cap and used >= NEAR_FRAC * cap else "pass")
@@ -407,12 +460,21 @@ def _diag_family(conn, p, legs_all, today):
     marks = []
     e_day, e_in = _earnings(conn, p["ticker"], today)
     status = "whole trade %s; the long cost %s and has %d days left" % (_m(pnl, sign=True), _m(long_cost), l_dte)
+    rules = None
+    if is_pmcc:     # s156: the board's rule rows, from the values below (pmcc_rows)
+        from helm.fillopens import width_floor as _wfl
+        _s0 = shorts[0] if shorts else None
+        _cl = sorted((l for l in opts if l["direction"] == "SHORT" and l["status"] != "OPEN"),
+                     key=lambda l: (str(l["close_date"] or ""), str(l["id"])))
+        rules = pmcc_rows(pnl, long_cost, L["expiration"], l_dte, spot, _s0,
+                          reads[_s0["id"]]["current_price"] if _s0 else None,
+                          _dte(_s0["expiration"], today) if _s0 else None, _wfl(opts), _cl[-1] if _cl else None)
 
     if pnl <= -LOSS_LIMIT_FRAC * long_cost:
         return _rec(p, "LOSS_LIMIT", "%s -- loss limit reached" % what,
                     "The whole trade is %s, past the limit of %s (half the long's cost)." % (
                         _m(pnl, sign=True), _m(-LOSS_LIMIT_FRAC * long_cost)),
-                    nums, act="close the whole trade, or log why you're holding it", as_of=as_of)
+                    nums, act="close the whole trade, or log why you're holding it", as_of=as_of, rules=rules)
 
     firing = set() if is_pmcc else EF.diag_firing_now(conn, p["id"])
     S0 = shorts[0] if shorts else None
@@ -433,13 +495,13 @@ def _diag_family(conn, p, legs_all, today):
                         "expect assignment -- %d shares called away at %g against your long" % (
                             _p(s_mark), _m(s_mark * 100 * n), n, 100 * n, S0["strike"])
                         + (_roll_hint(p["ticker"]) if is_pmcc else ""),
-                        as_of=as_of)
+                        as_of=as_of, rules=rules)
         if "breach" in firing:
             return _rec(p, "DECIDE", "%s -- the short is breached" % what,
                         "%s at %s is through the %g short for two days running. %s." % (
                             p["ticker"], _p(spot), S0["strike"], status.capitalize()),
                         nums, act="roll the short, buy it back at about %s, or close the whole trade"
-                        % _p(s_mark) + (_roll_hint(p["ticker"]) if is_pmcc else ""), as_of=as_of)
+                        % _p(s_mark) + (_roll_hint(p["ticker"]) if is_pmcc else ""), as_of=as_of, rules=rules)
         s_kept = (S0["open_price"] - s_mark) / S0["open_price"] if S0["open_price"] else None
         if s_kept is not None and s_kept >= PROFIT_TAKE:
             bb = _half_up(S0["open_price"] * (1 - PROFIT_TAKE))
@@ -447,20 +509,20 @@ def _diag_family(conn, p, legs_all, today):
                         "The short has given up %.0f%% of its %s credit." % (s_kept * 100, _p(S0["open_price"])),
                         nums, act="buy the short back at %s%s" % (
                             _p(bb) if is_pmcc else _p(s_mark),
-                            " (your resting order)" if is_pmcc else ""), as_of=as_of)
+                            " (your resting order)" if is_pmcc else ""), as_of=as_of, rules=rules)
         if is_pmcc and s_dte is not None and s_dte <= TIME_EXIT_DTE:
             return _rec(p, "TIME_21", "%s -- close or roll the short: %d days left" % (what, s_dte),
                         "The rule closes the short at 21 days.", nums,
                         act="buy it back at about %s, or roll up and out for a credit" % _p(s_mark)
-                        + _roll_hint(p["ticker"]), as_of=as_of)
+                        + _roll_hint(p["ticker"]), as_of=as_of, rules=rules)
     long_kinds = [k for k in ("long_stop", "long_giveback", "long_dte7", "long_dte21") if k in firing]
     if long_kinds:
         return _rec(p, "LONG_RULE", "%s -- %s" % (what, EF.KIND_LABEL[long_kinds[0]]),
                     "The long's own rule fired (%s). %s." % (EF.KIND_LABEL[long_kinds[0]], status.capitalize()),
-                    nums, act="sell the long (or the whole trade), or log why you're holding", as_of=as_of)
+                    nums, act="sell the long (or the whole trade), or log why you're holding", as_of=as_of, rules=rules)
     if is_pmcc and l_dte is not None and l_dte <= PMCC_LONG_REVIEW_DTE:
         return _rec(p, "REVIEW_LONG", "%s -- review the long: %d days left" % (what, l_dte),
-                    "The rule reviews the long at 90 days. %s." % status.capitalize(), nums, as_of=as_of)
+                    "The rule reviews the long at 90 days. %s." % status.capitalize(), nums, as_of=as_of, rules=rules)
     if S0 is None:
         from helm.fillopens import width_floor
         width = width_floor(opts)[0]
@@ -470,19 +532,19 @@ def _diag_family(conn, p, legs_all, today):
                     "No short is open. %s." % status.capitalize(), nums,
                     act="run `cd ~/Projects/helm && helm calls` for three choices -- a 30-60 day, 0.20-0.30 "
                     "delta call whose strike sits more than %s above the long's %g strike (the width test)"
-                    % (_p(width), L["strike"]), as_of=as_of)
+                    % (_p(width), L["strike"]), as_of=as_of, rules=rules)
     pend = [d for d in EF.pending(conn, ensure=False) if d["position_id"] == p["id"]] if not is_pmcc else []
     if pend:
         d = pend[0]
         return _rec(p, "OPEN_FLAG", "%s -- a flag from %s is still open" % (what, d["flag_date"][5:]),
                     "'%s' fired on %s and has no keep or close logged%s. %s." % (
                         d["label"], d["flag_date"], "" if d["still_firing"] else " (not firing now)",
-                        status.capitalize()), nums, act="log a keep reason, or close", as_of=as_of)
+                        status.capitalize()), nums, act="log a keep reason, or close", as_of=as_of, rules=rules)
     if e_day is not None and e_in is not None and e_in >= 0 and S0 is not None and e_in <= (_dte(S0["expiration"], today) or 0):
         marks.append("earnings %s%s" % (e_day.isoformat()[5:],
                                        (" (in %d days)" % e_in) if e_in <= EARNINGS_SOON_DAYS else ""))
     return _rec(p, "HOLD", "%s -- hold" % what, status + ("; " + ", ".join(marks) if marks else "") + ".",
-                nums, marks=marks, as_of=as_of)
+                nums, marks=marks, as_of=as_of, rules=rules)
 
 
 # ---------------------------------------------------------------- rule flags
@@ -1319,6 +1381,32 @@ def _selftest():
        "limit rows: BIG over its name, Tech over its sector")
     ok(rows("CC")["cc_earnings"]["state"] == "fired", "covered call: earnings inside fires")
     ok(R["OLD"]["rules"] == [] and R["NEW"]["rules"] == [], "a stale position has no rule rows")
+    # s156: the PMCC rows -- the first fired row is the verb; the lines; the edges
+    for t in ("PM", "PMX"):
+        fired = [x["key"] for x in R[t]["rules"] if x["state"] == "fired" and x["key"] in PMCC_ROW_VERB]
+        ok((PMCC_ROW_VERB[fired[0]] if fired else "HOLD") == v(t),
+           "s156 PMCC rows agree with the verb for %s: %s vs %s" % (t, fired, v(t)))
+    ok(rows("PM")["short_open"]["reading"] == "none · closed 10-10 at $0.50"
+       and rows("PM")["width_floor"]["state"] == "info" and rows("PM")["width_floor"]["reading"] == "strike > $108.50",
+       "PMCC with no short: short open none, width floor $80 + $28.50: %s %s" % (rows("PM")["short_open"], rows("PM")["width_floor"]))
+    ok(rows("PMX")["long_review"]["reading"] == "83 days" and rows("PMX")["long_review"]["line"] == "2026-10-17"
+       and rows("PMX")["take_profit"]["line"] == "buy back $1.00" and rows("PMX")["take_profit"]["reading"] == "10% kept"
+       and rows("PMX")["time_21"]["line"] == "11-13" and rows("PMX")["width_floor"]["line"] == "strike > $110.00"
+       and rows("PMX")["itm_expiry"]["state"] == "pass",
+       "PMCC with a short: the lines: %s" % [rows("PMX")[k] for k in ("long_review", "take_profit", "time_21", "width_floor")])
+    _S = {"strike": 100.0, "open_price": 2.0, "option_type": "CALL", "expiration": "2026-12-18"}
+
+    def _st(key, **kw):
+        a = dict(whole=0.0, long_cost=3000.0, long_expiry="2027-12-17", long_dte=400, spot=95.0, short=_S,
+                 short_mark=1.5, short_dte=40, width=(30.0, 70.0))
+        a.update(kw)
+        return {x["key"]: x for x in pmcc_rows(**a)}[key]["state"]
+    ok(_st("loss_limit", whole=-1500.0) == "fired" and _st("loss_limit", whole=-1499.0) == "next", "loss limit at half the long's cost")
+    ok(_st("take_profit", short_mark=1.0) == "fired" and _st("take_profit", short_mark=1.01) == "next", "50% profit-take at 50%")
+    ok(_st("time_21", short_dte=21) == "fired" and _st("time_21", short_dte=22) == "next", "21 days at 21")
+    ok(_st("itm_expiry", short_dte=7, spot=100.5) == "fired" and _st("itm_expiry", short_dte=8, spot=100.5) == "pass"
+       and _st("itm_expiry", short_dte=7, spot=100.0) == "pass", "in the money in the last 7 days")
+    ok(_st("long_review", long_dte=90) == "fired" and _st("long_review", long_dte=91) == "next", "long review at 90 days")
     ok(rows("TB")["take_profit"]["reading"] == "short $3.50, sold $2.00", "a short dearer than sold: prices, not a percentage: %s"
        % rows("TB")["take_profit"]["reading"])
     ok(limit_row("x", "x", 90, 100)["state"] == "near" and limit_row("x", "x", 89.99, 100)["state"] == "pass"

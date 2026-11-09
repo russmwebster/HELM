@@ -236,6 +236,167 @@ def decide(position_id, account_id=None, db=None, today=None):
         conn.close()
 
 
+# ---------------------------------------------------------------- s156: the PMCC card
+# Russ, 2026-11-08 (board cleanup step 3): the open PMCC's card, built to the display rules. Read-only; plain arithmetic
+# on stored readings. The rules are helm.advice's own rows (advice.pmcc_rows via advise -- the same call Today makes);
+# rent cover is helm.pmcctool's definition (the one that ranks new PMCC entries), so the word means one thing.
+
+def pmcc_numbers(long, short, closed_shorts, spot, long_dte, short_dte):
+    """Pure. long/short: {strike, contracts, mult, open_price, bid, ask, mid, theta} (short None when none is open);
+    closed_shorts: [(open_price, close_price, contracts, mult)]. Dollars for the card's tables."""
+    from helm import pmcctool as PT
+    n, m = long["contracts"], long["mult"]
+    out = {"long_paid": -long["open_price"] * n * m}
+    net = sum((o or 0) * c * mm - (cl or 0) * c * mm for o, cl, c, mm in closed_shorts)
+    sn = (short["contracts"] * short["mult"]) if short else 0
+    if short:
+        net += short["open_price"] * sn
+    out["shorts_net"] = net
+    lm, sm = long.get("mid"), (short.get("mid") if short else None)
+    out["close_mid"] = None if lm is None or (short and sm is None) else lm * n * m - (sm * sn if short else 0.0)
+    lb, sa = long.get("bid"), (short.get("ask") if short else None)
+    out["close_ba"] = None if lb is None or (short and sa is None) else lb * n * m - (sa * sn if short else 0.0)
+    out["whole"] = None if out["close_mid"] is None else out["long_paid"] + net + out["close_mid"]
+    out["even"] = long["strike"] + (long["open_price"] * n * m - net) / (n * m)    # the whole trade even at the long's expiry
+    if short:
+        out["buyback_mid"] = None if sm is None else -sm * sn
+        out["buyback_ask"] = None if short.get("ask") is None else -short["ask"] * sn
+        out["locked"] = None if sm is None else (short["open_price"] - sm) * sn
+        out["to_short_pct"] = None if not spot else (short["strike"] - spot) / spot * 100.0
+    lt = long.get("theta")
+    out["long_week"] = None if lt is None else lt * n * m * 7.0
+    st = short.get("theta") if short else None
+    out["short_week"] = None if st is None else -st * sn * 7.0
+    out["net_week"] = (None if out["long_week"] is None or (short and out["short_week"] is None)
+                       else out["long_week"] + (out["short_week"] or 0.0))
+    out["rent_cover"] = None
+    if short and lm is not None and sm is not None and spot and long_dte and short_dte:
+        out["rent_cover"] = PT.rent_cover({"mid": lm, "strike": long["strike"], "dte": long_dte},
+                                          {"mid": sm, "dte": short_dte}, spot)
+    return out
+
+
+def pmcc_calls_view(run, ticker, last_short_closed, position_id=None):
+    """The latest `helm calls` run as it bears on a PMCC with no short open -- the same test as Today's Calls
+    section: the run counts only if it read the PMCC with no short open (not "already open") and ran on or after
+    the last short's close. Pure."""
+    if not run:
+        return {"none": True}
+    rej = (run.get("rejects") or {}).get(ticker + " (PMCC)") or ""
+    counts = "already open" not in rej and (last_short_closed is None or run["run_at"][:10] >= last_short_closed)
+    if not counts:
+        return {"stale": True, "run_at": run["run_at"][:16]}
+    ch = [c for c in run.get("candidates") or [] if c.get("kind") == "pmcc" and c.get("ticker") == ticker
+          and (position_id is None or c.get("position_id") in (None, position_id))]
+    return {"run_at": run["run_at"][:16], "choices": ch, "reject": rej or None}
+
+
+def _fmt_contract(sign, n, exp, k, typ):
+    d = date.fromisoformat(str(exp)[:10])
+    return "%s%d %s %d '%s $%g %s" % (sign, n, d.strftime("%b"), d.day, d.strftime("%y"), k, typ[0])
+
+
+def decide_pmcc(position_id, account_id=None, db=None, today=None):
+    """The open PMCC's card data, or None for anything else. Never raises past a part."""
+    today = today or date.today()
+    conn = S._conn(db)
+    try:
+        pos = conn.execute("SELECT * FROM positions WHERE id=?", (position_id,)).fetchone()
+        if pos is None or str(pos["strategy"]).upper() != "PMCC" or pos["status"] != "OPEN":
+            return None
+        pos = dict(pos)
+        t = pos["ticker"]
+        legs = [dict(l) for l in conn.execute("SELECT * FROM legs WHERE position_id=? AND option_type IN ('CALL','PUT') "
+                                              "ORDER BY id", (position_id,))]
+        longs = [l for l in legs if l["status"] == "OPEN" and l["direction"] == "LONG"]
+        shorts = [l for l in legs if l["status"] == "OPEN" and l["direction"] == "SHORT"]
+        if len(longs) != 1 or len(shorts) > 1:
+            return {"error": "expected one open long and at most one open short (%d, %d)" % (len(longs), len(shorts))}
+        closed = sorted((l for l in legs if l["direction"] == "SHORT" and l["status"] != "OPEN"),
+                        key=lambda l: (str(l["close_date"] or ""), str(l["id"])))
+
+        def reading(l):
+            r = conn.execute("SELECT checked_at, current_bid, current_ask, current_price, theta FROM leg_checks "
+                             "WHERE leg_id=? ORDER BY checked_at DESC LIMIT 1", (l["id"],)).fetchone()
+            d = {"strike": l["strike"], "contracts": l["contracts"] or 0, "mult": l["multiplier"] or 100,
+                 "open_price": l["open_price"] or 0.0, "expiry": str(l["expiration"])[:10],
+                 "dte": (date.fromisoformat(str(l["expiration"])[:10]) - today).days,
+                 "bid": None, "ask": None, "mid": None, "theta": None, "at": None, "type": l["option_type"]}
+            if r:
+                d.update({"bid": r["current_bid"], "ask": r["current_ask"], "mid": r["current_price"],
+                          "theta": r["theta"], "at": r["checked_at"]})
+            return d
+        L = reading(longs[0])
+        Sh = reading(shorts[0]) if shorts else None
+        ck = conn.execute("SELECT spot_price, checked_at FROM checks WHERE position_id=? AND data_quality='GOOD' "
+                          "AND spot_price IS NOT NULL ORDER BY checked_at DESC LIMIT 1", (position_id,)).fetchone()
+        spot = ck["spot_price"] if ck else None
+        num = pmcc_numbers(L, Sh, [(l["open_price"], l["close_price"], l["contracts"] or 0, l["multiplier"] or 100)
+                                   for l in closed], spot, L["dte"], Sh["dte"] if Sh else None)
+        last = closed[-1] if closed else None
+        from helm.fillopens import width_floor
+        fl, lk = width_floor([dict(l) for l in legs])
+        wl = conn.execute("SELECT next_earnings FROM watchlist WHERE ticker=?", (t,)).fetchone()
+        ne = wl["next_earnings"] if wl else None
+        out = {"ticker": t, "position_id": position_id, "spot": spot, "long": L, "short": Sh, "num": num,
+               "floor_strike": (lk + fl) if fl is not None else None,
+               "earnings": (str(ne)[:10] if ne and str(ne)[:10] >= today.isoformat() else None),
+               "legs": [dict(L, role="Long", contract=_fmt_contract("+", L["contracts"], L["expiry"], L["strike"], L["type"]))]
+               + ([dict(Sh, role="Short", contract=_fmt_contract("−", Sh["contracts"], Sh["expiry"], Sh["strike"], Sh["type"]))]
+                  if Sh else []),
+               "last_short": ({"closed": str(last["close_date"])[:10], "price": last["close_price"]} if last else None)}
+        ats = [x["at"] for x in (L, Sh) if x and x["at"]]
+        out["asof"] = min(ats)[:16].replace("T", " ") if ats else None
+
+        # the rules -- the advice's own rows (the same engine call Today makes)
+        try:
+            from helm import advice
+            rec = next((r for r in advice.advise(db=db, account_id=account_id or pos.get("account_id"))
+                        if r.get("position_id") == position_id), None)
+            out["rules"] = [dict(x) for x in (rec.get("rules") or [])] if rec else []
+            out["verb"] = rec.get("verb") if rec else None
+            if rec is None:
+                out["rules_error"] = "no advice line for this position"
+        except Exception as e:                     # noqa: BLE001
+            out["rules"], out["rules_error"] = [], "%s: %s" % (type(e).__name__, e)
+
+        # no short open: the latest `helm calls` run (helm.calltool.latest), on the width-floor row
+        out["calls"] = None
+        if Sh is None:
+            try:
+                from helm import calltool as C
+                out["calls"] = pmcc_calls_view(C.latest(conn, 0), t, out["last_short"]["closed"] if last else None,
+                                               position_id)
+            except Exception as e:                 # noqa: BLE001
+                out["calls"] = {"error": "%s: %s" % (type(e).__name__, e)}
+            cv = out["calls"] or {}
+            for r in out["rules"]:
+                if r["key"] == "width_floor":
+                    if cv.get("choices"):
+                        r["line"] = "%d choice%s" % (len(cv["choices"]), "" if len(cv["choices"]) == 1 else "s")
+                    elif cv.get("run_at") and not cv.get("error"):
+                        r["line"] = "none passes"
+                    else:
+                        r["line"] = "not priced"
+                    if cv.get("run_at") and not cv.get("stale"):
+                        r["reading"] += " · calls run %s" % cv["run_at"][5:]
+
+        # the book's delta limit as a row (helm.advice.limit_row -- one comparison), as on the put card
+        try:
+            from helm import bookview, advice as _A
+            b = S.book(account_id=account_id or pos.get("account_id"), db=db)
+            v = bookview.view(account_id or pos.get("account_id"))
+            tot = v["totals"]["bw_delta"]
+            lim = (v.get("limits") or {}).get("delta_cap") or (b["share"] / 2.0)
+            if tot is not None and lim:
+                out["rules"].append(_A.limit_row("book_delta", "Book delta limit (half the sleeve)", abs(tot), lim))
+        except Exception as e:                     # noqa: BLE001
+            out["book_error"] = "%s: %s" % (type(e).__name__, e)
+        return out
+    finally:
+        conn.close()
+
+
 def _selftest():
     fails = []
 
@@ -257,7 +418,39 @@ def _selftest():
     ok(o["intrinsic"] == 0.0 and abs(o["tv"] - 9.2) < 1e-9 and o["paper_if_assigned"] > 0, "out of the money: all time value")
     z = put_numbers(100.0, 1, 1.0, None, None, None, None, None, 0)
     ok(z["tv"] is None and z["rate"] is None and z["close_ask_usd"] is None, "no reading: nothing invented")
-    print("decide selftest:", "PASS (%d)" % 10 if not fails else "%d FAIL" % len(fails))
+    # s156: CVX PMCC, 11-06 15:15: long 01/21/28 170 x1 paid 55.10 (bid 50.95 ask 53.20 mid 52.08, theta -0.03);
+    # short 12/18 230 sold 3.35 (bid 2.47 ask 2.84 mid 2.66, theta -0.08); spot 213.71; 439 / 40 days
+    Lc = {"strike": 170.0, "contracts": 1, "mult": 100, "open_price": 55.10, "bid": 50.95, "ask": 53.20, "mid": 52.08,
+          "theta": -0.03}
+    Sc = {"strike": 230.0, "contracts": 1, "mult": 100, "open_price": 3.35, "bid": 2.47, "ask": 2.84, "mid": 2.66,
+          "theta": -0.08}
+    p = pmcc_numbers(Lc, Sc, [], 213.71, 439, 40)
+    ok(abs(p["long_paid"] + 5510) < 1e-6 and abs(p["shorts_net"] - 335) < 1e-6 and abs(p["close_mid"] - 4942) < 1e-6
+       and abs(p["whole"] + 233) < 1e-6, "PMCC money: -5,510 + 335 + 4,942 = -233 (the advice's figure)")
+    ok(abs(p["close_ba"] - 4811) < 1e-6 and abs(p["buyback_mid"] + 266) < 1e-6 and abs(p["buyback_ask"] + 284) < 1e-6
+       and abs(p["locked"] - 69) < 1e-6, "close at the bid/ask, buy back at the mid and the ask, locked in")
+    ok(abs(p["even"] - 221.75) < 1e-9 and abs(p["to_short_pct"] - (230 - 213.71) / 213.71 * 100) < 1e-9,
+       "even at the long's expiry: 170 + 55.10 - 3.35")
+    ok(abs(p["short_week"] - 56) < 1e-6 and abs(p["long_week"] + 21) < 1e-6 and abs(p["net_week"] - 35) < 1e-6,
+       "rent vs decay a week from theta")
+    from helm import pmcctool as PT
+    ok(abs(p["rent_cover"] - (2.66 / 40 * 30) / ((52.08 - (213.71 - 170)) / 439 * 30)) < 1e-9,
+       "rent cover is pmcctool's: %.2f" % p["rent_cover"])
+    # NVDA: no short; one closed short 3.40 -> 1.37
+    Ln = {"strike": 160.0, "contracts": 1, "mult": 100, "open_price": 62.90, "bid": 52.40, "ask": 53.10, "mid": 52.75,
+          "theta": -0.05}
+    q = pmcc_numbers(Ln, None, [(3.40, 1.37, 1, 100)], 187.0, 404, None)
+    ok(abs(q["shorts_net"] - 203) < 1e-6 and abs(q["close_mid"] - 5275) < 1e-6 and abs(q["whole"] + 812) < 1e-6
+       and abs(q["even"] - 220.87) < 1e-9 and q["rent_cover"] is None and abs(q["net_week"] + 35) < 1e-6,
+       "PMCC with no short: -6,290 + 203 + 5,275 = -812; even 220.87; no rent")
+    run = {"run_at": "2026-11-06 15:50:59", "rejects": {"NVDA (PMCC)": "no call passes: strike not above the floor"},
+           "candidates": []}
+    ok(pmcc_calls_view(run, "NVDA", "2026-11-05").get("choices") == [] and
+       pmcc_calls_view(run, "NVDA", "2026-11-07").get("stale") and
+       pmcc_calls_view(dict(run, rejects={"NVDA (PMCC)": "a short is already open"}), "NVDA", None).get("stale")
+       and pmcc_calls_view(None, "NVDA", None).get("none"),
+       "a calls run counts only after the last short closed and with no short open")
+    print("decide selftest:", "PASS (%d)" % (10 + 7) if not fails else "%d FAIL" % len(fails))
     return 1 if fails else 0
 
 

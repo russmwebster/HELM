@@ -2077,6 +2077,20 @@ def pmcc_ruler_svg(spot, long_k, short_k=None, floor_k=None, asof=None):
             'height:auto">%s</svg>' % (r["text"], "".join(e)))
 
 
+def pmcc_ruler_card_svg(spot, long_k, short_k=None, floor_k=None):
+    """s156: the PMCC card's ruler -- the strip alone, no sentence and no time (display rules 1 and 6). None when
+    the stock has no reading."""
+    r = pmcc_ruler(spot, long_k, short_k, floor_k)
+    if not r:
+        return None
+    e, _ = _ruler_els(r, 24, 736, 30, compact=False)
+    return ('<svg viewBox="0 0 760 78" role="img" aria-label="spot %.2f, long %g%s%s" style="display:block;width:100%%;'
+            'max-width:760px;height:auto">%s</svg>' % (r["spot"], r["long_k"],
+                                                       ", short %g" % r["short_k"] if r["short_k"] is not None else "",
+                                                       ", next short above %.2f" % r["floor_k"] if r["floor_k"] is not None else "",
+                                                       "".join(e)))
+
+
 def pmcc_glance(spot, long_k, short=None, short_mark=None, floor_k=None, whole=None, limit=None,
                 today=None, earnings=None, rent_decay=None, half=None, day21=21):
     """The four strips' numbers, plain data (s151). short: the open short leg (strike, open_price,
