@@ -749,12 +749,33 @@ def _day_label(d):
     return date.fromisoformat(d).strftime("%a %m-%d")
 
 
-def coverage(conn, day=None):
+def _import_close_times(conn, ids):
+    """When the Fidelity import booked each position's close: {position_id: 'YYYY-MM-DDTHH:MM'}.
+    The import stamps a close 16:00 on its trade date (date only); the snapshot stops reading the
+    position as soon as it is booked, so coverage needs the booking time (s157)."""
+    out = {}
+    if not ids:
+        return out
+    try:
+        q = ("SELECT position_id, MAX(imported_at) FROM broker_fills WHERE outcome='BOOKED' "
+             "AND position_id IN (%s) GROUP BY position_id" % ",".join("?" * len(ids)))
+        for pid, at in conn.execute(q, list(ids)).fetchall():
+            if at:
+                out[pid] = str(at)[:16]
+    except sqlite3.OperationalError:
+        pass                      # no broker_fills table (an old copy, a self-test)
+    return out
+
+
+def coverage(conn, day=None, now=None):
     """Did every real position get a reading at every snapshot slot on `day`?
     `day` defaults to the latest day with a reading on a real position. A
     position is expected only at slots after it was BOOKED in HELM (created_at):
     a fill typed in later and backdated (JPM's put, sold 10-22, booked 10-23
     11:03) could not have been read before it existed.
+    A slot is judged only once its window (SLOT_WINDOW_MIN) has ended, so today's later
+    snapshots are not counted missed before they run; a close booked by the import counts
+    from the time it was booked, not the 16:00 stamp (s157). `now` is for tests.
     Returns {day, n, missed: [(ticker, slot)]}."""
     if day is None:
         r = conn.execute("SELECT MAX(substr(k.checked_at,1,10)) FROM checks k JOIN positions p "
@@ -766,17 +787,24 @@ def coverage(conn, day=None):
                        "AND substr(opened_at,1,10) <= ? AND (closed_at IS NULL OR substr(closed_at,1,10) >= ?) "
                        "ORDER BY ticker", (day, day)).fetchall()
     from datetime import timedelta
+    now = now or datetime.now()
+    booked_close = _import_close_times(conn, [p["id"] for p in pos if p["closed_at"]])
     missed = []
     for p in pos:
         known = max(str(p["opened_at"] or ""), str(p["created_at"] or ""))
         for slot in SNAPSHOT_SLOTS:
             start = datetime.fromisoformat("%sT%s" % (day, slot))
+            end = start + timedelta(minutes=SLOT_WINDOW_MIN)
+            if end > now:
+                continue          # this slot's window hasn't ended yet: not judged
             if known[:10] > day or (known[:10] == day and len(known) > 10 and known[11:16] > slot):
                 continue
             gone = str(p["closed_at"] or "")
+            bc = booked_close.get(p["id"], "")
+            if bc[:10] == day and bc < gone[:16]:
+                gone = bc         # booked closed by the import earlier than its 16:00 stamp
             if gone[:10] == day and (len(gone) <= 10 or gone[11:16] <= slot):
                 continue          # closed before this slot (a date-only close counts as before every slot)
-            end = start + timedelta(minutes=SLOT_WINDOW_MIN)
             hit = conn.execute("SELECT 1 FROM checks WHERE position_id=? AND checked_at >= ? AND checked_at < ? LIMIT 1",
                                (p["id"], start.isoformat(), end.isoformat())).fetchone()
             if not hit:
@@ -1430,6 +1458,23 @@ def _selftest():
     ok(cv["missed"] == [("AAA", "12:30")] and cv["n"] == 3,
        "coverage: backdated booking and early close skipped, real gap found: %s" % cv)
     ok(coverage_text(cv) == "Friday's check: AAA missed 12:30", "coverage text: %s" % coverage_text(cv))
+    # s157: a slot isn't judged before its window ends; an import close counts from when it was booked
+    T = lambda hm: datetime.fromisoformat("2026-10-23T" + hm)
+    ok(coverage(c, "2026-10-23", now=T("10:39"))["missed"] == [], "coverage: nothing judged before 10:40")
+    ok(coverage(c, "2026-10-23", now=T("13:09"))["missed"] == [], "coverage: 12:30 not judged at 13:09")
+    ok(coverage(c, "2026-10-23", now=T("13:10"))["missed"] == [("AAA", "12:30")], "coverage: 12:30 judged at 13:10")
+    c.executescript("""
+      CREATE TABLE broker_fills (position_id TEXT, outcome TEXT, imported_at TEXT);
+      INSERT INTO positions VALUES ('y','YYY','REAL','2026-10-01','2026-10-01','2026-10-23T16:00:00'),
+        ('z','ZZZ','REAL','2026-10-01','2026-10-01','2026-10-23T16:00:00');
+      INSERT INTO broker_fills VALUES ('y','BOOKED','2026-10-01T09:00:00'),('y','BOOKED','2026-10-23T09:36:32'),
+        ('z','BOOKED','2026-10-23T13:20:00'),('z','CORRECTED','2026-10-23T09:00:00');
+      INSERT INTO checks VALUES ('z','2026-10-23T10:03:00');
+    """)
+    c.commit()
+    cv = coverage(c, "2026-10-23", now=T("17:00"))
+    ok(cv["missed"] == [("AAA", "12:30"), ("ZZZ", "12:30")],
+       "coverage: import close at 09:36 expects no slot; one at 13:20 still owes 12:30: %s" % cv["missed"])
     c.close()
     # s138: the book's theta range and delta limit, from a view (no database)
     def fv(theta, bw, stale=()):
