@@ -296,6 +296,39 @@ def _fmt_contract(sign, n, exp, k, typ):
     return "%s%d %s %d '%s $%g %s" % (sign, n, d.strftime("%b"), d.day, d.strftime("%y"), k, typ[0])
 
 
+def pmcc_read(conn, position_id, today):
+    """s156b: one open PMCC's legs and latest leg readings, and pmcc_numbers on them -- shared by the card
+    (decide_pmcc) and Today (helm.todayview). {"error"} when the legs can't be read."""
+    legs = [dict(l) for l in conn.execute("SELECT * FROM legs WHERE position_id=? AND option_type IN ('CALL','PUT') "
+                                          "ORDER BY id", (position_id,))]
+    longs = [l for l in legs if l["status"] == "OPEN" and l["direction"] == "LONG"]
+    shorts = [l for l in legs if l["status"] == "OPEN" and l["direction"] == "SHORT"]
+    if len(longs) != 1 or len(shorts) > 1:
+        return {"error": "expected one open long and at most one open short (%d, %d)" % (len(longs), len(shorts))}
+    closed = sorted((l for l in legs if l["direction"] == "SHORT" and l["status"] != "OPEN"),
+                    key=lambda l: (str(l["close_date"] or ""), str(l["id"])))
+
+    def reading(l):
+        r = conn.execute("SELECT checked_at, current_bid, current_ask, current_price, theta FROM leg_checks "
+                         "WHERE leg_id=? ORDER BY checked_at DESC LIMIT 1", (l["id"],)).fetchone()
+        d = {"strike": l["strike"], "contracts": l["contracts"] or 0, "mult": l["multiplier"] or 100,
+             "open_price": l["open_price"] or 0.0, "expiry": str(l["expiration"])[:10],
+             "dte": (date.fromisoformat(str(l["expiration"])[:10]) - today).days,
+             "bid": None, "ask": None, "mid": None, "theta": None, "at": None, "type": l["option_type"]}
+        if r:
+            d.update({"bid": r["current_bid"], "ask": r["current_ask"], "mid": r["current_price"],
+                      "theta": r["theta"], "at": r["checked_at"]})
+        return d
+    L = reading(longs[0])
+    Sh = reading(shorts[0]) if shorts else None
+    ck = conn.execute("SELECT spot_price, checked_at FROM checks WHERE position_id=? AND data_quality='GOOD' "
+                      "AND spot_price IS NOT NULL ORDER BY checked_at DESC LIMIT 1", (position_id,)).fetchone()
+    spot = ck["spot_price"] if ck else None
+    num = pmcc_numbers(L, Sh, [(l["open_price"], l["close_price"], l["contracts"] or 0, l["multiplier"] or 100)
+                               for l in closed], spot, L["dte"], Sh["dte"] if Sh else None)
+    return {"legs": legs, "L": L, "Sh": Sh, "closed": closed, "spot": spot, "num": num}
+
+
 def decide_pmcc(position_id, account_id=None, db=None, today=None):
     """The open PMCC's card data, or None for anything else. Never raises past a part."""
     today = today or date.today()
@@ -306,33 +339,10 @@ def decide_pmcc(position_id, account_id=None, db=None, today=None):
             return None
         pos = dict(pos)
         t = pos["ticker"]
-        legs = [dict(l) for l in conn.execute("SELECT * FROM legs WHERE position_id=? AND option_type IN ('CALL','PUT') "
-                                              "ORDER BY id", (position_id,))]
-        longs = [l for l in legs if l["status"] == "OPEN" and l["direction"] == "LONG"]
-        shorts = [l for l in legs if l["status"] == "OPEN" and l["direction"] == "SHORT"]
-        if len(longs) != 1 or len(shorts) > 1:
-            return {"error": "expected one open long and at most one open short (%d, %d)" % (len(longs), len(shorts))}
-        closed = sorted((l for l in legs if l["direction"] == "SHORT" and l["status"] != "OPEN"),
-                        key=lambda l: (str(l["close_date"] or ""), str(l["id"])))
-
-        def reading(l):
-            r = conn.execute("SELECT checked_at, current_bid, current_ask, current_price, theta FROM leg_checks "
-                             "WHERE leg_id=? ORDER BY checked_at DESC LIMIT 1", (l["id"],)).fetchone()
-            d = {"strike": l["strike"], "contracts": l["contracts"] or 0, "mult": l["multiplier"] or 100,
-                 "open_price": l["open_price"] or 0.0, "expiry": str(l["expiration"])[:10],
-                 "dte": (date.fromisoformat(str(l["expiration"])[:10]) - today).days,
-                 "bid": None, "ask": None, "mid": None, "theta": None, "at": None, "type": l["option_type"]}
-            if r:
-                d.update({"bid": r["current_bid"], "ask": r["current_ask"], "mid": r["current_price"],
-                          "theta": r["theta"], "at": r["checked_at"]})
-            return d
-        L = reading(longs[0])
-        Sh = reading(shorts[0]) if shorts else None
-        ck = conn.execute("SELECT spot_price, checked_at FROM checks WHERE position_id=? AND data_quality='GOOD' "
-                          "AND spot_price IS NOT NULL ORDER BY checked_at DESC LIMIT 1", (position_id,)).fetchone()
-        spot = ck["spot_price"] if ck else None
-        num = pmcc_numbers(L, Sh, [(l["open_price"], l["close_price"], l["contracts"] or 0, l["multiplier"] or 100)
-                                   for l in closed], spot, L["dte"], Sh["dte"] if Sh else None)
+        rd = pmcc_read(conn, position_id, today)
+        if rd.get("error"):
+            return {"error": rd["error"]}
+        legs, L, Sh, closed, spot, num = rd["legs"], rd["L"], rd["Sh"], rd["closed"], rd["spot"], rd["num"]
         last = closed[-1] if closed else None
         from helm.fillopens import width_floor
         fl, lk = width_floor([dict(l) for l in legs])
