@@ -108,6 +108,31 @@ def watchlist(db=None, today=None):
             "sectors": sorted({r["sector"] for r in rows if r["sector"]})}
 
 
+def reference_constants():
+    """s156 (step 7): the numbers the reference page quotes, read from the engine's own constants so the page
+    cannot drift from the rules. Pure (imports only)."""
+    from helm import advice as A, bookview as BV, calltool as C, pmcctool as PM, puttool as P, recovery as RC
+    from helm import opportunity as OP, sleeve as SL
+    pct = lambda x: "%g%%" % (x * 100)
+    return {
+        "profit_take": pct(A.PROFIT_TAKE), "time_exit": A.TIME_EXIT_DTE, "tested_delta": "%.2f" % A.TESTED_DELTA,
+        "long_review": A.PMCC_LONG_REVIEW_DTE, "loss_limit": pct(A.LOSS_LIMIT_FRAC), "itm_days": A.SHORT_EXPIRY_SOON_DAYS,
+        "near": pct(A.NEAR_FRAC), "passing": ", ".join(A.PASSING), "stale_days": A.STALE_DAYS,
+        "name_pct": pct(SL.NAME_PCT), "sector_pct": pct(SL.SECTOR_PCT), "sleeve_base": "${:,.0f}".format(SL.SLEEVE_BASE),
+        "sleeve_start": SL.SLEEVE_START, "same_company": " + ".join(SL.SAME_COMPANY[0]) if SL.SAME_COMPANY else "",
+        "theta_lo": "%g%%" % (BV.THETA_LO * 100), "theta_hi": "%g%%" % (BV.THETA_HI * 100), "delta_frac": pct(BV.DELTA_FRAC),
+        "market_symbol": BV.MARKET_SYMBOL, "trading_days": BV.TRADING_DAYS, "vol_points": "%g" % BV.STRESS_VOL_POINTS,
+        "put_delta": "%.2f–%.2f" % (P.DELTA_MIN, P.DELTA_MAX), "dte": "%d–%d" % (P.DTE_MIN, P.DTE_MAX),
+        "ivr_min": "%g" % P.IVR_MIN, "spread_max": "%g%%" % P.SPREAD_MAX_PCT, "earn_veto": P.EARN_VETO_DAYS,
+        "last_report_ok": P.LAST_REPORT_OK_DAYS, "top_n": P.TOP_N, "fit_n": P.FIT_N,
+        "call_delta": "%.2f–%.2f" % (C.DELTA_MIN, C.DELTA_MAX), "next_report_earliest": C.NEXT_REPORT_EARLIEST,
+        "pmcc_long_dte": "%d–%d" % PM.LONG_DTE, "pmcc_long_delta": "%.2f–%.2f" % PM.LONG_DELTA,
+        "pmcc_short_delta": "%.2f–%.2f" % PM.SHORT_DELTA, "rent_cover_flag": "%g" % PM.RENT_COVER_FLAG,
+        "rec_version": RC.RULE_VERSION, "rec_paths": "{:,}".format(RC.N_PATHS), "fee": "$%.2f" % (RC.FEE * 100),
+        "half_spread": "%g%%" % (RC.HALF_SPREAD * 100), "opp_version": OP.RULE_VERSION, "opp_paths": "{:,}".format(OP.N_PATHS),
+    }
+
+
 def _selftest():
     fails = []
 
