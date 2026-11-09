@@ -1305,7 +1305,7 @@ def trail_series(pos, track):
     return out if any(x is not None for x in out) else None
 
 
-def close_svg(track, width=760, height=230, trail=None):
+def close_svg(track, width=760, height=230, trail=None, plain=False):
     """Inline SVG for the cost-to-close track. No chart library, no external
     asset, no script — it renders from the markup alone.
 
@@ -1402,7 +1402,7 @@ def close_svg(track, width=760, height=230, trail=None):
              % (X(n - 1), Y(last["value"]), fill, ring))
     e.append('<text x="%.1f" y="%.1f" font-size="11" font-weight="600" fill="var(--viz-ink,#0b0b0b)">%s</text>'
              % (X(n - 1) + 9, Y(last["value"]) + 4, _amt(last["value"])))
-    tr = track.get("trend")
+    tr = None if plain else track.get("trend")     # s156: plain = no trend words, no caption
     if tr and tr.get("clear") and tr.get("d1"):
         # HELM-147: the day-over-day delta at the last point, coloured by
         # better/worse -- the same side-aware flip the area fill uses.
@@ -1428,8 +1428,9 @@ def close_svg(track, width=760, height=230, trail=None):
     _cap = track.get("caption") or ("↓ better — costs less to buy back than you took in"
             if track["credit"] else
             "↑ better — sells back for more than you paid")
-    e.append('<text x="%.1f" y="%.1f" font-size="10.5" fill="var(--viz-muted,#898781)">%s</text>'
-             % (ml, mt - 8, _cap))
+    if not plain:
+        e.append('<text x="%.1f" y="%.1f" font-size="10.5" fill="var(--viz-muted,#898781)">%s</text>'
+                 % (ml, mt - 8, _cap))
 
     every = max(1, -(-n // 6))
     gap = -(-every * 7 // 10)

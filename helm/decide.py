@@ -407,6 +407,100 @@ def decide_pmcc(position_id, account_id=None, db=None, today=None):
         conn.close()
 
 
+# ---------------------------------------------------------------- s156: the closed put / covered call card
+# Russ, 2026-11-08 (board cleanup step 6): history lives on closed cards. Read-only; stored rows only -- a value with
+# no stored source is None ("—" on the card), never invented. The rules at the close are helm.advice.short_rule_rows
+# on the last reading before the close (the position's own rules; the book's limits at the time are not stored).
+
+def closed_short(position_id, db=None):
+    """The closed real CSP or covered call's card data, or None for anything else."""
+    from helm import advice as A, netpnl, thesis as T
+    conn = S._conn(db)
+    try:
+        pos = conn.execute("SELECT * FROM positions WHERE id=?", (position_id,)).fetchone()
+        if pos is None or pos["book"] != "REAL" or pos["status"] == "OPEN" or \
+                str(pos["strategy"]).upper() not in ("CSP", "COVERED_CALL"):
+            return None
+        pos = dict(pos)
+        is_cc = pos["strategy"] == "COVERED_CALL"
+        leg = conn.execute("SELECT * FROM legs WHERE position_id=? AND direction='SHORT' AND option_type IN ('PUT','CALL') "
+                           "ORDER BY id", (position_id,)).fetchall()
+        if len(leg) != 1:
+            return {"error": "expected one short option leg, found %d" % len(leg)}
+        l = dict(leg[0])
+        n, k, credit = l["contracts"] or 0, l["strike"], l["open_price"] or 0.0
+        exp = date.fromisoformat(str(l["expiration"])[:10])
+        opened = str(l["open_date"] or pos["opened_at"])[:10]
+        closed_at = str(l["close_date"] or pos["closed_at"] or "")
+        closed = closed_at[:10] or None
+        cut = closed_at[:10] + "T23:59:59" if closed else "9999"
+        out = {"ticker": pos["ticker"], "position_id": position_id, "strategy": pos["strategy"], "contracts": n,
+               "strike": k, "expiry": exp.isoformat(), "type": l["option_type"], "opened": opened, "closed": closed,
+               "exit_reason": (pos["exit_reason"] or "").replace("_", " ").lower() or None,
+               "held": (date.fromisoformat(closed) - date.fromisoformat(opened)).days if closed else None,
+               "collateral": (k * 100 * n) if not is_cc else None}
+        try:
+            out["result"] = netpnl.position(conn, position_id)
+        except Exception as e:                     # noqa: BLE001
+            out["result"] = {"gross": pos["realized_pnl"], "net": pos["realized_pnl"], "label": "gross", "error": str(e)}
+        res = out["result"].get("net")
+        base = out["collateral"] if out["collateral"] else None
+        out["on_collateral"] = (res / base * 100.0) if (res is not None and base) else None
+        g = conn.execute("SELECT grade FROM ownership_quality WHERE ticker=? AND date<=? ORDER BY date DESC, updated_at DESC "
+                         "LIMIT 1", (pos["ticker"], opened)).fetchone()
+        fund = S._has_table(conn, "approved_funds") and \
+            conn.execute("SELECT 1 FROM approved_funds WHERE ticker=?", (pos["ticker"],)).fetchone()
+        out["grade"] = "FUND" if fund else (g["grade"] if g else None)
+        out["sector"] = S.sector_of(conn, pos["ticker"])[0]
+        snap = conn.execute("SELECT * FROM entry_snapshots WHERE position_id=? ORDER BY snapshot_at LIMIT 1",
+                            (position_id,)).fetchone()
+        ck = conn.execute("SELECT checked_at, spot_price FROM checks WHERE position_id=? AND data_quality='GOOD' AND "
+                          "spot_price IS NOT NULL AND checked_at<=? ORDER BY checked_at DESC LIMIT 1",
+                          (position_id, cut)).fetchone()
+        lc = conn.execute("SELECT checked_at, current_price, delta, iv_current FROM leg_checks WHERE leg_id=? AND "
+                          "checked_at<=? AND current_price IS NOT NULL ORDER BY checked_at DESC LIMIT 1",
+                          (l["id"], cut)).fetchone()
+        if lc is None:      # a single-leg position: the check row, as helm.advice._leg_mark falls back
+            lc = conn.execute("SELECT checked_at, current_price, delta, NULL AS iv_current FROM checks WHERE position_id=? "
+                              "AND data_quality='GOOD' AND checked_at<=? AND current_price IS NOT NULL "
+                              "ORDER BY checked_at DESC LIMIT 1", (position_id, cut)).fetchone()
+        cp = l["close_price"]
+        how = ("assigned" if pos["exit_reason"] == "ASSIGNED" else
+               ("expired" if (cp in (0, 0.0) and closed and closed >= exp.isoformat()) else "bought"))
+        out["entry"] = {"date": opened, "price": credit, "cash": credit * 100 * n,
+                        "spot": snap["spot_price"] if snap else None,
+                        "dte": (exp - date.fromisoformat(opened)).days,
+                        "iv": snap["iv_current"] if snap else None}
+        out["exit"] = {"date": closed, "price": cp, "how": how, "cash": (-(cp or 0.0) * 100 * n) if cp is not None else None,
+                       "spot": ck["spot_price"] if ck else None, "spot_at": ck["checked_at"][:10] if ck else None,
+                       "dte": (exp - date.fromisoformat(closed)).days if closed else None,
+                       "iv": lc["iv_current"] if lc else None}
+        # rules at the close: the advice's rows on the last reading before it
+        out["rules"] = []
+        if ck and lc:
+            rd = date.fromisoformat(lc["checked_at"][:10])
+            kept = (credit - lc["current_price"]) / credit if credit else None
+            out["rules"] = A.short_rule_rows(is_cc, ck["spot_price"], k, lc["delta"], (exp - rd).days, kept, credit,
+                                             exp.isoformat(), grade=out["grade"])
+            out["rules_at"] = lc["checked_at"][:16].replace("T", " ")
+        # the cost to buy back, last check each day (helm.thesis.close_series / close_svg, plain)
+        checks = [dict(r) for r in conn.execute(
+            "SELECT checked_at, spot_price, pnl_unrealized, current_price, data_quality FROM checks WHERE position_id=? "
+            "AND data_quality='GOOD' AND checked_at<=? ORDER BY checked_at", (position_id, cut))]
+        out["chart"] = None
+        try:
+            tr = T.close_series(pos, checks, closed=True)
+            if tr and tr.get("points"):
+                tr["ref_word"] = "sold"
+                out["chart"] = T.close_svg(tr, plain=True)
+                out["chart_days"] = len(tr["points"])
+        except Exception as e:                     # noqa: BLE001
+            out["chart_error"] = "%s: %s" % (type(e).__name__, e)
+        return out
+    finally:
+        conn.close()
+
+
 def _selftest():
     fails = []
 
