@@ -41,4 +41,8 @@ perturbations caught, control last. `helm restart pg` after each step, outside t
 - Closed XLE card: the beliefs section says "grade FUND — a grade below B makes assignment a problem" (wrong; cut with the beliefs).
 
 ## Status
-- 11-08: rules and plan agreed; step 1 started.
+- 11-08: rules and plan agreed; steps 1–2 built (s155).
+- 11-08/09: steps 3–8 built, tested and committed (s156) — the PMCC card, Today, Details and the Watchlist, closed puts and covered calls, the Reference page and its "?" links, the records. **The plan is done.**
+- Decided in the build: rent cover on the card is `helm pmcc`'s definition; Today, the cards and Details close at the mid (one price); the book's limits at a past close are not shown (not stored); closed cards for retired strategies and paper keep their old layout.
+- Fixed from the review list: CSCO's stale roll figure; GOOGL's shares on Today; days left from today everywhere; the stale diagonals note and Details' intro; past "next earnings" dates (now last reports) and DAL's name; the closed XLE card's wrong grade line.
+- Left: the covered-call card and a closed PMCC card take the new layouts when one exists; `advice.status()`'s stale "gross" flag.
