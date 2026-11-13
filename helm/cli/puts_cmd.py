@@ -57,15 +57,28 @@ def _show(run, show_all=False, why=False):
         console.print("[dim]%s[/dim]" % run["note"])
     cands = run["candidates"] if show_all else run["candidates"][:TOP_N]
 
+    try:                                         # s157b: what HELM holds open on each name now (display only)
+        from helm.todayview import held_on, _held_conn
+        hc = _held_conn()
+        try:
+            held = {(c["ticker"], c["expiry"], c["strike"]): held_on(hc, c["ticker"], c["expiry"], c["strike"])
+                    for c in run["candidates"]}
+        finally:
+            hc.close()
+    except Exception as e:
+        held = {}
+        console.print("[dim]Held not read (%s)[/dim]" % str(e)[:60])
+
     def _table(rows):
         t = Table(box=box.SIMPLE_HEAD, pad_edge=False)
-        for h, j in (("#", "right"), ("Name", "left"), ("Grade", "left"), ("Put", "left"),
+        for h, j in (("#", "right"), ("Name", "left"), ("Held", "left"), ("Grade", "left"), ("Put", "left"),
                      ("Days", "right"), ("Delta", "right"), ("Premium", "right"), ("A year", "right"),
                      ("Secures", "right"), ("50% buy-back", "right"), ("IVR", "right"),
                      ("Earnings", "left"), ("Size", "left")):
             t.add_column(h, justify=j, no_wrap=True)
         for c in rows:
-            t.add_row(str(c["rank"]), c["ticker"], c["grade"] or "",
+            t.add_row(str(c["rank"]), c["ticker"], held.get((c["ticker"], c["expiry"], c["strike"])) or "",
+                      c["grade"] or "",
                       "%s %g" % (c["expiry"], c["strike"]), str(c["dte"]),
                       "%.2f" % c["delta"] if c["delta"] is not None else "",
                       "$%.2f" % c["mid"], "%.0f%%" % (100 * c["ann_return"]),

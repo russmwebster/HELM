@@ -182,6 +182,7 @@ def run():
                 ("CALL_AWAY", "To book -- covered calls assigned (shares called away)"),
                 ("DIVIDEND", "To book -- dividends on HELM-held shares (counted in the sleeve)"),
                 ("OPEN", "To book -- opened at Fidelity (new positions, PMCC shorts, rolls)"),
+                ("ADD_ON", "To book -- more sold of a contract HELM holds open (added to that position)"),
                 ("PRICE_FIX", "To correct -- entry prices on open positions"),
                 ("FEE_FILL", "To record -- opening fees of trades already in HELM (net of fees from 10/24)"),
                 ("MATCHED", "Already in HELM (recorded so they aren't checked again)"),

@@ -266,17 +266,70 @@ def _calls_latest(conn):
     return C.latest(conn, 0)
 
 
-def puts_view(run):
-    """The put list's rows for Today, from puttool.latest's run (top 5, the best that fit)."""
+def held_on(conn, ticker, expiry=None, strike=None):
+    """s157b (Russ, 2026-11-13): what HELM holds open now on this company (GOOG + GOOGL one name), for the put
+    list's Held column -- "10 × same put" when it is the offered contract, else each put / call as "N × MM-DD S P",
+    "PMCC", "100 sh". "" when nothing. Display only: nothing is offered, ranked or sized from it."""
+    names = [t for t in {ticker} | {x for g in S.SAME_COMPANY if ticker in g for x in g}]
+    q = ",".join("?" * len(names))
+    out = []
+    for r in conn.execute(
+            "SELECT p.ticker, p.strategy, l.option_type, l.strike, l.expiration, l.contracts FROM positions p "
+            "JOIN legs l ON l.position_id=p.id WHERE p.book='REAL' AND p.status='OPEN' AND l.status='OPEN' "
+            "AND l.direction='SHORT' AND p.strategy IN ('CSP','COVERED_CALL') AND p.ticker IN (%s) "
+            "ORDER BY p.ticker, l.expiration, l.strike" % q, names).fetchall():
+        tk, strat, ot, k, exp, n = tuple(r)
+        pre = "" if tk == ticker else tk + " "
+        if (strat == "CSP" and tk == ticker and expiry and str(exp)[:10] == str(expiry)[:10]
+                and strike is not None and abs(float(k) - float(strike)) < 1e-9):
+            out.append("%s × same put" % n)
+        else:
+            out.append("%s%s × %s %g %s" % (pre, n, _md(exp), k, "P" if ot == "PUT" else "C"))
+    for (tk,) in conn.execute("SELECT DISTINCT ticker FROM positions WHERE book='REAL' AND status='OPEN' "
+                              "AND strategy IN ('PMCC','DIAGONAL') AND ticker IN (%s) ORDER BY ticker" % q, names):
+        out.append(("" if tk == ticker else tk + " ") + "PMCC")
+    has_sp = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='stock_positions'").fetchone()
+    if has_sp:
+        for tk, sh in conn.execute("SELECT ticker, SUM(shares) FROM stock_positions WHERE ticker IN (%s) "
+                                   "GROUP BY ticker HAVING SUM(shares) > 0 ORDER BY ticker" % q, names):
+            out.append("%s%d sh" % ("" if tk == ticker else tk + " ", sh))
+    return " · ".join(out)
+
+
+def _held_conn():
+    import sqlite3
+    from helm.config import DB_PATH
+    return sqlite3.connect("file:" + str(DB_PATH) + "?mode=ro", uri=True)
+
+
+def puts_view(run, conn=None):
+    """The put list's rows for Today, from puttool.latest's run (top 5, the best that fit).
+    s157b: each row's Held -- what HELM holds open on the name now (held_on)."""
     from helm import puttool as P
     if not run or run.get("error"):
         return run
+    own = conn is None
+    try:
+        conn = conn or _held_conn()
+        held = {(c["ticker"], c["expiry"], c["strike"]): held_on(conn, c["ticker"], c["expiry"], c["strike"])
+                for c in run["candidates"]}
+    except Exception as e:        # display only -- never costs the list
+        held, held_err = {}, "held not read (%s)" % str(e)[:60]
+    else:
+        held_err = None
+    finally:
+        if own and conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
     def row(c):
         return {"rank": c["rank"], "ticker": c["ticker"], "grade": c["grade"],
                 "put": "%g P %s" % (c["strike"], _md(c["expiry"])), "dte": c["dte"], "delta": c["delta"],
                 "mid": c["mid"], "rate": c["ann_return"], "collateral": c["collateral"], "rest": c["rest_price"],
-                "earnings": put_earnings(c["earnings"]), "limits": put_limits(c), "fits": bool(c.get("size_n"))}
+                "earnings": put_earnings(c["earnings"]), "limits": put_limits(c), "fits": bool(c.get("size_n")),
+                "held": held.get((c["ticker"], c["expiry"], c["strike"]), held_err or "")}
     cands = run["candidates"]
     return {"run_at": run["run_at"][:16], "market_open": run.get("market_open"),
             "n_universe": run["n_universe"], "n_checked": run["n_checked"], "n_found": run["n_found"],

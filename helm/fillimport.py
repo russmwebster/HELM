@@ -23,6 +23,13 @@ HELM-held shares (helm_dividends: HELM's share = the dividend x HELM's shares /
 the account's shares, from a Portfolio_Positions download dated within
 POSITIONS_DAYS of the dividend; otherwise it asks for one). Money-market interest
 and dividends on names HELM doesn't hold are not HELM's.
+s157b (Russ, 2026-11-13) books ADD-ONS: a later sale of a put or covered call HELM already
+holds open (same contract, a one-leg position, a different day) is added to that position
+-- contracts summed, the entry price the average of the sales, the premium summed -- the
+way Fidelity holds it. The fill is recorded against the position (note ADD_ON), so its fees
+count, and the entry-price check sums every sale recorded into a leg. Limits and grade are
+flagged as for a new open, never refused. A covered call needs free HELM shares; anything
+else (a PMCC short, a multi-leg position, two open positions on the contract) is reported.
 It REPORTS, and does not book, exercises, partial assignments, an early-assigned
 PMCC short and other share rows.
 
@@ -161,7 +168,7 @@ def stored_ira_hash(conn):
 
 @dataclass
 class Item:
-    kind: str                 # LEG_CLOSE | POSITION_CLOSE | PARTIAL_CLOSE | PRICE_FIX | MATCHED | ASSIGN | OPEN | REPORT
+    kind: str                 # LEG_CLOSE | POSITION_CLOSE | PARTIAL_CLOSE | PRICE_FIX | MATCHED | ASSIGN | OPEN | ADD_ON | REPORT
     text: str                 # one plain line for the trader
     position_id: str = None
     ticker: str = None
@@ -170,7 +177,7 @@ class Item:
     pnl: float = None
     as_of: str = None
     fills: list = field(default_factory=list)     # [(fill, key, source)] recorded on apply
-    fix: dict = None          # PRICE_FIX: {leg_id, old, new, net_premium_old, net_premium_new}
+    fix: dict = None          # PRICE_FIX: {leg_id, old, new, net_premium_old, net_premium_new}; ADD_ON (s157b): see _add_on_item
     open: dict = None         # OPEN (s141): {strategy, legs, contracts, flags, grade, parent}
     split: dict = None        # PARTIAL_CLOSE (s142): {leg_id, have, close}; POSITION_CLOSE after one: {after}
     div: dict = None          # DIVIDEND (s142): the helm_dividends row
@@ -189,7 +196,7 @@ class Plan:
     def writes(self):
         return [i for i in self.items if i.kind in ("LEG_CLOSE", "POSITION_CLOSE", "PARTIAL_CLOSE", "PRICE_FIX",
                                                     "MATCHED", "ASSIGN", "CALL_AWAY", "DIVIDEND", "FEE_FILL",
-                                                    "OPEN")]
+                                                    "OPEN", "ADD_ON")]
 
 
 def _otype(leg):
@@ -522,6 +529,57 @@ def split_off(conn, position_id, leg_id, have, k, now):
     return new_pid, new_lid
 
 
+def _add_on_item(conn, open_legs, label, tk, as_of, q, price, fl, added):
+    """s157b: a later sale of a contract HELM already holds open -> an ADD_ON item, a REPORT with the
+    reason it can't be added, or None (the general "already has this contract open" report).
+    added: {leg_id: {contracts, price, np}} -- what earlier add-ons in this run leave the leg at."""
+    if len(open_legs) != 1:
+        return None
+    l = open_legs[0]
+    if l["strategy"] not in ("CSP", "COVERED_CALL") or l["direction"] != "SHORT" or price is None:
+        return None
+    if not ((l["open_date"] or "")[:10] < as_of):
+        return None
+    n_legs = conn.execute("SELECT COUNT(*) FROM legs WHERE position_id=?", (l["position_id"],)).fetchone()[0]
+    if n_legs != 1:
+        return None
+    p = conn.execute("SELECT * FROM positions WHERE id=?", (l["position_id"],)).fetchone()
+    mult = l["multiplier"] or 100
+    st = added.get(l["id"]) or {"contracts": int(l["contracts"]), "price": l["open_price"], "np": p["net_premium"]}
+    have, old_price, np_old = st["contracts"], st["price"], st["np"]
+    if np_old is None or abs(np_old - old_price * have * mult) > 0.011:
+        return Item("REPORT", "%s sold -- adds to %s, but its stored premium $%s is not its leg's $%.2f; "
+                    "not booked, look by hand" % (label, l["position_id"], np_old, old_price * have * mult), ticker=tk)
+    from helm import fillopens as FO
+    if l["strategy"] == "COVERED_CALL":
+        free = FO._shares_free(conn, tk) - 100 * sum(v["contracts"] - v["base"] for k, v in added.items()
+                                                      if v.get("cc_ticker") == tk)
+        if free < 100 * q:
+            return Item("REPORT", "%s sold -- HELM has %d free %s shares, %d needed to cover %d more calls; "
+                        "not booked, look by hand" % (label, max(free, 0), tk, 100 * q, q), ticker=tk)
+        collateral = 0.0
+    else:
+        collateral = float(l["strike"]) * mult * q
+    flags, grade = FO._flags(conn, tk, l["strategy"], collateral)
+    n = have + q
+    np_new = round(np_old + price * q * mult, 2)
+    new_price = np_new / (n * mult)
+    rest = FO._half_up(new_price / 2)
+    added[l["id"]] = {"contracts": n, "price": new_price, "np": np_new,
+                      "base": (added.get(l["id"]) or {}).get("base", int(l["contracts"])),
+                      "cc_ticker": tk if l["strategy"] == "COVERED_CALL" else None}
+    txt = ("%s sold at %s -- adds to the open position (opened %s): %d -> %d contracts, entry %s -> %s (average), "
+           "premium $%s -> $%s; 50%% buy-back %s" % (
+               label, _fmt(price), (l["open_date"] or "")[:10], have, n, _fmt(old_price), "%.4g" % new_price,
+               "{:,.2f}".format(np_old), "{:,.2f}".format(np_new), _fmt(rest)))
+    if flags:
+        txt += "; FLAGS: " + "; ".join(flags)
+    return Item("ADD_ON", txt, position_id=l["position_id"], ticker=tk, legs=[(l["id"], None, None)], as_of=as_of,
+                fills=fl, fix={"leg_id": l["id"], "have": have, "add": q, "price": price, "old_price": old_price,
+                               "new_price": new_price, "contracts": n, "np_old": np_old, "np_new": np_new,
+                               "flags": flags, "grade": grade})
+
+
 def plan(conn, exports, cutoff=CUTOFF, reasons=None, positions=None):
     """exports: [brokerfills.Export]. reasons: {position_id: EXIT_REASON}.
     positions: [brokerfills.read_positions(...)] -- the account's shares, for dividends."""
@@ -554,6 +612,7 @@ def plan(conn, exports, cutoff=CUTOFF, reasons=None, positions=None):
     closing = {}   # position_id -> [(leg, price, leg_reason, group)]
     left = {}      # s142: leg_id -> contracts still open after a partial close earlier in this run
     pending_opens = []   # s141: opening fills not in HELM -> helm/fillopens.classify
+    added = {}           # s157b: leg_id -> what this run's add-ons leave it at
     for gk, g in sorted(groups.items(), key=lambda kv: (kv[0][1], kv[0][2])):
         event, as_of, tk, exp, otype, strike, direction = gk
         if as_of < cutoff:
@@ -572,6 +631,10 @@ def plan(conn, exports, cutoff=CUTOFF, reasons=None, positions=None):
         cands = by_contract.get((tk, exp, otype, float(strike), direction), [])
         fl = [(f, k, src_of[k]) for f, k in fresh]
 
+        if event != "OPEN" and any(l["id"] in added for l in cands):   # s157b: added to earlier in this download
+            items.append(Item("REPORT", "%s %s %s -- this download also adds to that position; run the import again "
+                              "once the add-on is booked" % (label, direction.lower(), event.lower()), ticker=tk))
+            continue
         if event == "ASSIGNED" and otype == "PUT" and direction == "SHORT":
             items.append(_assign_item(conn, rows, row_keys, src_of, seen, label, tk, as_of, exp, strike, q,
                                       cands, fl))
@@ -597,7 +660,12 @@ def plan(conn, exports, cutoff=CUTOFF, reasons=None, positions=None):
                                                                       sum(l["contracts"] for l in same_day), q),
                                   ticker=tk))
             elif any(l["status"] == "OPEN" and l["pstatus"] == "OPEN" for l in cands):
-                o = [l for l in cands if l["status"] == "OPEN" and l["pstatus"] == "OPEN"][0]
+                ol = [l for l in cands if l["status"] == "OPEN" and l["pstatus"] == "OPEN"]
+                ad = _add_on_item(conn, ol, label, tk, as_of, q, g["price"], fl, added)   # s157b
+                if ad is not None:
+                    items.append(ad)
+                    continue
+                o = ol[0]
                 items.append(Item("REPORT", "%s %s opened -- HELM already has this contract open (opened %s, %s); "
                                   "not booked again, check the dates by hand" % (
                                       label, direction.lower(), (o["open_date"] or "")[:10], o["position_id"]),
@@ -697,6 +765,9 @@ def plan(conn, exports, cutoff=CUTOFF, reasons=None, positions=None):
     for gk, g in groups.items():
         if gk[0] == "OPEN":
             opens[(gk[2], gk[3], gk[4], float(gk[5]), gk[6], gk[1])] = g
+    addon_of = {}        # s157b: fill_key -> leg_id, for sales the import added to an open position
+    if _has_table(conn, "broker_fills"):
+        addon_of = {k: lid for k, lid in conn.execute("SELECT fill_key, leg_id FROM broker_fills WHERE note='ADD_ON'")}
     for l in legs:
         if l["pstatus"] != "OPEN":
             continue
@@ -704,6 +775,13 @@ def plan(conn, exports, cutoff=CUTOFF, reasons=None, positions=None):
         g = opens.get(c + ((l["open_date"] or "")[:10],))
         if g is None:
             continue
+        extra = [g2 for k2, g2 in opens.items() if k2[:5] == c and k2[5] != (l["open_date"] or "")[:10]
+                 and g2["keys"] and all(addon_of.get(k) == l["id"] for k in g2["keys"])]
+        if extra:            # s157b: the leg holds every sale recorded into it -- compare with their total
+            parts = [g] + extra
+            n_all = sum(x["contracts"] for x in parts)
+            g = dict(g, contracts=n_all, price=sum(x["price"] * x["contracts"] for x in parts) / n_all,
+                     rows=[r for x in parts for r in x["rows"]], keys=[k for x in parts for k in x["keys"]])
         helm_n = l["contracts"]
         sibs = [x for x in legs if x["id"] != l["id"] and _contract(x) == c
                 and (x["open_date"] or "")[:10] == (l["open_date"] or "")[:10]]
@@ -918,6 +996,27 @@ def apply(p, db_path=None, ira_hash=None):
                 it.text += "  -- booked; entry readings pending (IB Gateway gave none), filled at the next snapshot"
             it.position_id = pid
             it.legs = [(lids[0], None, None)] if len(lids) == 1 else [(x, None, None) for x in lids]
+        elif it.kind == "ADD_ON":     # s157b
+            fx = it.fix
+            leg = Leg.get(fx["leg_id"])
+            pos = Position.get(it.position_id)
+            if (pos is None or leg is None or pos.status != "OPEN" or str(leg.status).upper() != "OPEN"
+                    or int(leg.contracts) != int(fx["have"]) or abs(leg.open_price - fx["old_price"]) > 1e-9
+                    or abs((pos.net_premium or 0) - fx["np_old"]) > 0.011):
+                raise RuntimeError("%s: %s changed since the plan -- stopped" % (it.ticker, it.position_id))
+            note = ("Fidelity import %s: added %d sold %s at %s (Fidelity's fill; %s, date only) -> %d contracts, "
+                    "entry %s average" % (now[:10], fx["add"], it.as_of, _fmt(fx["price"]), FILL_TIME[:5],
+                                          fx["contracts"], "%.4g" % fx["new_price"]))
+            leg.contracts = fx["contracts"]
+            leg.open_price = fx["new_price"]
+            leg.notes = ((leg.notes + " | ") if leg.notes else "") + note
+            leg.save()
+            pos.total_contracts = fx["contracts"]
+            pos.net_premium = fx["np_new"]
+            pos.notes = ((pos.notes + " | ") if pos.notes else "") + note + (
+                "; premium %s -> %s" % ("{:,.2f}".format(fx["np_old"]), "{:,.2f}".format(fx["np_new"]))) + (
+                ("; FLAGS: " + "; ".join(fx["flags"])) if fx["flags"] else "")
+            pos.save()
         elif it.kind == "FEE_FILL":
             pass                      # only the fill rows are recorded (below)
         elif it.kind == "PRICE_FIX":
