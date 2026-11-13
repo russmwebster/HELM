@@ -148,6 +148,7 @@ def view(account_id=None, db=None, today=None):
     try:
         rolls = rolltool.latest_for(conn, [r["position_id"] for r in recs if r.get("position_id")])
         dec, hold = [], []
+        to_price = []      # s157c: names with something for `helm calls` to price (Today's button)
         for r in recs:
             pid = r.get("position_id")
             if not pid or r["verb"] == "OVER_RULE":
@@ -230,6 +231,7 @@ def view(account_id=None, db=None, today=None):
                 else:
                     row["default"] = "next short: not priced"
                     row["calls_cmd"] = True
+                to_price.append(p["ticker"])
             dec.append(row)
 
         # ---- HELM-held shares: one holding row each
@@ -250,11 +252,14 @@ def view(account_id=None, db=None, today=None):
                    "calls": None if h["free_shares"] < 100 else calls_status(cl["reject"] if cl else None, n_ch),
                    "calls_run": cl["run_at"] if cl else None}
             shares.append(row)
+            if h["free_shares"] >= 100:
+                to_price.append(t)
             if n_ch:
                 for c in cl["choices"]:
                     new_calls.append(dict(c, run_at=cl["run_at"]))
         out["shares"] = shares
         out["new_calls"] = new_calls
+        out["calls_to_price"] = sorted(set(to_price))
     finally:
         conn.close()
     out["decisions"], out["holding"] = dec, hold
@@ -337,6 +342,53 @@ def puts_view(run, conn=None):
             "top": [row(c) for c in cands[:P.TOP_N]], "fit": [row(c) for c in P.fitting(cands)]}
 
 
+def pmcc_earnings(line):
+    """s157c: the PMCC list's earnings cell -- the date when a report falls inside the short, else blank."""
+    m = re.search(r"(\d{4})-(\d\d)-(\d\d)", line or "")
+    return ("%s-%s inside" % (m.group(2), m.group(3))) if (m and "INSIDE" in (line or "").upper()) else ""
+
+
+def pmcc_view(run, conn=None):
+    """s157c (Russ, 2026-11-13): the PMCC search's rows for Today, from pmcctool.latest's run -- the top 5 by rent
+    cover, each with what HELM holds on the name now. Display only; the search itself is `helm pmcc`."""
+    from helm import pmcctool as PM
+    if not run or run.get("error"):
+        return run
+    own = conn is None
+    held_err = None
+    try:
+        conn = conn or _held_conn()
+        held = {c["ticker"]: held_on(conn, c["ticker"]) for c in run["candidates"][:PM.TOP_N]}
+    except Exception as e:        # display only
+        held, held_err = {}, "held not read (%s)" % str(e)[:60]
+    finally:
+        if own and conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    def row(c):
+        le = str(c["long_expiry"])
+        return {"rank": c["rank"], "ticker": c["ticker"], "grade": c["grade"],
+                "held": held.get(c["ticker"], held_err or ""),
+                "long": "%g C %s-%s" % (c["long_strike"], le[5:10], le[2:4]),
+                "short": "%g C %s" % (c["short_strike"], _md(c["short_expiry"])),
+                "net_debit": c["net_debit"], "rent_cover": c["rent_cover"],
+                "rate": c["ann_return"], "width_room": c["width_room"],
+                "trend": "downtrend" if c.get("downtrend") else "",
+                "earnings": pmcc_earnings(c.get("earnings")),
+                "limits": put_limits(c), "fits": bool(c.get("size_n"))}
+    cands = run["candidates"]
+    ra = str(run["run_at"])
+    return {"run_at": ra[:16], "market_open": run.get("market_open"),
+            "n_universe": run["n_universe"], "n_checked": run["n_checked"], "n_found": run["n_found"],
+            "n_declined": len([c for c in cands if not c.get("size_n")]),
+            "minutes": round(run["elapsed_s"] / 60.0) if run.get("elapsed_s") else None,
+            "late": bool(run.get("market_open")) and ra[11:16] >= "15:00",
+            "note": run.get("note"), "top": [row(c) for c in cands[:PM.TOP_N]]}
+
+
 def _selftest():
     fails = []
 
@@ -350,11 +402,13 @@ def _selftest():
     ok(roll_short(None) == "none", "roll: no reason")
     ok(put_limits({"size_n": 5}) == "fits ×5" and put_limits({"size_n": 0, "size_binding": "sleeve_sector"}) == "sector over"
        and put_limits({"size_n": 0, "size_binding": "sleeve_name"}) == "name over", "put limits")
+    ok(pmcc_earnings("EARNINGS 2026-11-27 INSIDE THE TRADE -- allowed for a PMCC, flagged") == "11-27 inside"
+       and pmcc_earnings("earnings 2026-12-23, after the expiry") == "" and pmcc_earnings(None) == "", "pmcc earnings")
     ok(put_earnings("earnings 2026-11-27 (21 days) -- inside the trade") == "11-27"
        and put_earnings("earnings 2026-12-23 (47 days)") is None and put_earnings("fund") is None, "put earnings inside only")
     ok(calls_status("no call passes: strike below the effective basis", 0) == "blocked" and calls_status(None, 2) == "2 choices"
        and calls_status(None, 0) == "not priced", "calls status")
-    print("todayview selftest:", "PASS (6)" if not fails else "%d FAIL" % len(fails))
+    print("todayview selftest:", "PASS (7)" if not fails else "%d FAIL" % len(fails))
     return 1 if fails else 0
 
 

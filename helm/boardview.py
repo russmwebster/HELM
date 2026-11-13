@@ -128,6 +128,7 @@ def reference_constants():
         "call_delta": "%.2f–%.2f" % (C.DELTA_MIN, C.DELTA_MAX), "next_report_earliest": C.NEXT_REPORT_EARLIEST,
         "pmcc_long_dte": "%d–%d" % PM.LONG_DTE, "pmcc_long_delta": "%.2f–%.2f" % PM.LONG_DELTA,
         "pmcc_short_delta": "%.2f–%.2f" % PM.SHORT_DELTA, "rent_cover_flag": "%g" % PM.RENT_COVER_FLAG,
+        "pmcc_short_dte": "%d–%d" % PM.SHORT_DTE, "trend_bars": PM.TREND_SLOPE_BARS, "pmcc_top_n": PM.TOP_N,   # s157c
         "rec_version": RC.RULE_VERSION, "rec_paths": "{:,}".format(RC.N_PATHS), "fee": "$%.2f" % (RC.FEE * 100),
         "half_spread": "%g%%" % (RC.HALF_SPREAD * 100), "opp_version": OP.RULE_VERSION, "opp_paths": "{:,}".format(OP.N_PATHS),
     }

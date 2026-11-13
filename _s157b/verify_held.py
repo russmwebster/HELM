@@ -28,7 +28,7 @@ def tree(src, dst, ign):
     shutil.copytree(src, dst, ignore=shutil.ignore_patterns(*ign)); fixcfg(dst); return dst
 os.makedirs(W + "/home", exist_ok=True)
 if len(sys.argv) > 2:
-    NEW_ENG, NEW_PG = os.path.abspath(sys.argv[1]), os.path.abspath(sys.argv[2])
+    NEW_ENG, NEW_PG = tree(os.path.abspath(sys.argv[1]), W + "/eng-new2", ENG_IGN), tree(os.path.abspath(sys.argv[2]), W + "/pg-new2", PG_IGN)   # copied, so the config fix applies
 else:
     NEW_ENG, NEW_PG = tree(ROOT, W + "/eng-new", ENG_IGN), tree(PGROOT, W + "/pg-new", PG_IGN)
 OLD_ENG = tree(ROOT, W + "/eng-old", ENG_IGN)
