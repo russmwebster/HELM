@@ -6,6 +6,9 @@
     helm fills --apply --yes        no prompt (the board, later)
     helm fills --reason ID=NAME     the exit reason for one position close (repeatable)
     helm fills --history            also list every pre-10/24 difference (report only)
+    helm fills --not-helm TICKER    list that ticker's rows the import leaves unbooked (trades outside HELM);
+                                    with --apply, record them as not HELM's so the import skips them from then
+                                    on (s157). Nothing else is written. Comma-separated or repeatable.
 
 Reads both download formats -- History_for_Account_<n>.csv and Accounts_History.csv --
 keeps the Rollover IRA's rows only, and never stores or prints the account number
@@ -78,6 +81,7 @@ def run():
     from helm.config import DB_PATH
 
     path, apply_, yes, history, reasons = None, False, False, False, {}
+    not_helm = []
     i = 0
     while i < len(args):
         a = args[i]
@@ -89,6 +93,8 @@ def run():
             yes = True
         elif a == "--history":
             history = True
+        elif a == "--not-helm" and i + 1 < len(args):
+            not_helm += [t.strip().upper() for t in args[i + 1].split(",") if t.strip()]; i += 1
         elif a == "--reason" and i + 1 < len(args):
             k, _, v = args[i + 1].partition("=")
             from helm.cli.close_cmd import EXIT_REASONS
@@ -134,8 +140,31 @@ def run():
             console.print("[dim]Rollover IRA identified from %s; HELM will keep a fingerprint of its number, "
                           "never the number.[/dim]" % B.mask_name(learned_from))
         p = FI.plan(conn, [exp], reasons=reasons, positions=_positions(B))
+        nh = FI.not_helm_rows(conn, [exp], p, not_helm) if not_helm else None
     finally:
         conn.close()
+
+    if not_helm:   # s157: only the marking; nothing is booked on this run
+        console.print("\n[bold]Not HELM's -- %s[/bold]  [dim](rows the import leaves unbooked; recorded, they are "
+                      "skipped from then on)[/dim]" % ", ".join(not_helm))
+        if not nh:
+            console.print("  none -- nothing unbooked on %s in this download\n" % ", ".join(not_helm))
+            return 0
+        for f, _ in nh:
+            console.print("  %s  %s  %s x%s at %s" % (f.as_of, f.symbol.strip(), f.raw_action.split(" (")[0].lower(),
+                                                    abs(f.qty or 0), "—" if f.price is None else "%.2f" % f.price))
+        if not apply_:
+            console.print("\n[dim]Dry run -- nothing written. Run with --apply to record %d row(s) as not HELM's.[/dim]\n"
+                          % len(nh))
+            return 0
+        if not yes:
+            from rich.prompt import Confirm
+            if not Confirm.ask("  Record these %d row(s) as not HELM's?" % len(nh), default=False):
+                console.print("[dim]  Cancelled -- nothing written.[/dim]\n")
+                return 0
+        n = FI.mark_not_helm(nh, "outside HELM (helm fills --not-helm %s)" % ",".join(not_helm), db_path=str(DB_PATH))
+        console.print("  [green]%d row(s) recorded as not HELM's[/green] -- `helm fills` skips them from now on.\n" % n)
+        return 0
 
     opts = sum(1 for f in exp.fills if f.is_option)
     console.print("[dim]Rollover IRA: %d rows (%d option fills), %s to %s; booking from %s. "

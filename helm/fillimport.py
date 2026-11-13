@@ -92,10 +92,66 @@ def _has_table(conn, name):
     return conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)).fetchone() is not None
 
 
+BROKER_NOT_HELM_DDL = """
+CREATE TABLE IF NOT EXISTS broker_not_helm (
+    fill_key   TEXT PRIMARY KEY,          -- brokerfills._fill_keys: the row Russ marked as not HELM's
+    as_of      TEXT NOT NULL,
+    action     TEXT NOT NULL,             -- the row's Action text (no account number in it)
+    symbol     TEXT NOT NULL,
+    qty        INTEGER,
+    price      REAL,
+    amount     REAL,
+    marked_at  TEXT NOT NULL,
+    note       TEXT
+)"""
+
+
 def known_keys(conn):
-    if not _has_table(conn, "broker_fills"):
-        return set()
-    return {r[0] for r in conn.execute("SELECT fill_key FROM broker_fills")}
+    """Rows the import has seen: recorded fills, and (s157) rows Russ marked as not HELM's."""
+    out = set()
+    if _has_table(conn, "broker_fills"):
+        out |= {r[0] for r in conn.execute("SELECT fill_key FROM broker_fills")}
+    if _has_table(conn, "broker_not_helm"):
+        out |= {r[0] for r in conn.execute("SELECT fill_key FROM broker_not_helm")}
+    return out
+
+
+def not_helm_rows(conn, exports, p, tickers, cutoff=CUTOFF):
+    """s157: the option rows on `tickers` this plan leaves unbooked -- from the cutoff, not seen before, and in
+    no booking or match of plan `p`. These are what `helm fills --not-helm` records. Returns [(fill, key)]."""
+    tickers = {t.strip().upper() for t in tickers if t.strip()}
+    seen = known_keys(conn)
+    used = {k for it in p.writes for (_, k, _) in it.fills}
+    rows, keys, taken = [], [], set()
+    for e in exports:
+        for f, k in zip(e.fills, e.keys):
+            if k not in taken:
+                taken.add(k); rows.append(f); keys.append(k)
+    out = []
+    for gk, g in sorted(B.merge_option_fills(rows, keys).items(), key=lambda kv: (kv[0][1], kv[0][2])):
+        _, as_of, tk, *_ = gk
+        if as_of < cutoff or (tk or "").upper() not in tickers:
+            continue
+        out.extend((f, k) for f, k in zip(g["rows"], g["keys"]) if k not in seen and k not in used)
+    return out
+
+
+def mark_not_helm(rows, note, db_path=None):
+    """s157: record rows as not HELM's; the import skips them from then on. Returns how many were new."""
+    from helm.db import get_conn
+    now = datetime.now().isoformat(timespec="seconds")
+    conn = get_conn(db_path) if db_path else get_conn()
+    try:
+        conn.execute(BROKER_NOT_HELM_DDL)
+        n = 0
+        for f, k in rows:
+            n += conn.execute("INSERT OR IGNORE INTO broker_not_helm (fill_key, as_of, action, symbol, qty, price, "
+                              "amount, marked_at, note) VALUES (?,?,?,?,?,?,?,?,?)",
+                              (k, f.as_of, f.raw_action, f.symbol.strip(), f.qty, f.price, f.amount, now, note)).rowcount
+        conn.commit()
+        return n
+    finally:
+        conn.close()
 
 
 def stored_ira_hash(conn):
