@@ -31,6 +31,7 @@ import sqlite3
 
 from helm import sleeve as S
 from helm import advice as A   # s136: the grade, read the one way advice reads it
+from helm import stockreads as SR   # s158: the snapshot's share-price readings
 
 STRESS_MARKET = (-0.05, -0.10)
 STRESS_VOL_POINTS = 10.0
@@ -118,6 +119,10 @@ def share_rows(conn, account_id=None, beta_assumed=None):
         px = conn.execute("SELECT c.spot_price, c.checked_at FROM checks c JOIN positions p ON p.id=c.position_id "
                           "WHERE p.book='REAL' AND p.ticker=? AND c.spot_price IS NOT NULL "
                           "ORDER BY c.checked_at DESC LIMIT 1", (t,)).fetchone()
+        # s158: the snapshot's own reading of the shares (helm.stockreads); the newer wins.
+        sr = SR.latest(conn, t)
+        if sr and (not px or sr[1] > px[1]):
+            px = sr
         spot, as_of, note = (px[0], px[1], None) if px else (r["cost_basis"], None, "price at cost, no reading")
         beta, assumed = _beta(conn, t)
         if assumed and beta_assumed is not None:
@@ -130,6 +135,17 @@ def share_rows(conn, account_id=None, beta_assumed=None):
                     "stress": {str(m): stress_pnl(float(sh), 0.0, spot, beta, m) for m in STRESS_MARKET},
                     "vol_up": 0.0, "as_of": as_of, "missing_legs": [], "price_note": note})
     return out
+
+
+_BEHIND_WORD = {"CSP": "put", "COVERED_CALL": "covered call", "PMCC": "PMCC", "DIAGONAL": "diagonal"}
+
+
+def _behind_label(r):
+    """s158: "GOOGL shares priced 11-05" / "DELL put read 11-12"."""
+    day = r["as_of"][5:10]
+    if r.get("strategy") == "SHARES":
+        return "%s shares priced %s" % (r["ticker"], day)
+    return "%s %s read %s" % (r["ticker"], _BEHIND_WORD.get(r.get("strategy"), (r.get("strategy") or "position").lower()), day)
 
 
 def limits(totals, share, rows, today=None):
@@ -153,9 +169,12 @@ def limits(totals, share, rows, today=None):
         newest = date.fromisoformat(max(times)[:10])
         if (today - newest).days > STALE_DAYS:
             stale.append("newest reading %s" % newest)
-        oldest = date.fromisoformat(min(times)[:10])
-        if (newest - oldest).days >= 1:
-            stale.append("readings span %s to %s" % (oldest, newest))
+        # s158 (Russ, 2026-11-14): name each line whose reading is a day or more behind the
+        # newest, instead of "readings span A to B" -- which read as the whole book and
+        # stayed on every day an assigned stock went unread.
+        behind = sorted({_behind_label(r) for r in rows
+                         if r.get("as_of") and (newest - date.fromisoformat(r["as_of"][:10])).days >= 1})
+        stale.extend(behind)
     return {"theta": th, "theta_pct": th / share if share else None, "theta_lo": lo, "theta_hi": hi,
             "theta_state": "low" if th < lo - 1e-6 else ("high" if th > hi + 1e-6 else "ok"),
             "bw_delta": bw, "delta_cap": cap, "delta_state": "over" if abs(bw) > cap + 1e-6 else "ok",
@@ -459,6 +478,16 @@ def _selftest():
     st = limits({"theta": 200, "bw_delta": 0}, sh, [{"ticker": "X", "as_of": "2026-10-28T12:30", "missing_legs": ["l"]}],
                 today=_dd(2026, 10, 28))["stale"]
     ok(st == ["no reading on X"], "a leg with no reading is named")
+    # s158: a line a day or more behind the newest is named, not a span
+    rws = [{"ticker": "AAA", "strategy": "CSP", "as_of": "2026-11-13T15:15", "missing_legs": []},
+           {"ticker": "GOOGL", "strategy": "SHARES", "as_of": "2026-11-05T15:15", "missing_legs": []},
+           {"ticker": "DELL", "strategy": "CSP", "as_of": "2026-11-12T15:16", "missing_legs": []},
+           {"ticker": "CVX", "strategy": "PMCC", "as_of": "2026-11-13T10:00", "missing_legs": []}]
+    st = limits({"theta": 200, "bw_delta": 0}, sh, rws, today=_dd(2026, 11, 13))["stale"]
+    ok(st == ["DELL put read 11-12", "GOOGL shares priced 11-05"], "lines behind are named: %s" % st)
+    rws[1]["as_of"] = "2026-11-13T15:15"; rws[2]["as_of"] = "2026-11-13T12:30"
+    st = limits({"theta": 200, "bw_delta": 0}, sh, rws, today=_dd(2026, 11, 13))["stale"]
+    ok(st == [], "same-day readings at different slots are not stale: %s" % st)
     # s144: the market line and the risk curve
     M = v["market"]
     C = {round(100 * x["move"]): x["pnl"] for x in M["curve"]}
@@ -513,7 +542,23 @@ def _selftest():
        "shares with no reading are priced at cost and the limits say so")
     ok(("YYY", "SHARES") not in P2 and abs(v2["totals"]["delta_sh"] - v["totals"]["delta_sh"] - 400) < 1e-9,
        "shares already carried as a stock leg are not counted twice (200 JPM + 100 ZZZ + YYY's leg 100)")
-    print("bookview selftest:", "PASS (%d checks)" % 32 if not fails else "%d FAIL" % len(fails))
+    # s158: the snapshot's share reading beats an older position check, and loses to a newer one
+    c = sqlite3.connect(db)
+    jt = c.execute("SELECT MAX(checked_at) FROM checks c JOIN positions p ON p.id=c.position_id WHERE p.ticker='JPM'").fetchone()[0]
+    SR.record(c, "JPM", 340.0, "2000-01-01T10:00:00")          # older than the check
+    SR.record(c, "ZZZ", 55.5, "2026-11-16T10:00:00")           # no check at all
+    c.close()
+    v3 = view(db=db)
+    P3 = {(r["ticker"], r["strategy"]): r for r in v3["positions"]}
+    ok(P3[("JPM", "SHARES")]["spot"] == 332.57, "an older share reading loses to the newer check")
+    ok(P3[("ZZZ", "SHARES")]["spot"] == 55.5 and not P3[("ZZZ", "SHARES")]["price_note"]
+       and P3[("ZZZ", "SHARES")]["as_of"] == "2026-11-16T10:00:00", "a share reading replaces the cost fallback")
+    c = sqlite3.connect(db)
+    SR.record(c, "JPM", 341.25, jt[:4] + "-12-31T23:59:59" if jt else "2099-01-01T10:00:00")
+    c.close()
+    ok({(r["ticker"], r["strategy"]): r for r in view(db=db)["positions"]}[("JPM", "SHARES")]["spot"] == 341.25,
+       "a newer share reading wins over the check")
+    print("bookview selftest:", "PASS (%d checks)" % 37 if not fails else "%d FAIL" % len(fails))
     return 1 if fails else 0
 
 

@@ -3026,6 +3026,7 @@ def cmd_snapshot(args):
     ).fetchall()]
     conn.close()
     if not positions:
+        _read_held_shares(args)
         SNAPSHOT_INFO.update(started=_snap_started, attempted=0, journaled=0)
         return
     # W21 (s90): "processed" used to mean "attempted". The counter was
@@ -3049,6 +3050,9 @@ def cmd_snapshot(args):
         attempted += 1
         _attempted_ids.append(pos["id"])
     _finished = datetime.now().isoformat()
+    # s158: the shares HELM holds, after the option positions. Not counted in
+    # attempted / journaled (the Book's retry reads those); never costs the snapshot.
+    _read_held_shares(args)
 
     journaled = 0
     try:
@@ -3145,6 +3149,24 @@ def cmd_snapshot(args):
                           f"[/yellow][dim] — {_names}[/dim]")
         else:
             console.print(f"[dim]{_msg} (live-only persist)[/dim]")
+
+
+def _read_held_shares(args):
+    """s158 (Russ, 2026-11-14): one price for every stock HELM holds as shares
+    (helm.stockreads), so the book stops pricing assigned shares from the put's last
+    reading. Real book only; printed into snapshot_daily.log; never raises."""
+    if "--paper" in args and "--all" not in args:
+        return
+    try:
+        from helm import stockreads as _sr
+        conn = get_conn()
+        try:
+            for _t, _msg in _sr.read_all(fetch_ibkr_underlying, conn, datetime.now().isoformat()):
+                print("shares: %s %s" % (_t, _msg))
+        finally:
+            conn.close()
+    except Exception as _e:     # noqa: BLE001
+        print("shares post-pass FAILED: %s: %s" % (type(_e).__name__, _e))
 
 
 def run_snapshot():
