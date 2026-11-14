@@ -55,6 +55,25 @@ def _md(iso):
     return str(iso)[5:10]
 
 
+def market_cell(conn, ticker, delta_sh, spot, book, one=False):
+    """s159 (Russ, 2026-11-14): a proposed trade's market multiple and the book's beta-weighted delta after it.
+    delta_sh signed (a put or PMCC adds, a covered call subtracts); book = Today's figures (bw_delta, delta_cap).
+    state: the book-delta limit's result after the trade (fired / near / pass), via advice.limit_row. `one`: the
+    limits sized it at none, so the figure is for one contract. Display only -- nothing is ranked, sized or
+    gated on it; never raises."""
+    from helm import bookview as BV
+    try:
+        beta, assumed = BV.beta_of(conn, ticker)
+        add = BV.added_bw_delta(delta_sh, spot, beta)
+    except Exception:
+        return {"beta": None, "beta_assumed": False, "add": None, "after": None, "state": None, "one": one}
+    after = state = None
+    if add is not None and book and book.get("bw_delta") is not None and book.get("delta_cap"):
+        after = book["bw_delta"] + add
+        state = A.limit_row("book_delta", "", abs(after), book["delta_cap"])["state"]
+    return {"beta": beta, "beta_assumed": assumed, "add": add, "after": after, "state": state, "one": one}
+
+
 def _label(conn, p):
     """Position label: 'CSCO 105 P 11-20 ×3', 'CVX PMCC 230 C 12-18', 'NVDA PMCC 160 C 12-17-27'."""
     legs = [dict(l) for l in conn.execute("SELECT * FROM legs WHERE position_id=? AND status='OPEN' AND "
@@ -256,7 +275,9 @@ def view(account_id=None, db=None, today=None):
                 to_price.append(t)
             if n_ch:
                 for c in cl["choices"]:
-                    new_calls.append(dict(c, run_at=cl["run_at"]))
+                    mkt = market_cell(conn, t, -abs(c.get("delta") or 0.0) * 100 * (c.get("contracts") or 0),
+                                      c.get("spot"), out["figures"])
+                    new_calls.append(dict(c, run_at=cl["run_at"], market=mkt))
         out["shares"] = shares
         out["new_calls"] = new_calls
         out["calls_to_price"] = sorted(set(to_price))
@@ -307,9 +328,10 @@ def _held_conn():
     return sqlite3.connect("file:" + str(DB_PATH) + "?mode=ro", uri=True)
 
 
-def puts_view(run, conn=None):
+def puts_view(run, conn=None, book=None):
     """The put list's rows for Today, from puttool.latest's run (top 5, the best that fit).
-    s157b: each row's Held -- what HELM holds open on the name now (held_on)."""
+    s157b: each row's Held -- what HELM holds open on the name now (held_on).
+    s159: each row's market multiple and the book's delta after it (market_cell; book = Today's figures)."""
     from helm import puttool as P
     if not run or run.get("error"):
         return run
@@ -329,12 +351,26 @@ def puts_view(run, conn=None):
             except Exception:
                 pass
 
+    mkt = {}
+    if book is not None:
+        try:
+            mconn = conn if not own else _held_conn()
+            for c in run["candidates"]:
+                n = c.get("size_n") or 1
+                mkt[(c["ticker"], c["expiry"], c["strike"])] = market_cell(
+                    mconn, c["ticker"], abs(c.get("delta") or 0.0) * 100 * n, c.get("spot"), book, one=not c.get("size_n"))
+            if own:
+                mconn.close()
+        except Exception:         # display only
+            mkt = {}
+
     def row(c):
         return {"rank": c["rank"], "ticker": c["ticker"], "grade": c["grade"],
                 "put": "%g P %s" % (c["strike"], _md(c["expiry"])), "dte": c["dte"], "delta": c["delta"],
                 "mid": c["mid"], "rate": c["ann_return"], "collateral": c["collateral"], "rest": c["rest_price"],
                 "earnings": put_earnings(c["earnings"]), "limits": put_limits(c), "fits": bool(c.get("size_n")),
-                "held": held.get((c["ticker"], c["expiry"], c["strike"]), held_err or "")}
+                "held": held.get((c["ticker"], c["expiry"], c["strike"]), held_err or ""),
+                "market": mkt.get((c["ticker"], c["expiry"], c["strike"]))}
     cands = run["candidates"]
     return {"run_at": run["run_at"][:16], "market_open": run.get("market_open"),
             "n_universe": run["n_universe"], "n_checked": run["n_checked"], "n_found": run["n_found"],
@@ -348,7 +384,7 @@ def pmcc_earnings(line):
     return ("%s-%s inside" % (m.group(2), m.group(3))) if (m and "INSIDE" in (line or "").upper()) else ""
 
 
-def pmcc_view(run, conn=None):
+def pmcc_view(run, conn=None, book=None):
     """s157c (Russ, 2026-11-13): the PMCC search's rows for Today, from pmcctool.latest's run -- the top 5 by rent
     cover, each with what HELM holds on the name now. Display only; the search itself is `helm pmcc`."""
     from helm import pmcctool as PM
@@ -368,6 +404,19 @@ def pmcc_view(run, conn=None):
             except Exception:
                 pass
 
+    mkt = {}
+    if book is not None:
+        try:
+            mconn = conn if not own else _held_conn()
+            for c in run["candidates"][:PM.TOP_N]:
+                n = c.get("size_n") or 1
+                d = (abs(c.get("long_delta") or 0.0) - abs(c.get("short_delta") or 0.0)) * 100 * n
+                mkt[c["ticker"]] = market_cell(mconn, c["ticker"], d, c.get("spot"), book, one=not c.get("size_n"))
+            if own:
+                mconn.close()
+        except Exception:         # display only
+            mkt = {}
+
     def row(c):
         le = str(c["long_expiry"])
         return {"rank": c["rank"], "ticker": c["ticker"], "grade": c["grade"],
@@ -378,7 +427,7 @@ def pmcc_view(run, conn=None):
                 "rate": c["ann_return"], "width_room": c["width_room"],
                 "trend": "downtrend" if c.get("downtrend") else "",
                 "earnings": pmcc_earnings(c.get("earnings")),
-                "limits": put_limits(c), "fits": bool(c.get("size_n"))}
+                "limits": put_limits(c), "fits": bool(c.get("size_n")), "market": mkt.get(c["ticker"])}
     cands = run["candidates"]
     ra = str(run["run_at"])
     return {"run_at": ra[:16], "market_open": run.get("market_open"),
@@ -408,7 +457,20 @@ def _selftest():
        and put_earnings("earnings 2026-12-23 (47 days)") is None and put_earnings("fund") is None, "put earnings inside only")
     ok(calls_status("no call passes: strike below the effective basis", 0) == "blocked" and calls_status(None, 2) == "2 choices"
        and calls_status(None, 0) == "not priced", "calls status")
-    print("todayview selftest:", "PASS (7)" if not fails else "%d FAIL" % len(fails))
+    import sqlite3
+    m = sqlite3.connect(":memory:")
+    m.execute("CREATE TABLE watchlist (ticker TEXT, beta REAL)")
+    m.execute("INSERT INTO watchlist VALUES ('DELL', 1.4), ('XLE', NULL)")
+    bk = {"bw_delta": 135000.0, "delta_cap": 145000.0}
+    a = market_cell(m, "DELL", 0.27 * 100, 300.0, bk)
+    ok(abs(a["add"] - 11340.0) < 1e-6 and abs(a["after"] - 146340.0) < 1e-6 and a["state"] == "fired"
+       and a["beta"] == 1.4 and not a["beta_assumed"], "s159: a put over the book-delta limit is fired")
+    b = market_cell(m, "XLE", 0.30 * 100, 60.0, bk, one=True)
+    ok(b["beta"] == 1.0 and b["beta_assumed"] and b["state"] == "near" and b["one"], "s159: no beta stored -> 1.0 assumed; near")
+    c = market_cell(m, "DELL", -0.30 * 100 * 2, 300.0, {"bw_delta": 120000.0, "delta_cap": 145000.0})
+    ok(abs(c["after"] - 94800.0) < 1e-6 and c["state"] == "pass", "s159: a covered call lowers the book's delta")
+    ok(market_cell(m, "DELL", 10, None, bk)["after"] is None, "s159: no price, no figure")
+    print("todayview selftest:", "PASS (11)" if not fails else "%d FAIL" % len(fails))
     return 1 if fails else 0
 
 

@@ -65,8 +65,23 @@ def _latest_check(conn, position_id):
 
 
 def _beta(conn, ticker):
+    return beta_of(conn, ticker)
+
+
+def beta_of(conn, ticker):
+    """(beta, assumed): the watchlist's stored beta (Yahoo's 5-year monthly figure), else 1.0 and assumed.
+    Works on a plain or a Row connection. s159: shared by the book and Today's proposed trades."""
     r = conn.execute("SELECT beta FROM watchlist WHERE ticker=?", (ticker,)).fetchone()
-    return (float(r["beta"]), False) if r and r["beta"] is not None else (1.0, True)
+    return (float(r[0]), False) if r and r[0] is not None else (1.0, True)
+
+
+def added_bw_delta(delta_sh, spot, beta):
+    """s159 (Russ, 2026-11-14): what a proposed trade adds to the book's beta-weighted delta -- its delta in
+    shares (signed: a short put and a PMCC add, a covered call subtracts) x the stock's price x its beta, the
+    same arithmetic as each open position's row in view(). None without a price. Pure; display only."""
+    if spot is None or delta_sh is None:
+        return None
+    return float(delta_sh) * float(spot) * float(beta)
 
 
 def position_greeks(conn, p):
@@ -558,7 +573,11 @@ def _selftest():
     c.close()
     ok({(r["ticker"], r["strategy"]): r for r in view(db=db)["positions"]}[("JPM", "SHARES")]["spot"] == 341.25,
        "a newer share reading wins over the check")
-    print("bookview selftest:", "PASS (%d checks)" % 37 if not fails else "%d FAIL" % len(fails))
+    # s159: a proposed trade's addition to the book's beta-weighted delta
+    ok(abs(added_bw_delta(0.27 * 100 * 2, 300.0, 1.4) - 22680.0) < 1e-6, "s159: a put adds delta x price x beta")
+    ok(abs(added_bw_delta(-0.25 * 100, 300.0, 1.25) + 9375.0) < 1e-6, "s159: a covered call subtracts")
+    ok(added_bw_delta(10, None, 1.0) is None, "s159: no price, no figure")
+    print("bookview selftest:", "PASS (%d checks)" % 40 if not fails else "%d FAIL" % len(fails))
     return 1 if fails else 0
 
 
