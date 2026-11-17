@@ -62,7 +62,7 @@ def _fundamentals_fresh(last_fundamentals_at, stale_days):
         return False
 
 
-def refresh_watchlist_earnings(conn, tickers=None, force=False, stale_days=7, max_fetch=12):
+def refresh_watchlist_earnings(conn, tickers=None, force=False, stale_days=7, max_fetch=12, fetch=None):
     """Refresh watchlist.next_earnings for the active universe (or given tickers).
 
     Gated by last_fundamentals_at staleness. Fetches at most max_fetch stale names per
@@ -111,7 +111,7 @@ def refresh_watchlist_earnings(conn, tickers=None, force=False, stale_days=7, ma
     now = datetime.now().isoformat()
     updated = failed = 0
     for tk in batch:
-        ed = fetch_earnings_date(tk)
+        ed = (fetch or fetch_earnings_date)(tk)
         if ed is None:
             failed += 1
             continue  # do NOT stamp -- let it retry on a later scan
@@ -226,3 +226,77 @@ def _refresh_earnings(conn):
         conn.commit()
     except Exception:
         pass
+
+
+# s160 (Russ, 2026-11-17): the watchlist's report dates were refreshed only inside the old entry
+# scan, which no longer runs -- on 11-17, 89 of 135 active names carried a date already passed and
+# 24 had none, and DELL's showed 11-27 (an October estimate) while Dell had announced 11-24. The
+# put list, covered calls, the PMCC search and Today's earnings marks all read watchlist.next_earnings.
+# The 09:35 pre-market run (helm ivr refresh) now calls refresh_morning: every name HELM holds is
+# re-read each day -- the watchlist and that name's open positions get the same date -- then the
+# stocks checked longest ago, MORNING_BATCH a day, each re-read after MORNING_STALE_DAYS (the same
+# gate as refresh_watchlist_earnings, which does the fetching). Approved funds have no earnings.
+MORNING_BATCH = 35
+MORNING_STALE_DAYS = 7
+
+
+def _funds(conn):
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='approved_funds'").fetchone():
+        return set()
+    return {r[0] for r in conn.execute("SELECT ticker FROM approved_funds")}
+
+
+def held_names(conn):
+    """Tickers with an open position or HELM-held shares, A-Z, approved funds left out."""
+    names = {r[0] for r in conn.execute("SELECT DISTINCT ticker FROM positions WHERE status='OPEN'")}
+    try:
+        from helm.stockreads import held_tickers
+        names |= set(held_tickers(conn))
+    except Exception:
+        pass
+    return sorted(names - _funds(conn))
+
+
+def refresh_morning(conn, fetch=None):
+    """Refresh report dates for the held names (every day) and the oldest-checked stocks.
+    Returns a summary dict; writes watchlist.next_earnings / last_fundamentals_at and, for held
+    names, positions.earnings_date of their OPEN positions. Never touches anything else.
+    `fetch` (ticker -> 'YYYY-MM-DD' or None) is for tests; the default is fetch_earnings_date."""
+    from datetime import datetime
+    fetch = fetch or fetch_earnings_date
+    before = {r[0]: r[1] for r in conn.execute("SELECT ticker, next_earnings FROM watchlist")}
+    now = datetime.now().isoformat()
+    held = held_names(conn)
+    held_ok, held_failed = 0, []
+    for tk in held:
+        ed = fetch(tk)
+        if ed is None:
+            held_failed.append(tk)
+            continue
+        conn.execute("UPDATE watchlist SET next_earnings = ?, last_fundamentals_at = ? WHERE ticker = ?",
+                     (ed, now, tk))
+        conn.execute("UPDATE positions SET earnings_date = ? WHERE ticker = ? AND status = 'OPEN'", (ed, tk))
+        held_ok += 1
+    conn.commit()
+    funds = _funds(conn)
+    rest = [r[0] for r in conn.execute("SELECT ticker FROM watchlist WHERE active = 1 ORDER BY ticker")
+            if r[0] not in funds and r[0] not in set(held)]
+    summ = refresh_watchlist_earnings(conn, tickers=rest, stale_days=MORNING_STALE_DAYS,
+                                      max_fetch=MORNING_BATCH, fetch=fetch) if rest else {}
+    after = {r[0]: r[1] for r in conn.execute("SELECT ticker, next_earnings FROM watchlist")}
+    changed = [(t, before.get(t), after[t]) for t in sorted(after) if after[t] != before.get(t)]
+    return {"held": len(held), "held_ok": held_ok, "held_failed": held_failed,
+            "fetched": summ.get("updated", 0), "cached": summ.get("cached", 0),
+            "failed": summ.get("failed", 0), "deferred": summ.get("deferred", 0), "changed": changed}
+
+
+def morning_line(s):
+    """One line for the ivr log."""
+    ch = ", ".join("%s %s -> %s" % (t, (o or "none")[:10], (n or "none")[:10]) for t, o, n in s["changed"][:12])
+    more = " (+%d more)" % (len(s["changed"]) - 12) if len(s["changed"]) > 12 else ""
+    return ("earnings dates: held %d read, %d failed%s; watchlist %d fetched, %d cached, %d failed, %d left for "
+            "later days; changed %d%s%s" % (
+                s["held_ok"], len(s["held_failed"]),
+                (" (" + ", ".join(s["held_failed"]) + ")") if s["held_failed"] else "",
+                s["fetched"], s["cached"], s["failed"], s["deferred"], len(s["changed"]),
+                (": " + ch) if ch else "", more))

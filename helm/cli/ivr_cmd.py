@@ -265,6 +265,13 @@ def cmd_refresh(args: list) -> None:
     from helm.earnings import _refresh_earnings as _refresh_position_earnings
     from helm.db import get_conn as _earnings_conn
     _refresh_position_earnings(_earnings_conn())
+    # s160 (Russ, 2026-11-17): the watchlist's report dates too -- held names daily, the
+    # oldest-checked stocks a batch a day (helm.earnings.refresh_morning). Never costs the run.
+    try:
+        from helm.earnings import refresh_morning, morning_line
+        print(morning_line(refresh_morning(_earnings_conn())))
+    except Exception as _ee:   # noqa: BLE001
+        print("earnings dates: refresh FAILED: %s: %s" % (type(_ee).__name__, _ee))
 
     # W175: record the tape for the PREVIOUS session day, from official
     # closes.  Deliberately HERE -- ahead of the two early returns below and

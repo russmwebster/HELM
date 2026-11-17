@@ -3202,6 +3202,19 @@ def run_snapshot():
     finally:
         _entryfill_after_snapshot()
         _advice_after_snapshot(_err)
+        _today_copy_after_snapshot()
+
+
+def _today_copy_after_snapshot():
+    """s160 (Russ, 2026-11-17): after advice.json, ask the board to save a fixed copy of Today
+    (helm.todaycopy). Not on a stood-down day. Never costs the snapshot; never touches advice-status.json."""
+    if SNAPSHOT_INFO.get("stood_down"):
+        return
+    try:
+        from helm import todaycopy as _tc
+        print(_tc.line(_tc.request_save()))
+    except Exception as _e:     # noqa: BLE001
+        print("today copy post-pass FAILED: %s: %s" % (type(_e).__name__, _e))
 
 
 def _entryfill_after_snapshot():
