@@ -1,0 +1,1514 @@
+{
+ "n_puts": 57399,
+ "n_names": 132,
+ "first_day": "2017-11-21",
+ "last_day": "2026-10-08",
+ "q1_state_stocks": {
+  "all": {
+   "falling": {
+    "n": 5894,
+    "assigned": 18.9,
+    "avg_loss_pct": 1.41,
+    "payout": 0.52,
+    "big_loss": 5.2,
+    "net_pct": 2.11
+   },
+   "mixed": {
+    "n": 5044,
+    "assigned": 19.9,
+    "avg_loss_pct": 1.56,
+    "payout": 0.56,
+    "big_loss": 5.6,
+    "net_pct": 1.74
+   },
+   "rising": {
+    "n": 36171,
+    "assigned": 24.0,
+    "avg_loss_pct": 1.92,
+    "payout": 0.83,
+    "big_loss": 6.3,
+    "net_pct": 0.27
+   }
+  },
+  "first half": {
+   "falling": {
+    "n": 1544,
+    "assigned": 3.8,
+    "avg_loss_pct": 0.12,
+    "payout": 0.02,
+    "big_loss": 0.1,
+    "net_pct": 4.87
+   },
+   "mixed": {
+    "n": 2268,
+    "assigned": 15.7,
+    "avg_loss_pct": 1.29,
+    "payout": 0.4,
+    "big_loss": 4.9,
+    "net_pct": 2.49
+   },
+   "rising": {
+    "n": 17070,
+    "assigned": 23.1,
+    "avg_loss_pct": 2.08,
+    "payout": 0.92,
+    "big_loss": 6.9,
+    "net_pct": -0.04
+   }
+  },
+  "second half": {
+   "falling": {
+    "n": 4350,
+    "assigned": 24.3,
+    "avg_loss_pct": 1.87,
+    "payout": 0.68,
+    "big_loss": 7.0,
+    "net_pct": 1.12
+   },
+   "mixed": {
+    "n": 2776,
+    "assigned": 23.4,
+    "avg_loss_pct": 1.79,
+    "payout": 0.62,
+    "big_loss": 6.2,
+    "net_pct": 1.12
+   },
+   "rising": {
+    "n": 19101,
+    "assigned": 24.9,
+    "avg_loss_pct": 1.78,
+    "payout": 0.8,
+    "big_loss": 5.8,
+    "net_pct": 0.55
+   }
+  }
+ },
+ "q1_state_spy": {
+  "all": {
+   "falling": {
+    "n": 56,
+    "assigned": 17.9,
+    "avg_loss_pct": 0.6,
+    "payout": 0.36,
+    "big_loss": 0.0,
+    "net_pct": 1.37
+   },
+   "mixed": {
+    "n": 48,
+    "assigned": 16.7,
+    "avg_loss_pct": 0.95,
+    "payout": 0.57,
+    "big_loss": 2.1,
+    "net_pct": 0.74
+   },
+   "rising": {
+    "n": 343,
+    "assigned": 14.6,
+    "avg_loss_pct": 0.71,
+    "payout": 0.83,
+    "big_loss": 1.7,
+    "net_pct": 0.09
+   }
+  },
+  "first half": {
+   "rising": {
+    "n": 165,
+    "assigned": 12.7,
+    "avg_loss_pct": 0.89,
+    "payout": 1.05,
+    "big_loss": 3.0,
+    "net_pct": -0.08
+   }
+  },
+  "second half": {
+   "falling": {
+    "n": 41,
+    "assigned": 24.4,
+    "avg_loss_pct": 0.82,
+    "payout": 0.5,
+    "big_loss": 0.0,
+    "net_pct": 0.84
+   },
+   "rising": {
+    "n": 178,
+    "assigned": 16.3,
+    "avg_loss_pct": 0.54,
+    "payout": 0.71,
+    "big_loss": 0.6,
+    "net_pct": 0.25
+   }
+  }
+ },
+ "q1_fear_stocks": {
+  "all": {
+   "calm curve": {
+    "n": 26410,
+    "assigned": 24.5,
+    "avg_loss_pct": 1.82,
+    "payout": 0.82,
+    "big_loss": 6.1,
+    "net_pct": 0.46
+   },
+   "normal": {
+    "n": 17249,
+    "assigned": 20.9,
+    "avg_loss_pct": 1.62,
+    "payout": 0.62,
+    "big_loss": 5.4,
+    "net_pct": 1.02
+   },
+   "short-term fear above 3-month": {
+    "n": 3450,
+    "assigned": 21.4,
+    "avg_loss_pct": 2.85,
+    "payout": 0.92,
+    "big_loss": 9.6,
+    "net_pct": 0.34
+   }
+  },
+  "first half": {
+   "calm curve": {
+    "n": 11614,
+    "assigned": 22.8,
+    "avg_loss_pct": 1.69,
+    "payout": 0.7,
+    "big_loss": 5.7,
+    "net_pct": 0.41
+   },
+   "normal": {
+    "n": 7108,
+    "assigned": 16.9,
+    "avg_loss_pct": 1.53,
+    "payout": 0.61,
+    "big_loss": 5.0,
+    "net_pct": 1.18
+   },
+   "short-term fear above 3-month": {
+    "n": 2160,
+    "assigned": 23.5,
+    "avg_loss_pct": 3.76,
+    "payout": 1.35,
+    "big_loss": 12.6,
+    "net_pct": -0.32
+   }
+  },
+  "second half": {
+   "calm curve": {
+    "n": 14796,
+    "assigned": 25.8,
+    "avg_loss_pct": 1.92,
+    "payout": 0.86,
+    "big_loss": 6.4,
+    "net_pct": 0.51
+   },
+   "normal": {
+    "n": 10141,
+    "assigned": 23.8,
+    "avg_loss_pct": 1.67,
+    "payout": 0.63,
+    "big_loss": 5.6,
+    "net_pct": 0.91
+   },
+   "short-term fear above 3-month": {
+    "n": 1290,
+    "assigned": 18.0,
+    "avg_loss_pct": 1.33,
+    "payout": 0.58,
+    "big_loss": 4.6,
+    "net_pct": 1.46
+   }
+  }
+ },
+ "q1_vix_stocks": {
+  "all": {
+   "15-20": {
+    "n": 18965,
+    "assigned": 23.9,
+    "avg_loss_pct": 1.96,
+    "payout": 0.86,
+    "big_loss": 6.4,
+    "net_pct": 0.36
+   },
+   "20-30": {
+    "n": 12760,
+    "assigned": 20.0,
+    "avg_loss_pct": 1.52,
+    "payout": 0.59,
+    "big_loss": 5.4,
+    "net_pct": 1.27
+   },
+   "30+": {
+    "n": 3249,
+    "assigned": 13.1,
+    "avg_loss_pct": 1.19,
+    "payout": 0.39,
+    "big_loss": 3.7,
+    "net_pct": 3.03
+   },
+   "VIX<15": {
+    "n": 12135,
+    "assigned": 27.2,
+    "avg_loss_pct": 2.08,
+    "payout": 0.88,
+    "big_loss": 7.0,
+    "net_pct": -0.15
+   }
+  },
+  "first half": {
+   "15-20": {
+    "n": 7146,
+    "assigned": 20.4,
+    "avg_loss_pct": 1.84,
+    "payout": 0.86,
+    "big_loss": 5.5,
+    "net_pct": 0.17
+   },
+   "20-30": {
+    "n": 5626,
+    "assigned": 14.5,
+    "avg_loss_pct": 1.16,
+    "payout": 0.42,
+    "big_loss": 3.9,
+    "net_pct": 1.67
+   },
+   "30+": {
+    "n": 1872,
+    "assigned": 9.2,
+    "avg_loss_pct": 1.12,
+    "payout": 0.23,
+    "big_loss": 3.7,
+    "net_pct": 4.17
+   },
+   "VIX<15": {
+    "n": 6238,
+    "assigned": 30.7,
+    "avg_loss_pct": 2.7,
+    "payout": 1.45,
+    "big_loss": 9.7,
+    "net_pct": -0.95
+   }
+  },
+  "second half": {
+   "15-20": {
+    "n": 11819,
+    "assigned": 26.0,
+    "avg_loss_pct": 2.03,
+    "payout": 0.86,
+    "big_loss": 7.0,
+    "net_pct": 0.48
+   },
+   "20-30": {
+    "n": 7134,
+    "assigned": 24.4,
+    "avg_loss_pct": 1.8,
+    "payout": 0.67,
+    "big_loss": 6.6,
+    "net_pct": 0.95
+   },
+   "30+": {
+    "n": 1377,
+    "assigned": 18.4,
+    "avg_loss_pct": 1.28,
+    "payout": 0.6,
+    "big_loss": 3.6,
+    "net_pct": 1.47
+   },
+   "VIX<15": {
+    "n": 5897,
+    "assigned": 23.6,
+    "avg_loss_pct": 1.43,
+    "payout": 0.66,
+    "big_loss": 4.1,
+    "net_pct": 0.7
+   }
+  }
+ },
+ "q1_spike_vix20plus": {
+  "all": {
+   "False": {
+    "n": 11071,
+    "assigned": 20.9,
+    "avg_loss_pct": 1.68,
+    "payout": 0.66,
+    "big_loss": 5.8,
+    "net_pct": 0.99
+   },
+   "True": {
+    "n": 5046,
+    "assigned": 13.5,
+    "avg_loss_pct": 0.95,
+    "payout": 0.33,
+    "big_loss": 3.3,
+    "net_pct": 3.03
+   }
+  },
+  "first half": {
+   "False": {
+    "n": 4261,
+    "assigned": 16.9,
+    "avg_loss_pct": 1.7,
+    "payout": 0.64,
+    "big_loss": 5.7,
+    "net_pct": 0.94
+   },
+   "True": {
+    "n": 3237,
+    "assigned": 8.2,
+    "avg_loss_pct": 0.44,
+    "payout": 0.11,
+    "big_loss": 1.5,
+    "net_pct": 4.08
+   }
+  },
+  "second half": {
+   "False": {
+    "n": 6810,
+    "assigned": 23.4,
+    "avg_loss_pct": 1.66,
+    "payout": 0.67,
+    "big_loss": 5.9,
+    "net_pct": 1.01
+   },
+   "True": {
+    "n": 1809,
+    "assigned": 23.0,
+    "avg_loss_pct": 1.86,
+    "payout": 0.61,
+    "big_loss": 6.5,
+    "net_pct": 1.16
+   }
+  }
+ },
+ "q1_rebound_stocks": {
+  "all": {
+   "False": {
+    "n": 41739,
+    "assigned": 24.0,
+    "avg_loss_pct": 1.92,
+    "payout": 0.82,
+    "big_loss": 6.4,
+    "net_pct": 0.39
+   },
+   "True": {
+    "n": 5370,
+    "assigned": 15.2,
+    "avg_loss_pct": 1.02,
+    "payout": 0.36,
+    "big_loss": 3.5,
+    "net_pct": 2.72
+   }
+  },
+  "first half": {
+   "False": {
+    "n": 18500,
+    "assigned": 22.9,
+    "avg_loss_pct": 2.05,
+    "payout": 0.9,
+    "big_loss": 6.9,
+    "net_pct": 0.1
+   },
+   "True": {
+    "n": 2382,
+    "assigned": 5.4,
+    "avg_loss_pct": 0.26,
+    "payout": 0.05,
+    "big_loss": 0.7,
+    "net_pct": 4.43
+   }
+  },
+  "second half": {
+   "False": {
+    "n": 23239,
+    "assigned": 24.8,
+    "avg_loss_pct": 1.81,
+    "payout": 0.79,
+    "big_loss": 6.1,
+    "net_pct": 0.62
+   },
+   "True": {
+    "n": 2988,
+    "assigned": 22.9,
+    "avg_loss_pct": 1.62,
+    "payout": 0.54,
+    "big_loss": 5.7,
+    "net_pct": 1.37
+   }
+  }
+ },
+ "q1_stretch_by_fear": {
+  "late 2018": {
+   "calm curve": {
+    "n": 714,
+    "assigned": 46.9,
+    "avg_loss_pct": 3.78,
+    "payout": 2.24,
+    "big_loss": 15.4,
+    "net_pct": -2.18
+   },
+   "normal": {
+    "n": 714,
+    "assigned": 38.2,
+    "avg_loss_pct": 3.67,
+    "payout": 1.93,
+    "big_loss": 14.3,
+    "net_pct": -1.49
+   },
+   "short-term fear above 3-month": {
+    "n": 408,
+    "assigned": 31.4,
+    "avg_loss_pct": 2.96,
+    "payout": 1.44,
+    "big_loss": 12.5,
+    "net_pct": -0.8
+   }
+  },
+  "early 2020": {
+   "calm curve": {
+    "n": 412,
+    "assigned": 66.0,
+    "avg_loss_pct": 10.71,
+    "payout": 6.72,
+    "big_loss": 39.3,
+    "net_pct": -9.06
+   },
+   "normal": {
+    "n": 206,
+    "assigned": 87.9,
+    "avg_loss_pct": 21.4,
+    "payout": 14.19,
+    "big_loss": 68.4,
+    "net_pct": -19.75
+   },
+   "short-term fear above 3-month": {
+    "n": 619,
+    "assigned": 44.7,
+    "avg_loss_pct": 10.39,
+    "payout": 4.18,
+    "big_loss": 33.6,
+    "net_pct": -7.05
+   }
+  },
+  "2022": {
+   "calm curve": {
+    "n": 1683,
+    "assigned": 40.2,
+    "avg_loss_pct": 3.51,
+    "payout": 1.81,
+    "big_loss": 13.7,
+    "net_pct": -1.01
+   },
+   "normal": {
+    "n": 2959,
+    "assigned": 30.4,
+    "avg_loss_pct": 2.39,
+    "payout": 0.88,
+    "big_loss": 8.8,
+    "net_pct": 0.38
+   },
+   "short-term fear above 3-month": {
+    "n": 211,
+    "assigned": 10.0,
+    "avg_loss_pct": 0.61,
+    "payout": 0.24,
+    "big_loss": 1.9,
+    "net_pct": 1.94
+   }
+  },
+  "spring 2025": {
+   "calm curve": {
+    "n": 540,
+    "assigned": 53.1,
+    "avg_loss_pct": 6.21,
+    "payout": 3.08,
+    "big_loss": 25.0,
+    "net_pct": -3.8
+   },
+   "normal": {
+    "n": 540,
+    "assigned": 43.3,
+    "avg_loss_pct": 3.7,
+    "payout": 1.59,
+    "big_loss": 15.4,
+    "net_pct": -1.16
+   },
+   "short-term fear above 3-month": {
+    "n": 324,
+    "assigned": 37.3,
+    "avg_loss_pct": 3.09,
+    "payout": 1.34,
+    "big_loss": 11.4,
+    "net_pct": -0.33
+   }
+  }
+ },
+ "q1_stretch_by_spike": {
+  "late 2018": {
+   "False": {
+    "n": 714,
+    "assigned": 28.7,
+    "avg_loss_pct": 2.37,
+    "payout": 1.15,
+    "big_loss": 9.1,
+    "net_pct": -0.09
+   }
+  },
+  "early 2020": {
+   "False": {
+    "n": 412,
+    "assigned": 44.4,
+    "avg_loss_pct": 9.19,
+    "payout": 3.66,
+    "big_loss": 30.8,
+    "net_pct": -6.09
+   },
+   "True": {
+    "n": 104,
+    "assigned": 0.0,
+    "avg_loss_pct": 0.0,
+    "payout": 0.0,
+    "big_loss": 0.0,
+    "net_pct": 6.02
+   }
+  },
+  "2022": {
+   "False": {
+    "n": 3169,
+    "assigned": 28.3,
+    "avg_loss_pct": 2.16,
+    "payout": 0.9,
+    "big_loss": 7.9,
+    "net_pct": 0.58
+   },
+   "True": {
+    "n": 948,
+    "assigned": 38.0,
+    "avg_loss_pct": 3.18,
+    "payout": 1.15,
+    "big_loss": 11.3,
+    "net_pct": -0.46
+   }
+  },
+  "spring 2025": {
+   "False": {
+    "n": 432,
+    "assigned": 46.1,
+    "avg_loss_pct": 4.19,
+    "payout": 1.8,
+    "big_loss": 17.1,
+    "net_pct": -1.49
+   }
+  }
+ },
+ "fund_vs_stock": {
+  "all": {
+   "False": {
+    "n": 47109,
+    "assigned": 23.0,
+    "avg_loss_pct": 1.82,
+    "payout": 0.76,
+    "big_loss": 6.1,
+    "net_pct": 0.66
+   },
+   "True": {
+    "n": 10290,
+    "assigned": 20.5,
+    "avg_loss_pct": 0.94,
+    "payout": 0.7,
+    "big_loss": 2.2,
+    "net_pct": 0.38
+   }
+  },
+  "first half": {
+   "False": {
+    "n": 20882,
+    "assigned": 20.9,
+    "avg_loss_pct": 1.85,
+    "payout": 0.74,
+    "big_loss": 6.2,
+    "net_pct": 0.6
+   },
+   "True": {
+    "n": 4567,
+    "assigned": 18.0,
+    "avg_loss_pct": 0.96,
+    "payout": 0.71,
+    "big_loss": 2.5,
+    "net_pct": 0.36
+   }
+  },
+  "second half": {
+   "False": {
+    "n": 26227,
+    "assigned": 24.6,
+    "avg_loss_pct": 1.79,
+    "payout": 0.76,
+    "big_loss": 6.0,
+    "net_pct": 0.71
+   },
+   "True": {
+    "n": 5723,
+    "assigned": 22.6,
+    "avg_loss_pct": 0.92,
+    "payout": 0.7,
+    "big_loss": 1.9,
+    "net_pct": 0.39
+   }
+  }
+ },
+ "fund_vs_stock_stretch": {
+  "late 2018": {
+   "False": {
+    "n": 1836,
+    "assigned": 40.1,
+    "avg_loss_pct": 3.56,
+    "payout": 1.92,
+    "big_loss": 14.3,
+    "net_pct": -1.61
+   },
+   "True": {
+    "n": 396,
+    "assigned": 40.4,
+    "avg_loss_pct": 1.78,
+    "payout": 2.34,
+    "big_loss": 2.0,
+    "net_pct": -0.82
+   }
+  },
+  "early 2020": {
+   "False": {
+    "n": 1237,
+    "assigned": 59.0,
+    "avg_loss_pct": 12.33,
+    "payout": 6.15,
+    "big_loss": 41.3,
+    "net_pct": -9.83
+   },
+   "True": {
+    "n": 276,
+    "assigned": 59.4,
+    "avg_loss_pct": 8.4,
+    "payout": 7.69,
+    "big_loss": 35.1,
+    "net_pct": -7.07
+   }
+  },
+  "2022": {
+   "False": {
+    "n": 4853,
+    "assigned": 32.9,
+    "avg_loss_pct": 2.7,
+    "payout": 1.18,
+    "big_loss": 10.2,
+    "net_pct": -0.04
+   },
+   "True": {
+    "n": 1058,
+    "assigned": 42.6,
+    "avg_loss_pct": 2.02,
+    "payout": 1.41,
+    "big_loss": 4.3,
+    "net_pct": -0.53
+   }
+  },
+  "spring 2025": {
+   "False": {
+    "n": 1404,
+    "assigned": 45.7,
+    "avg_loss_pct": 4.53,
+    "payout": 2.12,
+    "big_loss": 18.2,
+    "net_pct": -1.98
+   },
+   "True": {
+    "n": 311,
+    "assigned": 36.0,
+    "avg_loss_pct": 2.07,
+    "payout": 2.57,
+    "big_loss": 5.1,
+    "net_pct": -0.88
+   }
+  }
+ },
+ "q2_lead": {
+  "all": {
+   "lagging sector": {
+    "n": 11807,
+    "assigned": 22.8,
+    "avg_loss_pct": 2.05,
+    "payout": 0.73,
+    "big_loss": 6.5,
+    "net_pct": 0.52
+   },
+   "leading sector": {
+    "n": 14685,
+    "assigned": 23.3,
+    "avg_loss_pct": 1.83,
+    "payout": 0.79,
+    "big_loss": 6.5,
+    "net_pct": 0.72
+   },
+   "middle sector": {
+    "n": 20401,
+    "assigned": 22.7,
+    "avg_loss_pct": 1.68,
+    "payout": 0.75,
+    "big_loss": 5.6,
+    "net_pct": 0.69
+   }
+  },
+  "first half": {
+   "lagging sector": {
+    "n": 5287,
+    "assigned": 23.9,
+    "avg_loss_pct": 2.76,
+    "payout": 0.86,
+    "big_loss": 8.7,
+    "net_pct": 0.03
+   },
+   "leading sector": {
+    "n": 6685,
+    "assigned": 20.7,
+    "avg_loss_pct": 1.56,
+    "payout": 0.66,
+    "big_loss": 5.5,
+    "net_pct": 0.8
+   },
+   "middle sector": {
+    "n": 8694,
+    "assigned": 18.9,
+    "avg_loss_pct": 1.52,
+    "payout": 0.73,
+    "big_loss": 5.2,
+    "net_pct": 0.79
+   }
+  },
+  "second half": {
+   "lagging sector": {
+    "n": 6520,
+    "assigned": 21.9,
+    "avg_loss_pct": 1.47,
+    "payout": 0.67,
+    "big_loss": 4.7,
+    "net_pct": 0.92
+   },
+   "leading sector": {
+    "n": 8000,
+    "assigned": 25.5,
+    "avg_loss_pct": 2.05,
+    "payout": 0.83,
+    "big_loss": 7.3,
+    "net_pct": 0.66
+   },
+   "middle sector": {
+    "n": 11707,
+    "assigned": 25.5,
+    "avg_loss_pct": 1.8,
+    "payout": 0.76,
+    "big_loss": 5.9,
+    "net_pct": 0.63
+   }
+  }
+ },
+ "q2_lead_rebound": {
+  "lagging sector": {
+   "n": 1543,
+   "assigned": 10.8,
+   "avg_loss_pct": 0.67,
+   "payout": 0.29,
+   "big_loss": 2.4,
+   "net_pct": 3.89
+  },
+  "leading sector": {
+   "n": 1482,
+   "assigned": 16.8,
+   "avg_loss_pct": 1.16,
+   "payout": 0.31,
+   "big_loss": 4.2,
+   "net_pct": 2.23
+  },
+  "middle sector": {
+   "n": 2345,
+   "assigned": 17.0,
+   "avg_loss_pct": 1.16,
+   "payout": 0.44,
+   "big_loss": 3.8,
+   "net_pct": 2.27
+  }
+ },
+ "q2_lead_falling": {
+  "lagging sector": {
+   "n": 1622,
+   "assigned": 17.0,
+   "avg_loss_pct": 1.14,
+   "payout": 0.46,
+   "big_loss": 3.5,
+   "net_pct": 3.01
+  },
+  "leading sector": {
+   "n": 1517,
+   "assigned": 16.4,
+   "avg_loss_pct": 1.17,
+   "payout": 0.43,
+   "big_loss": 4.5,
+   "net_pct": 2.09
+  },
+  "middle sector": {
+   "n": 2751,
+   "assigned": 21.4,
+   "avg_loss_pct": 1.7,
+   "payout": 0.61,
+   "big_loss": 6.6,
+   "net_pct": 1.58
+  }
+ },
+ "q2_lead_stretch": {
+  "late 2018": {
+   "lagging sector": {
+    "n": 582,
+    "assigned": 43.5,
+    "avg_loss_pct": 3.55,
+    "payout": 2.01,
+    "big_loss": 13.9,
+    "net_pct": -1.6
+   },
+   "leading sector": {
+    "n": 444,
+    "assigned": 43.9,
+    "avg_loss_pct": 3.96,
+    "payout": 2.54,
+    "big_loss": 15.5,
+    "net_pct": -2.38
+   },
+   "middle sector": {
+    "n": 742,
+    "assigned": 34.5,
+    "avg_loss_pct": 3.39,
+    "payout": 1.68,
+    "big_loss": 14.7,
+    "net_pct": -1.25
+   }
+  },
+  "early 2020": {
+   "lagging sector": {
+    "n": 406,
+    "assigned": 64.3,
+    "avg_loss_pct": 18.36,
+    "payout": 6.84,
+    "big_loss": 53.2,
+    "net_pct": -15.16
+   },
+   "leading sector": {
+    "n": 434,
+    "assigned": 53.2,
+    "avg_loss_pct": 7.27,
+    "payout": 4.08,
+    "big_loss": 28.3,
+    "net_pct": -5.06
+   },
+   "middle sector": {
+    "n": 397,
+    "assigned": 59.9,
+    "avg_loss_pct": 11.7,
+    "payout": 7.67,
+    "big_loss": 43.3,
+    "net_pct": -9.61
+   }
+  },
+  "2022": {
+   "lagging sector": {
+    "n": 1272,
+    "assigned": 34.6,
+    "avg_loss_pct": 2.82,
+    "payout": 1.16,
+    "big_loss": 9.2,
+    "net_pct": 0.04
+   },
+   "leading sector": {
+    "n": 1297,
+    "assigned": 27.4,
+    "avg_loss_pct": 2.15,
+    "payout": 1.09,
+    "big_loss": 8.8,
+    "net_pct": 0.41
+   },
+   "middle sector": {
+    "n": 2284,
+    "assigned": 35.0,
+    "avg_loss_pct": 2.95,
+    "payout": 1.24,
+    "big_loss": 11.6,
+    "net_pct": -0.33
+   }
+  },
+  "spring 2025": {
+   "lagging sector": {
+    "n": 467,
+    "assigned": 40.0,
+    "avg_loss_pct": 3.27,
+    "payout": 1.77,
+    "big_loss": 13.1,
+    "net_pct": -0.97
+   },
+   "leading sector": {
+    "n": 307,
+    "assigned": 57.7,
+    "avg_loss_pct": 5.37,
+    "payout": 2.94,
+    "big_loss": 20.8,
+    "net_pct": -3.35
+   },
+   "middle sector": {
+    "n": 630,
+    "assigned": 44.1,
+    "avg_loss_pct": 5.05,
+    "payout": 1.87,
+    "big_loss": 20.6,
+    "net_pct": -2.06
+   }
+  }
+ },
+ "q3_dip": {
+  "all": {
+   "long slide, >25% below high": {
+    "n": 2665,
+    "assigned": 21.4,
+    "avg_loss_pct": 2.17,
+    "payout": 0.52,
+    "big_loss": 7.8,
+    "net_pct": 2.22
+   },
+   "no big drop": {
+    "n": 39366,
+    "assigned": 23.4,
+    "avg_loss_pct": 1.74,
+    "payout": 0.79,
+    "big_loss": 5.8,
+    "net_pct": 0.47
+   },
+   "sharp drop, >25% below high": {
+    "n": 3103,
+    "assigned": 18.7,
+    "avg_loss_pct": 2.21,
+    "payout": 0.52,
+    "big_loss": 8.0,
+    "net_pct": 1.93
+   },
+   "sharp drop, within 25% of high": {
+    "n": 1975,
+    "assigned": 22.2,
+    "avg_loss_pct": 2.32,
+    "payout": 0.69,
+    "big_loss": 7.6,
+    "net_pct": 0.27
+   }
+  },
+  "first half": {
+   "long slide, >25% below high": {
+    "n": 1114,
+    "assigned": 18.8,
+    "avg_loss_pct": 1.99,
+    "payout": 0.28,
+    "big_loss": 7.2,
+    "net_pct": 3.58
+   },
+   "no big drop": {
+    "n": 17678,
+    "assigned": 21.4,
+    "avg_loss_pct": 1.73,
+    "payout": 0.78,
+    "big_loss": 5.8,
+    "net_pct": 0.39
+   },
+   "sharp drop, >25% below high": {
+    "n": 1230,
+    "assigned": 17.6,
+    "avg_loss_pct": 2.79,
+    "payout": 0.53,
+    "big_loss": 8.6,
+    "net_pct": 1.57
+   },
+   "sharp drop, within 25% of high": {
+    "n": 860,
+    "assigned": 18.3,
+    "avg_loss_pct": 2.83,
+    "payout": 0.75,
+    "big_loss": 9.2,
+    "net_pct": -0.34
+   }
+  },
+  "second half": {
+   "long slide, >25% below high": {
+    "n": 1551,
+    "assigned": 23.3,
+    "avg_loss_pct": 2.29,
+    "payout": 0.61,
+    "big_loss": 8.3,
+    "net_pct": 1.24
+   },
+   "no big drop": {
+    "n": 21688,
+    "assigned": 25.1,
+    "avg_loss_pct": 1.75,
+    "payout": 0.8,
+    "big_loss": 5.7,
+    "net_pct": 0.54
+   },
+   "sharp drop, >25% below high": {
+    "n": 1873,
+    "assigned": 19.4,
+    "avg_loss_pct": 1.82,
+    "payout": 0.51,
+    "big_loss": 7.5,
+    "net_pct": 2.16
+   },
+   "sharp drop, within 25% of high": {
+    "n": 1115,
+    "assigned": 25.2,
+    "avg_loss_pct": 1.92,
+    "payout": 0.67,
+    "big_loss": 6.4,
+    "net_pct": 0.75
+   }
+  }
+ },
+ "q3_sharp_steadied": {
+  "all": {
+   "sharp drop, >25% below high / steadied": {
+    "n": 817,
+    "assigned": 16.5,
+    "avg_loss_pct": 2.24,
+    "payout": 0.46,
+    "big_loss": 8.2,
+    "net_pct": 2.71
+   },
+   "sharp drop, >25% below high / still falling": {
+    "n": 2286,
+    "assigned": 19.4,
+    "avg_loss_pct": 2.19,
+    "payout": 0.54,
+    "big_loss": 7.9,
+    "net_pct": 1.65
+   },
+   "sharp drop, within 25% of high / steadied": {
+    "n": 538,
+    "assigned": 20.8,
+    "avg_loss_pct": 2.27,
+    "payout": 0.6,
+    "big_loss": 7.2,
+    "net_pct": 0.74
+   },
+   "sharp drop, within 25% of high / still falling": {
+    "n": 1437,
+    "assigned": 22.7,
+    "avg_loss_pct": 2.33,
+    "payout": 0.73,
+    "big_loss": 7.7,
+    "net_pct": 0.1
+   }
+  },
+  "first half": {
+   "sharp drop, >25% below high / steadied": {
+    "n": 325,
+    "assigned": 13.5,
+    "avg_loss_pct": 2.54,
+    "payout": 0.31,
+    "big_loss": 8.0,
+    "net_pct": 3.16
+   },
+   "sharp drop, >25% below high / still falling": {
+    "n": 905,
+    "assigned": 19.0,
+    "avg_loss_pct": 2.88,
+    "payout": 0.65,
+    "big_loss": 8.8,
+    "net_pct": 1.0
+   },
+   "sharp drop, within 25% of high / steadied": {
+    "n": 258,
+    "assigned": 14.0,
+    "avg_loss_pct": 2.16,
+    "payout": 0.4,
+    "big_loss": 5.8,
+    "net_pct": 0.74
+   },
+   "sharp drop, within 25% of high / still falling": {
+    "n": 602,
+    "assigned": 20.1,
+    "avg_loss_pct": 3.12,
+    "payout": 0.94,
+    "big_loss": 10.6,
+    "net_pct": -0.8
+   }
+  },
+  "second half": {
+   "sharp drop, >25% below high / steadied": {
+    "n": 492,
+    "assigned": 18.5,
+    "avg_loss_pct": 2.05,
+    "payout": 0.5,
+    "big_loss": 8.3,
+    "net_pct": 2.41
+   },
+   "sharp drop, >25% below high / still falling": {
+    "n": 1381,
+    "assigned": 19.7,
+    "avg_loss_pct": 1.74,
+    "payout": 0.52,
+    "big_loss": 7.2,
+    "net_pct": 2.07
+   },
+   "sharp drop, within 25% of high / steadied": {
+    "n": 280,
+    "assigned": 27.1,
+    "avg_loss_pct": 2.38,
+    "payout": 0.67,
+    "big_loss": 8.6,
+    "net_pct": 0.75
+   },
+   "sharp drop, within 25% of high / still falling": {
+    "n": 835,
+    "assigned": 24.6,
+    "avg_loss_pct": 1.77,
+    "payout": 0.67,
+    "big_loss": 5.6,
+    "net_pct": 0.74
+   }
+  }
+ },
+ "q4_gap_spy": {
+  "all": {
+   "0-4 pts": {
+    "n": 158,
+    "assigned": 15.2,
+    "avg_loss_pct": 0.78,
+    "payout": 0.75,
+    "big_loss": 1.9,
+    "net_pct": 0.21
+   },
+   "4-8 pts": {
+    "n": 154,
+    "assigned": 19.5,
+    "avg_loss_pct": 0.95,
+    "payout": 0.98,
+    "big_loss": 2.6,
+    "net_pct": -0.02
+   },
+   "8+ pts": {
+    "n": 70,
+    "assigned": 10.0,
+    "avg_loss_pct": 0.35,
+    "payout": 0.47,
+    "big_loss": 0.0,
+    "net_pct": 0.55
+   },
+   "VIX below actual": {
+    "n": 65,
+    "assigned": 10.8,
+    "avg_loss_pct": 0.43,
+    "payout": 0.27,
+    "big_loss": 0.0,
+    "net_pct": 1.15
+   }
+  },
+  "first half": {
+   "0-4 pts": {
+    "n": 58,
+    "assigned": 12.1,
+    "avg_loss_pct": 1.0,
+    "payout": 1.1,
+    "big_loss": 3.4,
+    "net_pct": -0.0
+   },
+   "4-8 pts": {
+    "n": 72,
+    "assigned": 18.1,
+    "avg_loss_pct": 1.14,
+    "payout": 1.18,
+    "big_loss": 4.2,
+    "net_pct": -0.19
+   },
+   "8+ pts": {
+    "n": 41,
+    "assigned": 4.9,
+    "avg_loss_pct": 0.17,
+    "payout": 0.15,
+    "big_loss": 0.0,
+    "net_pct": 0.79
+   },
+   "VIX below actual": {
+    "n": 31,
+    "assigned": 9.7,
+    "avg_loss_pct": 0.45,
+    "payout": 0.26,
+    "big_loss": 0.0,
+    "net_pct": 1.31
+   }
+  },
+  "second half": {
+   "0-4 pts": {
+    "n": 100,
+    "assigned": 17.0,
+    "avg_loss_pct": 0.66,
+    "payout": 0.63,
+    "big_loss": 1.0,
+    "net_pct": 0.34
+   },
+   "4-8 pts": {
+    "n": 82,
+    "assigned": 20.7,
+    "avg_loss_pct": 0.79,
+    "payout": 0.89,
+    "big_loss": 1.2,
+    "net_pct": 0.13
+   },
+   "VIX below actual": {
+    "n": 34,
+    "assigned": 11.8,
+    "avg_loss_pct": 0.41,
+    "payout": 0.27,
+    "big_loss": 0.0,
+    "net_pct": 0.99
+   }
+  }
+ },
+ "q4_gap_stocks": {
+  "all": {
+   "0-4 pts": {
+    "n": 16660,
+    "assigned": 23.9,
+    "avg_loss_pct": 1.88,
+    "payout": 0.78,
+    "big_loss": 6.0,
+    "net_pct": 0.47
+   },
+   "4-8 pts": {
+    "n": 16235,
+    "assigned": 25.8,
+    "avg_loss_pct": 2.23,
+    "payout": 0.93,
+    "big_loss": 7.7,
+    "net_pct": 0.15
+   },
+   "8+ pts": {
+    "n": 7398,
+    "assigned": 19.7,
+    "avg_loss_pct": 1.3,
+    "payout": 0.59,
+    "big_loss": 4.3,
+    "net_pct": 1.14
+   },
+   "VIX below actual": {
+    "n": 6816,
+    "assigned": 17.5,
+    "avg_loss_pct": 1.25,
+    "payout": 0.48,
+    "big_loss": 4.4,
+    "net_pct": 1.81
+   }
+  },
+  "first half": {
+   "0-4 pts": {
+    "n": 5970,
+    "assigned": 21.7,
+    "avg_loss_pct": 2.26,
+    "payout": 0.99,
+    "big_loss": 7.4,
+    "net_pct": -0.05
+   },
+   "4-8 pts": {
+    "n": 7444,
+    "assigned": 25.2,
+    "avg_loss_pct": 2.38,
+    "payout": 0.96,
+    "big_loss": 8.3,
+    "net_pct": -0.09
+   },
+   "8+ pts": {
+    "n": 4282,
+    "assigned": 17.1,
+    "avg_loss_pct": 1.05,
+    "payout": 0.44,
+    "big_loss": 3.3,
+    "net_pct": 1.4
+   },
+   "VIX below actual": {
+    "n": 3186,
+    "assigned": 14.4,
+    "avg_loss_pct": 0.91,
+    "payout": 0.32,
+    "big_loss": 2.9,
+    "net_pct": 2.36
+   }
+  },
+  "second half": {
+   "0-4 pts": {
+    "n": 10690,
+    "assigned": 25.1,
+    "avg_loss_pct": 1.67,
+    "payout": 0.72,
+    "big_loss": 5.3,
+    "net_pct": 0.76
+   },
+   "4-8 pts": {
+    "n": 8791,
+    "assigned": 26.3,
+    "avg_loss_pct": 2.1,
+    "payout": 0.93,
+    "big_loss": 7.2,
+    "net_pct": 0.36
+   },
+   "8+ pts": {
+    "n": 3116,
+    "assigned": 23.2,
+    "avg_loss_pct": 1.63,
+    "payout": 0.68,
+    "big_loss": 5.6,
+    "net_pct": 0.79
+   },
+   "VIX below actual": {
+    "n": 3630,
+    "assigned": 20.3,
+    "avg_loss_pct": 1.55,
+    "payout": 0.54,
+    "big_loss": 5.8,
+    "net_pct": 1.33
+   }
+  }
+ },
+ "q5_report_in_trade": {
+  "all": {
+   "False": {
+    "n": 10700,
+    "assigned": 22.7,
+    "avg_loss_pct": 1.35,
+    "payout": 0.68,
+    "big_loss": 3.8,
+    "net_pct": 0.83
+   },
+   "True": {
+    "n": 10133,
+    "assigned": 21.7,
+    "avg_loss_pct": 1.43,
+    "payout": 0.75,
+    "big_loss": 4.4,
+    "net_pct": 0.72
+   }
+  },
+  "first half": {
+   "False": {
+    "n": 2371,
+    "assigned": 14.8,
+    "avg_loss_pct": 0.56,
+    "payout": 0.32,
+    "big_loss": 0.8,
+    "net_pct": 1.48
+   },
+   "True": {
+    "n": 2117,
+    "assigned": 12.5,
+    "avg_loss_pct": 0.58,
+    "payout": 0.36,
+    "big_loss": 1.1,
+    "net_pct": 1.38
+   }
+  },
+  "second half": {
+   "False": {
+    "n": 8329,
+    "assigned": 25.0,
+    "avg_loss_pct": 1.58,
+    "payout": 0.74,
+    "big_loss": 4.7,
+    "net_pct": 0.65
+   },
+   "True": {
+    "n": 8016,
+    "assigned": 24.2,
+    "avg_loss_pct": 1.65,
+    "payout": 0.81,
+    "big_loss": 5.3,
+    "net_pct": 0.55
+   }
+  }
+ },
+ "q6": {
+  "bad_days": 89,
+  "worst25_from": "2018-02-05",
+  "worst25_to": "2026-11-05",
+  "worst25_fell_more_than_multiple_pct": 49.8,
+  "worst25_fell_1p5x_multiple_pct": 25.9,
+  "worst25_median_ratio": 0.99,
+  "corr_spy_down_1pct": {
+   "days": 281,
+   "same_sector": 0.44,
+   "different_sectors": 0.28
+  },
+  "corr_spy_up_1pct": {
+   "days": 330,
+   "same_sector": 0.39,
+   "different_sectors": 0.22
+  },
+  "corr_quiet_days": {
+   "days": 1256,
+   "same_sector": 0.23,
+   "different_sectors": 0.02
+  },
+  "bad_days_share_of_names_down_2pct_median": 63.0
+ },
+ "q7_runs": 19,
+ "q7_spread_rejects_by_name": {
+  "XLV": 18,
+  "VLO": 12,
+  "XLC": 12,
+  "ROST": 11,
+  "XLK": 11,
+  "MOD": 10,
+  "CRM": 9,
+  "KO": 9,
+  "JNJ": 9,
+  "WMT": 9,
+  "SU": 9,
+  "XLB": 8,
+  "MRK": 8,
+  "BMY": 8,
+  "HD": 7,
+  "TGT": 7,
+  "CVX": 7,
+  "EEM": 6,
+  "LNG": 5,
+  "NKE": 5,
+  "XLRE": 5,
+  "XLP": 4,
+  "XLI": 4,
+  "CSCO": 4,
+  "XLE": 4,
+  "ECL": 4,
+  "VALE": 4,
+  "XLU": 4,
+  "ISRG": 4,
+  "FCX": 3,
+  "LIN": 3,
+  "BX": 3,
+  "EFA": 3,
+  "XLY": 3,
+  "DVN": 3,
+  "TRGP": 3,
+  "DELL": 2,
+  "XOM": 2,
+  "ABT": 2,
+  "FTI": 2,
+  "MCD": 2,
+  "CAT": 2,
+  "GOOG": 1,
+  "GOOGL": 1,
+  "HAL": 1,
+  "NVDA": 1,
+  "HON": 1,
+  "COST": 1,
+  "GE": 1,
+  "MS": 1,
+  "PEP": 1,
+  "PFE": 1,
+  "SLB": 1
+ }
+}
