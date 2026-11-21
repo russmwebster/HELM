@@ -83,6 +83,32 @@ CREATE TABLE IF NOT EXISTS put_candidates (
     size_note     TEXT,
     PRIMARY KEY (run_id, ticker)
 );
+CREATE TABLE IF NOT EXISTS put_index (            -- s163: the broad index funds, read whatever their IV rank
+    run_id        TEXT NOT NULL REFERENCES put_runs(id),
+    ticker        TEXT NOT NULL,
+    bar_met       INTEGER,                    -- 1 = IV rank at or above the bar; 0 = below; NULL = no reading
+    note          TEXT,                       -- why no contract is stored, when none is
+    rank          INTEGER,                    -- its rank on the list when it passed every rule, else NULL
+    grade         TEXT,
+    sector        TEXT,
+    expiry        TEXT,
+    dte           INTEGER,
+    strike        REAL,
+    spot          REAL,
+    bid REAL, ask REAL, mid REAL,
+    spread_pct    REAL,
+    delta REAL, gamma REAL, theta REAL, vega REAL,
+    iv            REAL,
+    iv_rank       REAL,
+    ann_return    REAL,
+    collateral    REAL,
+    earnings      TEXT,
+    rest_price    REAL,
+    size_n        INTEGER,
+    size_binding  TEXT,
+    size_note     TEXT,
+    PRIMARY KEY (run_id, ticker)
+);
 """
 
 
@@ -223,16 +249,46 @@ def _ivr_text(ivr):
     return w if (float(w) >= IVR_MIN) == (ivr >= IVR_MIN) else "%.1f" % ivr
 
 
+def _names(conn):
+    """(every name the list looks at, the approved funds): the active watchlist plus the funds."""
+    names = [r[0] for r in conn.execute(
+        "SELECT ticker FROM watchlist WHERE COALESCE(active,0)=1 ORDER BY ticker")]
+    funds = {r[0] for r in conn.execute("SELECT ticker FROM approved_funds")}
+    return sorted(set(names) | funds), funds
+
+
+def premium_count(conn):
+    """s163 (Russ 2026-11-20, for the Book's daily market read): of the names the desk may sell --
+    graded A-C or an approved fund, the list's own universe -- how many have an IV rank at or above
+    the bar on the latest morning reading, split into stocks and funds. Read-only, no network."""
+    from helm import advice as A
+    ivr_date = _latest_ivr_date(conn)
+    names, _funds = _names(conn)
+    out = {"as_of": ivr_date, "bar": IVR_MIN, "checked": 0, "rich": 0, "no_reading": 0,
+           "stocks": {"checked": 0, "rich": 0}, "funds": {"checked": 0, "rich": 0}}
+    for t in names:
+        g = A._grade(conn, t)
+        if g not in PASSING:
+            continue
+        r = conn.execute("SELECT iv_rank FROM iv_history WHERE ticker=? AND date=?",
+                         (t, ivr_date)).fetchone() if ivr_date else None
+        ivr = r[0] if r else None
+        if ivr is None:
+            out["no_reading"] += 1
+            continue
+        for d in (out, out["funds" if g == "FUND" else "stocks"]):
+            d["checked"] += 1
+            d["rich"] += int(ivr >= IVR_MIN)
+    return out
+
+
 def screen(conn, today, tickers=None):
     """(checked, rejects, ivr_date, n_universe). No network.
     checked: [{ticker, grade, iv_rank, earn_line, upcoming}]."""
     from helm import advice as A
     ivr_date = _latest_ivr_date(conn)
     stale = (ivr_date is None) or ((today - _d(ivr_date)).days > IVR_STALE_DAYS)
-    names = [r[0] for r in conn.execute(
-        "SELECT ticker FROM watchlist WHERE COALESCE(active,0)=1 ORDER BY ticker")]
-    funds = {r[0] for r in conn.execute("SELECT ticker FROM approved_funds")}
-    names = sorted(set(names) | funds)
+    names, funds = _names(conn)
     if tickers:
         want = {t.upper() for t in tickers}
         names = [t for t in names if t in want] + sorted(want - set(names))
@@ -318,6 +374,89 @@ def stop_rest(rejects, names_left, streak):
     return list(streak) + list(names_left)
 
 
+def _row(conn, ch, best, spot, b, db):
+    """One name's line from its chosen contract: sector, sizing against the limits, earnings, the 50% price."""
+    from helm import sleeve as S
+    from helm.bookview import _half_up
+    t = ch["ticker"]
+    sec, _ = S.sector_of(conn, t)
+    n, binding, note = S.size("CSP", t, best["strike"] * 100.0, db=db, b=b)
+    earn = ch["earn_line"]
+    if earnings_in_trade(ch["upcoming"], best["expiration"]):
+        earn += " -- inside the trade"
+    return {
+        "ticker": t, "grade": ch["grade"], "sector": sec,
+        "expiry": best["expiration"], "dte": best["dte"], "strike": best["strike"],
+        "spot": spot, "bid": best["bid"], "ask": best["ask"], "mid": best["mid"],
+        "spread_pct": best["spread_pct"], "delta": best.get("delta"),
+        "gamma": best.get("gamma"), "theta": best.get("theta"), "vega": best.get("vega"),
+        "iv": best.get("iv"), "iv_rank": ch["iv_rank"], "ann_return": ann_return(best),
+        "collateral": best["strike"] * 100.0, "earnings": earn,
+        "rest_price": _half_up(best["mid"] * (1 - PROFIT_TAKE)),
+        "size_n": n, "size_binding": binding, "size_note": note,
+    }
+
+
+# ---------------------------------------------------------------- the index funds (s163)
+# Russ, 2026-11-20: the broad index funds are read on every run WHATEVER their IV rank and the best
+# is shown beside the list -- display only, to put a month of quoted index-put prices next to the
+# stocks'. Nothing here changes the screen, the rejects, the ranking or the sizing of the list.
+INDEX_BUCKET = "US equity index"
+
+
+def index_names(conn):
+    try:
+        return [r[0] for r in conn.execute(
+            "SELECT ticker FROM approved_funds WHERE bucket=? ORDER BY ticker", (INDEX_BUCKET,))]
+    except Exception:
+        return []
+
+
+def index_rows(conn, today, rejects, bests, fetch, b, db, ivr_date, tickers=None, stopped=None):
+    """One entry per broad index fund. A fund already on the list is copied (never read twice); one the
+    IV-rank bar left off is read now, under the same contract rules (delta, days, spread); any other
+    reason it was left off is kept as its note. Reads `rejects` and `bests`, changes neither."""
+    from helm import advice as A
+    want = {t.upper() for t in tickers} if tickers else None
+    on_list = {r["ticker"]: r for r in bests}
+    out = []
+    for t in index_names(conn):
+        if want is not None and t not in want:
+            continue
+        if t in on_list:
+            out.append(dict(on_list[t], bar_met=1, note=None))
+            continue
+        r = conn.execute("SELECT iv_rank FROM iv_history WHERE ticker=? AND date=?",
+                         (t, ivr_date)).fetchone() if ivr_date else None
+        ivr = r[0] if r else None
+        base = {"ticker": t, "iv_rank": ivr, "bar_met": None if ivr is None else int(ivr >= IVR_MIN)}
+        why = rejects.get(t) or "not on the run"
+        if not (why.startswith("IV rank ") and ", below " in why):
+            out.append(dict(base, note=why))        # stale or missing IV rank, grade, spread, chain not read ...
+            continue
+        if stopped:
+            out.append(dict(base, note="not read: run stopped -- IB Gateway unreachable"))
+            continue
+        rows, spot, err = fetch(t)
+        if err:
+            out.append(dict(base, note=err if err.startswith("no expiry") else "chain not read: %s" % err))
+            continue
+        best, w = best_contract(rows)
+        if best is None:
+            out.append(dict(base, note=w))
+            continue
+        _ok, line, upcoming = earnings_check(True, None, None, today)
+        ch = {"ticker": t, "grade": A._grade(conn, t), "iv_rank": ivr, "earn_line": line, "upcoming": upcoming}
+        out.append(dict(_row(conn, ch, best, spot, b, db), bar_met=0, note=None))
+    return out
+
+
+def index_best(rows):
+    """The index fund shown: the one with a contract and the highest yearly return, or None."""
+    have = [x for x in (rows or []) if x.get("strike") is not None and x.get("ann_return") is not None]
+    return max(have, key=lambda x: x["ann_return"]) if have else None
+
+
 def build(conn, today, tickers=None, fetch=fetch_contracts, book=None, db=None):
     """Run the rules. Returns the run dict (not yet recorded)."""
     from helm import sleeve as S
@@ -341,22 +480,7 @@ def build(conn, today, tickers=None, fetch=fetch_contracts, book=None, db=None):
         if best is None:
             rejects[t] = why
             continue
-        sec, _ = S.sector_of(conn, t)
-        n, binding, note = S.size("CSP", t, best["strike"] * 100.0, db=db, b=b)
-        earn = ch["earn_line"]
-        if earnings_in_trade(ch["upcoming"], best["expiration"]):
-            earn += " -- inside the trade"
-        bests.append({
-            "ticker": t, "grade": ch["grade"], "sector": sec,
-            "expiry": best["expiration"], "dte": best["dte"], "strike": best["strike"],
-            "spot": spot, "bid": best["bid"], "ask": best["ask"], "mid": best["mid"],
-            "spread_pct": best["spread_pct"], "delta": best.get("delta"),
-            "gamma": best.get("gamma"), "theta": best.get("theta"), "vega": best.get("vega"),
-            "iv": best.get("iv"), "iv_rank": ch["iv_rank"], "ann_return": ann_return(best),
-            "collateral": best["strike"] * 100.0, "earnings": earn,
-            "rest_price": _half_up(best["mid"] * (1 - PROFIT_TAKE)),
-            "size_n": n, "size_binding": binding, "size_note": note,
-        })
+        bests.append(_row(conn, ch, best, spot, b, db))
     ranked, firsts = [], {}
     for r in rank(bests):                       # one per COMPANY (s140): GOOG/GOOGL share a name
         k = S.name_key(r["ticker"])
@@ -368,13 +492,20 @@ def build(conn, today, tickers=None, fetch=fetch_contracts, book=None, db=None):
         ranked.append(r)
     for i, r in enumerate(ranked, 1):
         r["rank"] = i
+    try:                                        # s163: display only -- never costs the list
+        index = index_rows(conn, today, rejects, bests, fetch, b, db, ivr_date, tickers, stopped)
+        rk = {r["ticker"]: r["rank"] for r in ranked}
+        for x in index:
+            x["rank"] = rk.get(x["ticker"])
+    except Exception as e:
+        index = [{"ticker": "INDEX", "bar_met": None, "note": "index funds not read: %s" % str(e)[:80]}]
     return {"id": "puts_" + uuid.uuid4().hex[:12],
             "run_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "rule_version": RULE_VERSION, "ivr_date": ivr_date,
             "market_open": _market_open(), "n_universe": n_universe,
             "n_checked": len(checked), "n_found": len(ranked),
             "sleeve_free": b["share"] - b["used"], "rejects": rejects,
-            "candidates": ranked, "stopped": stopped}
+            "candidates": ranked, "stopped": stopped, "index": index}
 
 
 def _market_open():
@@ -388,6 +519,7 @@ def _market_open():
 CAND_COLS = ("ticker", "rank", "grade", "sector", "expiry", "dte", "strike", "spot", "bid", "ask",
              "mid", "spread_pct", "delta", "gamma", "theta", "vega", "iv", "iv_rank", "ann_return",
              "collateral", "earnings", "rest_price", "size_n", "size_binding", "size_note")
+INDEX_COLS = ("ticker", "bar_met", "note") + CAND_COLS[1:]      # s163: put_index's columns
 
 
 def record(conn, run, note=None):
@@ -401,6 +533,10 @@ def record(conn, run, note=None):
         conn.execute("INSERT INTO put_candidates (run_id, %s) VALUES (?, %s)" % (
             ", ".join(CAND_COLS), ", ".join("?" * len(CAND_COLS))),
             (run["id"],) + tuple(c.get(k) for k in CAND_COLS))
+    for x in run.get("index") or []:             # s163
+        conn.execute("INSERT INTO put_index (run_id, %s) VALUES (?, %s)" % (
+            ", ".join(INDEX_COLS), ", ".join("?" * len(INDEX_COLS))),
+            (run["id"],) + tuple(x.get(k) for k in INDEX_COLS))
     conn.commit()
 
 
@@ -420,6 +556,10 @@ def latest(conn):
     run["rejects"] = json.loads(run.pop("rejects_json") or "{}")
     run["candidates"] = [dict(zip(CAND_COLS, tuple(x))) for x in conn.execute(
         "SELECT %s FROM put_candidates WHERE run_id=? ORDER BY rank" % ", ".join(CAND_COLS), (run["id"],))]
+    run["index"] = []                            # s163: runs before the index line have none
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='put_index'").fetchone():
+        run["index"] = [dict(zip(INDEX_COLS, tuple(x))) for x in conn.execute(
+            "SELECT %s FROM put_index WHERE run_id=? ORDER BY ticker" % ", ".join(INDEX_COLS), (run["id"],))]
     return run
 
 
@@ -613,6 +753,67 @@ def _selftest():
     ok(earnings_short("earnings 2026-12-02 (35 days) -- inside the trade") == "12-02 (35d) in trade"
        and earnings_short("last reported 2026-10-27; next not known (about 2027-01-26)") == "reported 10-27"
        and earnings_short("fund -- no earnings") == "fund", "the compact earnings column")
+    # s163: the index funds and the premium count
+    ok(run["index"] == [] and back["index"] == [], "no broad index fund approved -> no index rows, recorded and read back")
+    pc = premium_count(conn)
+    ok(pc == {"as_of": "2026-10-28", "bar": 50.0, "checked": 7, "rich": 6, "no_reading": 0,
+              "stocks": {"checked": 6, "rich": 5}, "funds": {"checked": 1, "rich": 1}},
+       "premium count: 7 sellable names read, 6 at or above the bar (grade D left out): %s" % pc)
+    for t, ivr in (("SPY", 35), ("QQQ", 61), ("DIA", 50), ("IWM", None)):
+        conn.execute("INSERT INTO approved_funds VALUES (?, 'US equity index')", (t,))
+        if ivr is not None:
+            conn.execute("INSERT INTO iv_history VALUES (?,'2026-10-28',?)", (t, ivr))
+    pc = premium_count(conn)
+    ok((pc["checked"], pc["rich"], pc["no_reading"], pc["funds"]) == (10, 8, 1, {"checked": 4, "rich": 3}),
+       "premium count: 50 counts as rich, 35 does not, a fund with no reading is counted apart: %s" % pc)
+    chains2 = dict(chains, SPY=[{**base, "mid": 0.9, "strike": 650.0}], QQQ=[{**base, "mid": 9.0, "strike": 600.0}],
+                   DIA=[{**base, "spread_pct": 12.0}])
+    calls = []
+    def _f(t):
+        calls.append(t)
+        return (chains2.get(t, []), 100.0, None)
+    S.sector_of = lambda c, t: ("Tech", "test")
+    try:
+        run2 = build(conn, T, fetch=_f, book=dict(fake_book, used=0.0), db=tmp)
+        run_old = build(conn, T, fetch=lambda t: (chains2.get(t, []), 100.0, None), book=dict(fake_book, used=0.0), db=tmp)
+    finally:
+        S.sector_of = _so
+    ix = {x["ticker"]: x for x in run2["index"]}
+    ok(sorted(ix) == ["DIA", "IWM", "QQQ", "SPY"], "one index row per broad index fund: %s" % sorted(ix))
+    ok(ix["SPY"]["bar_met"] == 0 and ix["SPY"]["strike"] == 650.0 and ix["SPY"]["rank"] is None
+       and run2["rejects"]["SPY"] == "IV rank 35, below 50" and "SPY" not in [c["ticker"] for c in run2["candidates"]],
+       "a fund under the bar is read and shown, and stays off the list with its reason")
+    ok(ix["QQQ"]["bar_met"] == 1 and ix["QQQ"]["rank"] == [c["rank"] for c in run2["candidates"] if c["ticker"] == "QQQ"][0],
+       "a fund over the bar is copied from the list with its rank")
+    ok(calls.count("QQQ") == 1 and calls.count("SPY") == 1, "no chain is read twice: %s" % calls)
+    ok(ix["DIA"].get("strike") is None and "spread" in ix["DIA"]["note"] and ix["DIA"]["bar_met"] == 1,
+       "a fund the list left off for its spread keeps that reason, no contract")
+    ok(ix["IWM"].get("strike") is None and ix["IWM"]["bar_met"] is None and "no IV rank" in ix["IWM"]["note"],
+       "a fund with no IV rank is not read: %s" % ix["IWM"]["note"])
+    ok(index_best(run2["index"])["ticker"] == "QQQ" and index_best([ix["DIA"], ix["IWM"]]) is None,
+       "the fund shown is the one with the highest yearly return; none when no contract")
+    ok([(c["ticker"], c["rank"], c["size_n"]) for c in run2["candidates"]] ==
+       [(c["ticker"], c["rank"], c["size_n"]) for c in run_old["candidates"]] and run2["rejects"] == run_old["rejects"]
+       and (run2["n_universe"], run2["n_checked"], run2["n_found"]) == (run_old["n_universe"], run_old["n_checked"], run_old["n_found"]),
+       "the list, its ranks, sizes, rejects and counts are the same on a second run")
+    record(conn, run2)
+    back2 = latest(conn)
+    ok(back2["index"] == sorted(({k: x.get(k) for k in INDEX_COLS} for x in run2["index"]), key=lambda x: x["ticker"]),
+       "index rows recorded and read back unchanged")
+    S.sector_of = lambda c, t: ("Tech", "test")
+    try:
+        run3 = build(conn, T, tickers=["AAA"], fetch=_f, book=dict(fake_book, used=0.0), db=tmp)
+        def _boom(t):
+            if t == "SPY":
+                raise RuntimeError("boom")
+            return (chains2.get(t, []), 100.0, None)
+        run4 = build(conn, T, fetch=_boom, book=dict(fake_book, used=0.0), db=tmp)
+    finally:
+        S.sector_of = _so
+    ok(run3["index"] == [], "a partial run that names no index fund has no index rows")
+    ok([c["ticker"] for c in run4["candidates"]] == [c["ticker"] for c in run2["candidates"]]
+       and len(run4["index"]) == 1 and "not read" in run4["index"][0]["note"],
+       "a failure reading an index fund never costs the list: %s" % run4["index"])
     ok(_ivr_text(49.5) == "49.5" and _ivr_text(49.4) == "49" and _ivr_text(38.0) == "38",
        "an IV rank that rounds up to the bar keeps its decimal (49.5, not 50)")
     print("\n%d failed" % len(fails) if fails else "\nall passed")

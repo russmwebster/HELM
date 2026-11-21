@@ -1160,11 +1160,25 @@ def build(db=None, today=None, snapshot=None, source="helm advise --json", slot_
                   "range_low": r2(L["theta_lo"]), "range_high": r2(L["theta_hi"]), "state": L["theta_state"]},
         "readings": {"as_of": list(v["as_of"]) if v["as_of"] else None, "notes": L["stale"]},
     }
+    # s163 (Russ 2026-11-20, for the Book's daily market read): how many of the names the desk may
+    # sell have rich premium by the put list's own measure. Additive; a failure never costs the file.
+    try:
+        from helm import puttool as P
+        pconn = S._conn(db)
+        try:
+            premium = P.premium_count(pconn)
+        finally:
+            pconn.close()
+        premium["meaning"] = ("of the names the desk may sell (graded A-C or an approved fund) with a reading on "
+                              "as_of's morning, how many have implied volatility in the upper half of its own "
+                              "past-year range (IV rank at or above bar)")
+    except Exception as e:
+        premium = {"as_of": None, "error": "%s: %s" % (type(e).__name__, str(e)[:120])}
     return {"schema_version": SCHEMA_VERSION, "generated_at": _now_iso(), "source": source,
             "slot": slot_of(slot_at or (snapshot or {}).get("started")) if snapshot else None,
             "snapshot": snapshot, "book": "REAL", "today": today.isoformat(),
             "entries": {e["id"] if e["kind"] == "position" else (e["id"] or "shares:" + e["ticker"]): e for e in order},
-            "book_flags": book_flags, "limits": limits,
+            "book_flags": book_flags, "limits": limits, "premium_count": premium,
             "note": "Advice only, from stored readings: Russ decides and places every trade; HELM never acts. "
                     "Ex-dividend dates are not stored."}
 

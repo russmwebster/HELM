@@ -335,11 +335,13 @@ def puts_view(run, conn=None, book=None):
     from helm import puttool as P
     if not run or run.get("error"):
         return run
+    ibest = P.index_best(run.get("index"))       # s163: the index fund shown beside the list (display only)
+    shown = list(run["candidates"]) + ([ibest] if ibest else [])
     own = conn is None
     try:
         conn = conn or _held_conn()
         held = {(c["ticker"], c["expiry"], c["strike"]): held_on(conn, c["ticker"], c["expiry"], c["strike"])
-                for c in run["candidates"]}
+                for c in shown}
     except Exception as e:        # display only -- never costs the list
         held, held_err = {}, "held not read (%s)" % str(e)[:60]
     else:
@@ -355,7 +357,7 @@ def puts_view(run, conn=None, book=None):
     if book is not None:
         try:
             mconn = conn if not own else _held_conn()
-            for c in run["candidates"]:
+            for c in shown:
                 n = c.get("size_n") or 1
                 mkt[(c["ticker"], c["expiry"], c["strike"])] = market_cell(
                     mconn, c["ticker"], abs(c.get("delta") or 0.0) * 100 * n, c.get("spot"), book, one=not c.get("size_n"))
@@ -365,7 +367,7 @@ def puts_view(run, conn=None, book=None):
             mkt = {}
 
     def row(c):
-        return {"rank": c["rank"], "ticker": c["ticker"], "grade": c["grade"],
+        return {"rank": c["rank"] if c.get("rank") is not None else "—", "ticker": c["ticker"], "grade": c["grade"],
                 "put": "%g P %s" % (c["strike"], _md(c["expiry"])), "dte": c["dte"], "delta": c["delta"],
                 "mid": c["mid"], "rate": c["ann_return"], "collateral": c["collateral"], "rest": c["rest_price"],
                 "earnings": put_earnings(c["earnings"]), "limits": put_limits(c), "fits": bool(c.get("size_n")),
@@ -375,7 +377,8 @@ def puts_view(run, conn=None, book=None):
     return {"run_at": run["run_at"][:16], "market_open": run.get("market_open"),
             "n_universe": run["n_universe"], "n_checked": run["n_checked"], "n_found": run["n_found"],
             "n_declined": len([c for c in cands if not c.get("size_n")]),
-            "top": [row(c) for c in cands[:P.TOP_N]], "fit": [row(c) for c in P.fitting(cands)]}
+            "top": [row(c) for c in cands[:P.TOP_N]], "fit": [row(c) for c in P.fitting(cands)],
+            "index": (dict(row(ibest), iv_rank=ibest.get("iv_rank"), bar=P.IVR_MIN) if ibest else None)}
 
 
 def pmcc_earnings(line):

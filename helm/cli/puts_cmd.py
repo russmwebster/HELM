@@ -77,7 +77,7 @@ def _show(run, show_all=False, why=False):
                      ("Earnings", "left"), ("Size", "left")):
             t.add_column(h, justify=j, no_wrap=True)
         for c in rows:
-            t.add_row(str(c["rank"]), c["ticker"], held.get((c["ticker"], c["expiry"], c["strike"])) or "",
+            t.add_row(str(c["rank"]) if c.get("rank") is not None else "—", c["ticker"], held.get((c["ticker"], c["expiry"], c["strike"])) or "",
                       c["grade"] or "",
                       "%s %g" % (c["expiry"], c["strike"]), str(c["dte"]),
                       "%.2f" % c["delta"] if c["delta"] is not None else "",
@@ -108,6 +108,23 @@ def _show(run, show_all=False, why=False):
                 summ = declined_summary(run["candidates"])
                 if summ:
                     console.print("[dim]%s   (--all for the whole list)[/dim]" % summ)
+    idx = run.get("index") or []                 # s163 (Russ 2026-11-20): display only
+    if idx:
+        from helm.puttool import index_best, IVR_MIN
+        have = sorted((x for x in idx if x.get("strike") is not None), key=lambda x: -x["ann_return"])
+        shown = have if show_all else have[:1]
+        console.print()
+        console.print("[bold]Index fund[/bold]  [dim](read whatever its IV rank -- the bar is %.0f; not part of the "
+                      "ranking, # only when it also passed every rule%s)[/dim]"
+                      % (IVR_MIN, "" if show_all or len(have) < 2 else "; --all for all %d" % len(have)))
+        if shown:
+            _table(shown)
+        else:
+            console.print("  no index fund had a contract inside the delta, days and spread rules")
+        if show_all or why or not shown:
+            for x in idx:
+                if x.get("strike") is None:
+                    console.print("  %-6s %s" % (x["ticker"], x.get("note") or ""))
     rej = run.get("rejects") or {}
     if rej:
         def bucket(r):
