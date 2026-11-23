@@ -1,0 +1,10 @@
+s164 installed 2026-11-22 ~21:40 ET, after verify_s164.py passed 26/26 on the scratch trees and again on the installed
+files; perturbations 1-6 each caught, control (0) last passed. sha256, first 12:
+  helm/advice.py           737677f76ad1   (before 67a591dc8763)
+  helm/todayview.py        0a74513859d3   (before d89d5be1c732)
+  helm/boardview.py        fc6627a5aac2   (before b9ac3e1525f9)
+  helm-pg templates/today.html     acf8220af6d9   (before 542e217541d6)
+  helm-pg templates/put_card.html  982a5acfbb34   (before 0b2573f73b75)
+  helm-pg templates/reference.html e4f931de2db7   (before bb8a0adfd1bd)
+Backups: *.bak-20261122-s164 beside each file, and _records/HELM-standing-rules.md.bak-20261122-s164.
+Rebuild: python3 patch_s164.py ENG_TREE PG_TREE (on copies of the .bak trees).

@@ -181,7 +181,10 @@ def view(account_id=None, db=None, today=None):
                 rows.append({"key": "grade", "rule": "Grade below C", "state": "fired",
                              "reading": "grade %s" % (g or "none"), "line": None})
             fired = [x for x in rows if x["state"] == "fired"]
+            hu = next((x for x in rows if x["key"] == "premium_2x" and x["state"] == "near"), None)   # s164
             row = {"position_id": pid, "ticker": p["ticker"], "strategy": p["strategy"], "label": label,
+                   "heads": ("%g× premium" % A.PREMIUM_HEADSUP_X) if hu else None,
+                   "heads_reading": hu["reading"] if hu else None,
                    "verb": r["verb"], "pnl": nums.get("pnl"), "stale": r["verb"] == "STALE",
                    "earnings": next((m.split()[1] for m in r.get("marks") or [] if m.startswith("earnings")), None)}
             if r["verb"] == "STALE":

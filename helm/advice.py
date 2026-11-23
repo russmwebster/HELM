@@ -45,6 +45,8 @@ SHORT_EXPIRY_SOON_DAYS = 7  # a run-off diagonal's short expiring this week
 STALE_DAYS = 4              # a reading older than this (calendar days) is not advised from
 PASSING = ("A", "B", "C", "FUND")
 NEAR_FRAC = 0.90            # s155 (Russ, 2026-11-08): "near a limit" = 90% of it, shown amber on the board
+PREMIUM_HEADSUP_X = 2.0     # s164 (Russ, 2026-11-22): a sold put's buy-back (mid) at this many times the premium taken
+                            # in is shown amber on the board -- display only: no verb, no advice text, no stop
 
 # verb -> (needs_you, priority; lower = more urgent)
 VERBS = {
@@ -304,6 +306,18 @@ def limit_row(key, rule, used, cap):
     return {"key": key, "rule": rule, "state": state, "reading": "%s / %s" % (_m(used), _m(cap)), "line": None}
 
 
+def premium_row(credit, mark):
+    """s164 (Russ, 2026-11-22): one open put's buy-back against PREMIUM_HEADSUP_X times the premium taken in, as a
+    row: "near" (amber, reached) at or above the line, else "next" with the buy-back price of the line. A heads-up,
+    not a rule: it is in no verb map, so the advice and its text never change because of it. Pure; per share."""
+    line = PREMIUM_HEADSUP_X * credit
+    reached = mark is not None and mark >= line - 1e-9
+    return {"key": "premium_2x", "rule": "Buy-back at %g× the premium" % PREMIUM_HEADSUP_X,
+            "state": "near" if reached else "next",
+            "reading": "mid %s, sold %s" % (_p(mark), _p(credit)) if mark is not None else "no mid",
+            "line": "buy-back %s" % _p(line)}
+
+
 def _num(x):
     return "%g" % x
 
@@ -380,6 +394,8 @@ def _single_short(conn, p, legs, today):
     rules = short_rule_rows(is_cc, spot, k, delta, dte, kept, credit, exp_s,
                             grade=None if is_cc else _grade(conn, p["ticker"]),
                             earnings=e_day.isoformat() if (is_cc and e_inside) else None)
+    if not is_cc and credit:
+        rules.append(premium_row(credit, mark))      # s164: display only
     if tested:
         through = abs(spot - k)
         if is_cc:
@@ -1567,6 +1583,16 @@ def _selftest():
        % [(r["position_id"] or r["ticker"] + "sh") for r in _it])
     ok(order_key("csco", "CSP") < order_key("CSCO", "PMCC") < order_key("CSCO", "SHARES") < order_key("DELL", "CSP"),
        "order_key: ticker first (case-blind), then the strategy order")
+    # s164: the display-only line at twice the premium
+    ok(premium_row(0.42, 0.84)["state"] == "near" and premium_row(0.42, 0.8399)["state"] == "next",
+       "s164: the 2x line: reached at exactly twice, not a cent under")
+    ok(premium_row(0.42, 0.10)["line"] == "buy-back $0.84" and premium_row(19.47, 76.70)["reading"] == "mid $76.70, sold $19.47",
+       "s164: the line's price and the reading: %s" % premium_row(19.47, 76.70))
+    ok(premium_row(1.0, None)["state"] == "next", "s164: no mid -> not reached")
+    ok("premium_2x" not in SHORT_RULE_VERB and "premium_2x" not in PMCC_ROW_VERB, "s164: the line is in no verb map")
+    _sh = [t for t in R if R[t]["strategy"] == "CSP" and R[t]["verb"] != "STALE"]
+    ok(_sh and all("premium_2x" in rows(t) for t in _sh), "s164: every read open put carries the line: %s" % _sh)
+    ok(all("premium_2x" not in rows(t) for t in R if R[t]["strategy"] != "CSP"), "s164: nothing but a put carries it")
     print("advice selftest:", "PASS (%d checks)" % len(ran) if not fails else "%d FAIL" % len(fails))
     return 1 if fails else 0
 

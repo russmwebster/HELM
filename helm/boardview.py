@@ -118,6 +118,7 @@ def reference_constants():
         "profit_take": pct(A.PROFIT_TAKE), "time_exit": A.TIME_EXIT_DTE, "tested_delta": "%.2f" % A.TESTED_DELTA,
         "long_review": A.PMCC_LONG_REVIEW_DTE, "loss_limit": pct(A.LOSS_LIMIT_FRAC), "itm_days": A.SHORT_EXPIRY_SOON_DAYS,
         "near": pct(A.NEAR_FRAC), "passing": ", ".join(A.PASSING), "stale_days": A.STALE_DAYS,
+        "premium_x": "%g×" % A.PREMIUM_HEADSUP_X,      # s164
         "name_pct": pct(SL.NAME_PCT), "sector_pct": pct(SL.SECTOR_PCT), "sleeve_base": "${:,.0f}".format(SL.SLEEVE_BASE),
         "sleeve_start": SL.SLEEVE_START, "same_company": " + ".join(SL.SAME_COMPANY[0]) if SL.SAME_COMPANY else "",
         "theta_lo": "%g%%" % (BV.THETA_LO * 100), "theta_hi": "%g%%" % (BV.THETA_HI * 100), "delta_frac": pct(BV.DELTA_FRAC),
