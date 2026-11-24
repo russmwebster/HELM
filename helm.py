@@ -41,6 +41,7 @@ COMMANDS = {
     'sleeve':    ('helm.sleeve',           'run', 'HELM sleeve -- share, in use, free; each name and sector against its limit'),
     'book':      ('helm.bookview',         'run', 'The book on one screen -- sleeve, limits, Greeks, what-ifs, expiries, resting orders'),
     'puts':      ('helm.cli.puts_cmd',     'run', 'New cash-secured puts under the settled rules -- ranked, sized, recorded (s138)'),
+    'spreads':   ('helm.cli.spreads_cmd',  'run', 'New bull put spreads -- ranked, sized by the most they can lose, recorded (s165)'),
     'pmcc':      ('helm.cli.pmcc_cmd',     'run', 'New PMCCs under the settled rules -- ranked by rent cover, sized, recorded (s147)'),
     'calls':     ('helm.cli.calls_cmd',    'run', 'Covered calls on HELM-held shares (or --if-assigned) under the settled rules (s138)'),
     'recovery':  ('helm.cli.recovery_cmd', 'run', 'If a put is assigned: odds of getting back to basis, covered-call rent -- a model, recorded (s154)'),
@@ -60,7 +61,7 @@ COMMANDS = {
 # them -- but are listed only by `helm legacy`, and go on LEGACY_UNTIL unless Russ
 # says otherwise.
 MAIN = (
-    ("Trading", ("advise", "puts", "calls", "pmcc", "roll", "recovery", "open", "quality", "book", "sleeve")),
+    ("Trading", ("advise", "puts", "spreads", "calls", "pmcc", "roll", "recovery", "open", "quality", "book", "sleeve")),
     ("Booking", ("fills",)),
     ("Data and checks", ("check", "snapshot", "today-copy", "ivr", "watchlist", "reconcile", "audit")),
     ("Running HELM", ("ibkr", "gwwatch", "restart")),

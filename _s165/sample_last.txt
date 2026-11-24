@@ -1,0 +1,30 @@
+
+New bull put spreads  2026-11-23 18:30:59  (market open)  ·  IV ranks of 2026-11-23  ·  sleeve free $177,356
+102 names offerable (A-C or fund) · 79 passed IV rank and earnings · 66 had a spread inside every rule · bought put 5% of the price below
+harness
+                                                                                                                                                                                                      
+ #   Name   Held   Grade   Spread                 Days   Delta   Credit   Can lose   A year   Market   50% buy-back   Out by   If assigned   IVR   Earnings               Size                        
+ ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── 
+ 1   AVGO          A       2026-12-24 315/295       31    0.28    $6.08     $1,392     514%      10%          $3.04   12-03        $31,500   100   12-09 (16d) in trade   20 contracts fit the limits 
+ 2   NVDA          B       2026-12-24 250/237.5     31    0.29    $3.69       $881     493%       9%          $1.85   12-03        $25,000    66   reported 11-17         20 contracts fit the limits 
+ 3   VALE          B       2026-12-24 71/67         31    0.29    $1.16       $284     481%       8%          $0.58   12-03         $7,100   100   reported 10-29         20 contracts fit the limits 
+ 4   NOW           B       2026-12-24 375/355       31    0.29    $5.77     $1,423     477%       9%          $2.89   12-03        $37,500    59   01-27 (65d)            20 contracts fit the limits 
+ 5   CTVA          B       2026-12-24 80/76         31    0.28    $1.15       $285     475%      10%          $0.58   12-03         $8,000    94   02-02 (71d)            20 contracts fit the limits 
+                                                                                                                                                                                                      
+
+Index funds  (read whatever their IV rank -- the bar is 50; 2%, 3% and 5% widths for comparison; # only when it is also on the list)
+                                                                                                                                                                                                 
+  #   Name   Held   Grade   Spread               Width   Days   Delta   Credit   Can lose   A year   Market   50% buy-back   Out by   If assigned   IVR   Earnings   Size                        
+ ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── 
+  —   DIA           FUND    2026-12-24 385/375      2%     31    0.28    $2.36       $764     364%       6%          $1.18   12-03        $38,500    66   fund       20 contracts fit the limits 
+  —   DIA           FUND    2026-12-24 385/375      3%     31    0.28    $2.36       $764     364%       6%          $1.18   12-03        $38,500    66   fund       20 contracts fit the limits 
+ 55   DIA           FUND    2026-12-24 385/365      5%     31    0.28    $3.60     $1,640     258%       4%          $1.80   12-03        $38,500    66   fund       20 contracts fit the limits 
+  —   IWM           FUND    2026-12-24 62/60        3%     31    0.28    $0.47       $153     362%       9%          $0.24   12-03         $6,200    59   fund       20 contracts fit the limits 
+ 45   IWM           FUND    2026-12-24 62/59        5%     31    0.28    $0.62       $238     307%       6%          $0.31   12-03         $6,200    59   fund       20 contracts fit the limits 
+  —   QQQ           FUND    2026-12-24 620/600      3%     31    0.28    $3.83     $1,617     279%       9%          $1.92   12-03        $62,000   100   fund       20 contracts fit the limits 
+ 58   QQQ           FUND    2026-12-24 620/590      5%     31    0.28    $5.26     $2,474     250%       6%          $2.63   12-03        $62,000   100   fund       20 contracts fit the limits 
+  —   SPY           FUND    2026-12-24 695/675      3%     31    0.28    $3.28     $1,672     231%       9%          $1.64   12-03        $69,500    63   fund       20 contracts fit the limits 
+ 63   SPY           FUND    2026-12-24 695/660      5%     31    0.28    $4.93     $3,007     193%       5%          $2.47   12-03        $69,500    63   fund       18 contracts fit the limits 
+                                                                                                                                                                                                 
+Left off: 33 grade below C or none · 20 IV rank under 50 or missing · 12 market too wide · 3 earnings within 10 days · 1 other   (--why for each name)
+

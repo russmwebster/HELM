@@ -1,0 +1,5 @@
+0445138d28eb  helm/spreadtool.py
+92adb1428490  helm/cli/spreads_cmd.py
+8e5584a45447  helm/sleeve.py
+53a25f8ecbe2  helm.py
+# tested 2026-11-24 by _s165/verify_s165.py (42 checks) and perturb.sh 1-10 (each caught), control last passed

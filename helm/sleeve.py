@@ -236,7 +236,7 @@ def size(strategy, ticker, per_contract, account_id=None, db=None, ceiling=20, b
         return None, None, None
     r = room_for(ticker, account_id, db, b)
     n = max(int(math.floor(r["room"] / float(per_contract) + 1e-9)), 0)
-    what = "secures" if (strategy or "").upper() == "CSP" else "costs"
+    what = {"CSP": "secures", "BULL_PUT_SPREAD": "risks"}.get((strategy or "").upper(), "costs")   # s165
     if n == 0:
         return 0, r["binding"], "one contract %s %s; %s" % (what, _money(per_contract), limit_text(r["binding"], r))
     if ceiling is not None and n > ceiling:
