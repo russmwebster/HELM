@@ -1,0 +1,4 @@
+578ac2d01b93  book_googl_share_sale.py
+974e14bf8c17  pages.py
+b9314ecd6c33  two_of_three.py
+a9dc6b2cb9fd  verify.sh

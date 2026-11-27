@@ -3,3 +3,5 @@
 8e5584a45447  helm/sleeve.py
 53a25f8ecbe2  helm.py
 # tested 2026-11-24 by _s165/verify_s165.py (42 checks) and perturb.sh 1-10 (each caught), control last passed
+893f9c2eab33  helm-pg/helm_engine.py
+# s165b tested 2026-11-24 by _s165/verify_s165b.py (12 checks) and two deliberate breaks (each caught), control last passed
